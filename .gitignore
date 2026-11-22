@@ -1,0 +1,13 @@
+node_modules/
+dist/
+data/
+public/covers/*.jpg
+.env
+*.log
+.bin/
+__pycache__/
+.pyhost/
+downloader/downloads/
+.vercel
+.env*
+/.swc
