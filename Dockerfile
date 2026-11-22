@@ -34,6 +34,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
+# Fluxos de trabalho importados por server/jobs.mjs em runtime.
+COPY --from=build /app/workflows ./workflows
 COPY --from=pot /bgutil/server/build /opt/bgutil/build
 COPY --from=pot /bgutil/server/node_modules /opt/bgutil/node_modules
 COPY --from=pot /bgutil/server/package.json /opt/bgutil/package.json
