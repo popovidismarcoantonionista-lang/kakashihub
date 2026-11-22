@@ -216,16 +216,33 @@ export function ytdlp(args, opts = {}) {
   if (youtubeArgs.length) extractorArgs.push(`youtube:${youtubeArgs.join(';')}`)
   if (POT_ENABLED) extractorArgs.push(`youtubepot-bgutilhttp:base_url=${POT_URL}`)
   const bundledYtDlp = fs.existsSync(YTDLP_BIN)
+  // `plain` remove os argumentos de POT/impersonate: em alguns IPs de
+  // datacenter (ex.: Render) eles quebram a extração antes mesmo do YouTube.
+  const useExtras = !opts.plain
   return run(bundledYtDlp ? YTDLP_BIN : PYTHON, [
     ...(bundledYtDlp ? [] : ['-m', 'yt_dlp']),
     ...extra,
-    ...(extractorArgs.length ? ['--extractor-args', extractorArgs.join(';')] : []),
+    ...(useExtras && extractorArgs.length ? ['--extractor-args', extractorArgs.join(';')] : []),
     '--force-ipv4',
     '--js-runtimes', 'node',
-    ...(IMPERSONATE ? ['--impersonate', IMPERSONATE] : []),
+    ...(useExtras && IMPERSONATE ? ['--impersonate', IMPERSONATE] : []),
     ...(VERBOSE ? ['--verbose'] : []),
     ...args,
   ], opts)
+}
+
+// Executa um comando de live e, se falhar com os argumentos normais, tenta
+// uma segunda vez sem POT/impersonate antes de desistir.
+async function ytdlpLive(args, timeout, plain = false) {
+  try {
+    return await ytdlp(args, { timeout, plain })
+  } catch (err) {
+    if (!plain) {
+      console.error('[live:yt-dlp] retry sem argumentos extras:', String(err?.message || err).slice(0, 200))
+      return ytdlpLive(args, timeout, true)
+    }
+    throw err
+  }
 }
 
 function bestThumb(list) {
@@ -1610,9 +1627,9 @@ async function probeLive(url) {
     return { title: 'Transmissão monitorada', channel: '' }
   }
   try {
-    const { stdout } = await ytdlp([
+    const { stdout } = await ytdlpLive([
       '-J', '--no-warnings', '--no-playlist', '--socket-timeout', '20', url,
-    ], { timeout: 1000 * 120 })
+    ], 1000 * 120)
     const info = JSON.parse(stdout)
     const id = info.id ? String(info.id) : ''
     if (info.is_live) {
@@ -1652,10 +1669,10 @@ async function probeLive(url) {
 async function liveStreamParts(url) {
   if (process.env.FUGA_LIVE_STREAM) return [process.env.FUGA_LIVE_STREAM]
   try {
-    const { stdout } = await ytdlp([
+    const { stdout } = await ytdlpLive([
       '-g', '-f', downloadFormat(sourceMaxHeight()).replace(/\[ext=mp4\]/g, ''),
       '--no-warnings', '--no-playlist', '--socket-timeout', '20', url,
-    ], { timeout: 1000 * 90 })
+    ], 1000 * 90)
     const parts = stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
     if (parts.length) return parts
   } catch (err) {
@@ -2002,11 +2019,17 @@ export async function captureLiveWindow(sourceId) {
     if (!source) return { continue: false, status: 'removed' }
     const raw = String(error?.message || error)
     console.error('[live]', raw.slice(0, 800))
+    // Guarda o erro bruto no estado para diagnóstico (`/api/state`).
+    source.liveLastError = raw.slice(0, 300)
     let message = LIVE_TEXT.failed
     if ([LIVE_TEXT.offline, LIVE_TEXT.gone, LIVE_TEXT.noStream, LIVE_TEXT.recordFail, LIVE_TEXT.failed].includes(raw)) message = raw
     else if (isBlocked(error)) message = FRIENDLY[0]
     else if (/will begin|premieres in/i.test(raw)) message = FRIENDLY[6]
     else if (/not currently live|channel is offline|is offline/i.test(raw)) message = LIVE_TEXT.offline
+    else if (/timed? ?out|timeout/i.test(raw)) message = FRIENDLY[1]
+    else if (/HTTP Error 403|Forbidden/i.test(raw)) message = FRIENDLY[0]
+    else if (/Video unavailable|HTTP Error 404/i.test(raw)) message = FRIENDLY[3]
+    else if (/live stream.*(?:has )?ended|broadcast.*ended/i.test(raw)) message = LIVE_TEXT.gone
     return finishLiveStep(source, job, message)
   }
 }
