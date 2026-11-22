@@ -1,0 +1,2012 @@
+import { spawn } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { pipeline as streamPipeline } from 'node:stream/promises'
+import { Readable } from 'node:stream'
+import {
+  COVERS,
+  DATA,
+  EXPORTS,
+  MEDIA,
+  SRC_MEDIA,
+  addActivity,
+  createJob,
+  getJob,
+  findClip,
+  findSource,
+  finishJob,
+  getState,
+  save,
+  sourceVideo,
+  updateJob,
+} from './store.mjs'
+import { ensureLocalMedia, mediaPathFromUrl, storeLocalFile } from './media-store.mjs'
+import { cobaltResolve, hasCobalt, hasYtdlpApi, hasInvidious, invidiousInfo, ydlInfo } from './services.mjs'
+
+const PYTHON = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const FFMPEG_LOCAL_BIN = path.join(APP_ROOT, '.bin', 'ffmpeg')
+const FFPROBE_LOCAL_BIN = path.join(APP_ROOT, '.bin', 'ffprobe')
+const FFMPEG_BIN = process.env.FFMPEG_BIN || (fs.existsSync(FFMPEG_LOCAL_BIN) ? FFMPEG_LOCAL_BIN : 'ffmpeg')
+const FFPROBE_BIN = process.env.FFPROBE_BIN || (fs.existsSync(FFPROBE_LOCAL_BIN) ? FFPROBE_LOCAL_BIN : 'ffprobe')
+const YTDLP_BIN = process.env.YTDLP_BIN || path.join(APP_ROOT, '.bin', 'yt-dlp')
+
+// Arquivos recebidos por ZIP podem perder o bit de execução. Corrija isso
+// antes do primeiro spawn para evitar que toda live falhe ainda na sondagem.
+function ensureExecutable(file) {
+  if (!file || !path.isAbsolute(file) || !fs.existsSync(file)) return
+  try {
+    const mode = fs.statSync(file).mode
+    if ((mode & 0o111) === 0) fs.chmodSync(file, 0o755)
+  } catch (error) {
+    console.warn(`[media] não foi possível preparar ${path.basename(file)}:`, error?.message || error)
+  }
+}
+
+ensureExecutable(YTDLP_BIN)
+ensureExecutable(FFMPEG_LOCAL_BIN)
+ensureExecutable(FFPROBE_LOCAL_BIN)
+
+// Quadro padrão usado quando a detecção automática não encontra um rosto.
+const DEFAULT_CAM = { x: 0.68, y: 0.02, w: 0.3, h: 0.36 }
+
+export const OUTPUT_SIZES = {
+  '720p': { width: 720, height: 1280 },
+  '1080p': { width: 1080, height: 1920 },
+  '4k': { width: 2160, height: 3840 },
+}
+
+function renderSize() {
+  const key = String(getState().settings?.resolution || '4k')
+  return OUTPUT_SIZES[key] || OUTPUT_SIZES['4k']
+}
+
+function sizeLabel(size) {
+  if (size.height >= 2000) return '4K'
+  if (size.height >= 1000) return '1080p'
+  return '720p'
+}
+
+function downloadFormat(maxHeight) {
+  const h = Number(maxHeight) || 720
+  return `bv*[height<=${h}][ext=mp4]+ba[ext=m4a]/b[height<=${h}][ext=mp4]/b[height<=${h}]/b`
+}
+
+function sourceMaxHeight() {
+  const key = String(getState().settings?.resolution || '4k')
+  return key === '4k' ? 2160 : key === '1080p' ? 1080 : 720
+}
+
+const NICHES = {
+  fuga: {
+    typeWords: {
+      fuga: ['fugiu', 'fuga', 'correu', 'correr', 'escapou', 'escapar', 'sumiu', 'acelerou', 'apagou', 'desapareceu', 'corrida'],
+      enquadro: ['enquadro', 'enquadraram', 'enquadrou', 'suspeito', 'revista', 'documento', 'parado', 'encostou', 'abordado'],
+      perseguicao: ['perseguicao', 'perseguiu', 'perseguindo', 'sirene', 'giroflex', 'viatura', 'cerco', 'bloqueio', 'radio', 'moto', 'corredor'],
+      abordagem: ['abordagem', 'abordar', 'rendido', 'imobilizado', 'prisao', 'detido', 'voz de comando', 'maos na direcao', 'flagrante'],
+    },
+    hashtags: {
+      fuga: ['#fuga', '#perseguicao', '#flagrante', '#madrugada'],
+      enquadro: ['#enquadro', '#abordagem', '#flagrante', '#policia'],
+      perseguicao: ['#perseguicao', '#cerco', '#viatura', '#rua'],
+      abordagem: ['#abordagem', '#bloqueio', '#flagrante', '#policia'],
+      momento: ['#flagrante', '#naocreditou', '#rua', '#policia'],
+    },
+    hooks: {
+      fuga: ['A fuga que ninguém conseguiu explicar', 'Ele apagou o farol e acelerou', 'Não tinha por onde passar'],
+      enquadro: ['O enquadro que mudou a madrugada', 'O detalhe que ninguém viu', 'Parecia rotina. Não era'],
+      perseguicao: ['A perseguição que parou a rua', 'A curva que quase acabou tudo', 'A moto entrou onde a viatura não passava'],
+      abordagem: ['O bloqueio estava esperando ele', 'A abordagem durou vinte segundos', 'A rádio avisou antes'],
+      momento: ['O momento que a câmera não perdeu', 'Você não viu isso no noticiário', 'O que aconteceu depois da curva'],
+    },
+  },
+  games: {
+    typeWords: {
+      jogada: ['jogada', 'kill', 'matou', 'headshot', 'ace', 'rush', 'flank', 'noscope', 'no scope', '1v', 'quadra', 'tripla', 'double', 'wipe', 'clutch', 'ganhou', 'virada'],
+      clutch: ['clutch', '1v1', '1v2', '1v3', '1v4', '1v5', 'ultima bala', 'defuse', 'bomb', 'ace', 'clutchou', 'salvou'],
+      reacao: ['nao acredito', 'que isso', 'meu deus', 'gritei', 'gritou', 'susto', 'assustei', 'risada', 'morrendo de rir', 'rage', 'surtei', 'chorando', 'pulou da cadeira'],
+      treta: ['treta', 'chat', 'toxico', 'discussao', 'brigou', 'xingou', 'baniu', 'banido', 'reclamei', 'flamewar', 'cancelou'],
+    },
+    hashtags: {
+      jogada: ['#gameplay', '#jogada', '#clutch', '#gamer'],
+      clutch: ['#clutch', '#gameplay', '#insano', '#gamer'],
+      reacao: ['#reacao', '#streamer', '#gamer', '#live'],
+      treta: ['#treta', '#streamer', '#chat', '#live'],
+      momento: ['#gameplay', '#streamer', '#gamer', '#live'],
+    },
+    hooks: {
+      jogada: ['A jogada que virou o jogo', 'Ele viu tudo antes', 'Ninguém esperava essa'],
+      clutch: ['O clutch que ninguém acreditou', 'Um contra todos', 'A última bala era dele'],
+      reacao: ['A reação que viralizou', 'Ele não acreditou no que viu', 'A tela quase quebrou'],
+      treta: ['A treta que tomou o chat', 'O chat inteiro viu', 'Discutiu ao vivo'],
+      momento: ['O momento que o chat explodiu', 'Isso não estava no script', 'Ao vivo, sem corte'],
+    },
+  },
+}
+
+function nicheConfig(state) {
+  return NICHES[state.settings?.niche] || NICHES.fuga
+}
+
+const wordRes = new Map()
+function matchesWord(text, word) {
+  if (word.includes(' ')) return text.includes(word)
+  let re = wordRes.get(word)
+  if (!re) {
+    re = new RegExp(`(^|[^a-z0-9])${word}([^a-z0-9]|$)`)
+    wordRes.set(word, re)
+  }
+  return re.test(text)
+}
+
+function norm(text) {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+}
+
+function run(cmd, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { windowsHide: true, cwd: opts.cwd, env: opts.env || process.env })
+    const binary = opts.encoding === 'buffer'
+    const outChunks = []
+    const errChunks = []
+    let size = 0
+    const timer = setTimeout(() => {
+      child.kill()
+      reject(new Error('timeout'))
+    }, opts.timeout || 1000 * 60 * 12)
+    child.stdout?.on('data', (d) => {
+      if (binary) outChunks.push(d)
+      else if (size < 40 * 1024 * 1024) { outChunks.push(d); size += d.length }
+      opts.onStdout?.(d.toString())
+    })
+    child.stderr?.on('data', (d) => {
+      if (errChunks.length < 400) errChunks.push(d)
+      opts.onStderr?.(d.toString())
+    })
+    child.on('error', (err) => { clearTimeout(timer); reject(err) })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      const stdout = binary ? Buffer.concat(outChunks) : Buffer.concat(outChunks).toString()
+      const stderr = Buffer.concat(errChunks).toString()
+      if (code === 0) resolve({ stdout, stderr })
+      else reject(Object.assign(new Error(stderr.slice(-1200) || `exit ${code}`), { code, stderr }))
+    })
+  })
+}
+
+function prepareYouTubeCookies() {
+  const configured = String(process.env.FUGA_COOKIES || '').trim()
+  const cookiePath = configured || path.join(DATA, 'cookies.txt')
+  const encoded = String(process.env.FUGA_COOKIES_B64 || '').trim()
+  if (encoded && !fs.existsSync(cookiePath)) {
+    try {
+      const contents = Buffer.from(encoded, 'base64').toString('utf8')
+      if (contents.includes('# Netscape HTTP Cookie File') || contents.includes('\t.youtube.com\t')) {
+        fs.mkdirSync(path.dirname(cookiePath), { recursive: true })
+        fs.writeFileSync(cookiePath, contents, { mode: 0o600 })
+      }
+    } catch (err) {
+      console.warn('[youtube] não foi possível preparar cookies:', err?.message || err)
+    }
+  }
+  return cookiePath
+}
+
+const YT_COOKIES = prepareYouTubeCookies()
+const INVIDIOUS_INSTANCE = process.env.INVIDIOUS_INSTANCE
+const PLAYER_CLIENTS = (process.env.YTDLP_PLAYER_CLIENTS || 'mweb,tv,web_safari,web_embedded,android_vr').trim()
+const IMPERSONATE = (process.env.YTDLP_IMPERSONATE ?? 'chrome').trim()
+const VERBOSE = /^(1|true|yes)$/i.test(process.env.YTDLP_VERBOSE || '')
+const POT_URL = String(process.env.BGUTIL_POT_URL || process.env.YT_POT_URL || 'http://127.0.0.1:4416').trim()
+const POT_ENABLED = /^(1|true|yes)$/i.test(process.env.YT_POT_ENABLED || '')
+  || Boolean(process.env.BGUTIL_POT_URL || process.env.YT_POT_URL)
+const watchUrl = (id) => `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`
+
+export function ytdlp(args, opts = {}) {
+  const extra = fs.existsSync(YT_COOKIES) ? ['--cookies', YT_COOKIES] : []
+  const youtubeArgs = []
+  if (INVIDIOUS_INSTANCE) youtubeArgs.push(`invidious_instance=${INVIDIOUS_INSTANCE}`)
+  if (PLAYER_CLIENTS) youtubeArgs.push(`player_client=${PLAYER_CLIENTS}`)
+  const extractorArgs = []
+  if (youtubeArgs.length) extractorArgs.push(`youtube:${youtubeArgs.join(';')}`)
+  if (POT_ENABLED) extractorArgs.push(`youtubepot-bgutilhttp:base_url=${POT_URL}`)
+  const bundledYtDlp = fs.existsSync(YTDLP_BIN)
+  return run(bundledYtDlp ? YTDLP_BIN : PYTHON, [
+    ...(bundledYtDlp ? [] : ['-m', 'yt_dlp']),
+    ...extra,
+    ...(extractorArgs.length ? ['--extractor-args', extractorArgs.join(';')] : []),
+    '--force-ipv4',
+    '--js-runtimes', 'node',
+    ...(IMPERSONATE ? ['--impersonate', IMPERSONATE] : []),
+    ...(VERBOSE ? ['--verbose'] : []),
+    ...args,
+  ], opts)
+}
+
+function bestThumb(list) {
+  if (!Array.isArray(list) || !list.length) return null
+  const sorted = [...list].filter((t) => t?.url).sort((a, b) => (b.width || 0) - (a.width || 0))
+  return sorted[0]?.url || null
+}
+
+export function isChannelUrl(raw) {
+  try {
+    const u = new URL(raw)
+    if (!/(^|\.)youtube\.com$/i.test(u.hostname)) return false
+    return /^\/(@[^/]+|channel\/|c\/|user\/)/i.test(u.pathname) || /\/(videos|shorts|streams)\/?$/i.test(u.pathname)
+  } catch {
+    return false
+  }
+}
+
+export async function fetchChannelVideos(raw) {
+  let target = String(raw || '').trim()
+  if (/^@[\w.-]+$/.test(target)) target = `https://www.youtube.com/${target}`
+  if (!isChannelUrl(target)) throw new Error('not-channel')
+  const u = new URL(target)
+  if (!/\/(videos|shorts|streams)\/?$/i.test(u.pathname)) {
+    u.pathname = u.pathname.replace(/\/+$/, '') + '/videos'
+  }
+  u.search = ''
+  u.hash = ''
+  let data
+  try {
+    const { stdout } = await ytdlp([
+      '-J', '--flat-playlist', '--playlist-end', '24',
+      '--no-warnings', '--socket-timeout', '20', u.toString(),
+    ], { timeout: 1000 * 90 })
+    data = JSON.parse(stdout)
+  } catch {
+    throw new Error('channel-unavailable')
+  }
+  const entries = (data.entries || []).filter((e) => e && e.id)
+  const videos = entries.map((e) => ({
+    id: e.id,
+    title: e.title || 'Vídeo sem título',
+    duration: Math.round(Number(e.duration) || 0),
+    thumb: bestThumb(e.thumbnails) || `https://i.ytimg.com/vi/${e.id}/hqdefault.jpg`,
+    views: Number(e.view_count) || 0,
+    published: e.timestamp ? new Date(e.timestamp * 1000).toISOString() : null,
+    url: `https://www.youtube.com/watch?v=${e.id}`,
+  }))
+  return {
+    channel: data.channel || data.uploader || data.title || 'Canal',
+    avatar: bestThumb(data.thumbnails) || null,
+    videos,
+  }
+}
+
+async function probe(file) {
+  const { stdout } = await run(FFPROBE_BIN, [
+    '-v', 'error',
+    '-show_entries', 'stream=width,height,duration:format=duration',
+    '-of', 'json', file,
+  ])
+  const data = JSON.parse(stdout) || {}
+  const s = data.streams?.find((stream) => stream.width) || data.streams?.[0] || {}
+  return {
+    width: s.width || 1280,
+    height: s.height || 720,
+    duration: Number(s.duration) || Number(data.format?.duration) || 0,
+  }
+}
+
+export function parseVtt(raw) {
+  const txt = raw.replace(/\r/g, '')
+  const blocks = txt.split(/\n\n+/)
+  const cues = []
+  for (const block of blocks) {
+    const lines = block.split('\n').filter(Boolean)
+    const idx = lines.findIndex((l) => l.includes('-->'))
+    if (idx === -1) continue
+    const [a, b] = lines[idx].split('-->')
+    const start = timeToSec(a)
+    const end = timeToSec(b)
+    if (start == null || end == null) continue
+    const text = lines.slice(idx + 1).join(' ')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!text) continue
+    cues.push({ start, end, text })
+  }
+  cues.sort((x, y) => x.start - y.start)
+  const out = []
+  for (const cue of cues) {
+    const prev = out[out.length - 1]
+    if (prev && norm(prev.text) === norm(cue.text)) {
+      prev.end = Math.max(prev.end, cue.end)
+      continue
+    }
+    if (prev && cue.start < prev.start + 0.2 && norm(cue.text).includes(norm(prev.text)) && cue.text.length > prev.text.length + 4) {
+      prev.text = cue.text
+      prev.end = cue.end
+      continue
+    }
+    out.push({ ...cue })
+  }
+  return out.filter((c) => c.end - c.start > 0.5 && c.text.length > 1)
+}
+
+function timeToSec(t) {
+  const m = t.trim().match(/(\d+):(\d{2}):(\d{2})[.,](\d{3})/) || t.trim().match(/(\d+):(\d{2})[.,](\d{3})/)
+  if (!m) return null
+  if (m.length === 5) return +m[1] * 3600 + +m[2] * 60 + +m[3] + +m[4] / 1000
+  return +m[1] * 60 + +m[2] + +m[3] / 1000
+}
+
+function classify(text, cfg = NICHES.fuga) {
+  const n = norm(text)
+  let best = 'momento'
+  let bestScore = 0
+  for (const [type, words] of Object.entries(cfg.typeWords)) {
+    let score = 0
+    for (const w of words) if (matchesWord(n, w)) score += w.includes(' ') ? 2 : 1
+    if (score > bestScore) { bestScore = score; best = type }
+  }
+  return bestScore > 0 ? best : 'momento'
+}
+
+function cleanHook(text) {
+  let t = text.replace(/\s+/g, ' ').trim().replace(/^[,.!?…-]+|[,.!?…-]+$/g, '')
+  if (!t) return null
+  if (t.length > 68) {
+    t = t.slice(0, 68)
+    const cut = t.lastIndexOf(' ')
+    if (cut > 34) t = t.slice(0, cut)
+    t = t.replace(/[,.!?…-]+$/g, '')
+  }
+  t = t.charAt(0).toUpperCase() + t.slice(1)
+  return t.length >= 16 ? t : null
+}
+
+function pickHook(type, cues, seedText, cfg = NICHES.fuga) {
+  const options = cues.slice(0, 6).map((c) => cleanHook(c.text)).filter(Boolean)
+  const complete = options.find(
+    (t) => t.length >= 20 && t.length <= 58 &&
+      !/\b(com|de|da|do|das|dos|que|e|a|o|em|para|por|no|na|nos|nas|foi)$/i.test(t),
+  )
+  if (complete) return complete
+  const list = cfg.hooks[type] || cfg.hooks.momento
+  let h = 0
+  for (const ch of seedText) h = (h * 31 + ch.charCodeAt(0)) % 997
+  return list[h % list.length]
+}
+
+function scoreWindow(cues, min, max, cfg = NICHES.fuga) {
+  const text = cues.map((c) => c.text).join(' ')
+  const n = norm(text)
+  let hits = 0
+  for (const words of Object.values(cfg.typeWords)) for (const w of words) if (matchesWord(n, w)) hits++
+  const dur = cues[cues.length - 1].end - cues[0].start
+  const durFit = dur >= min && dur <= max ? 8 : Math.max(0, 8 - Math.abs(dur - (min + max) / 2) * 0.6)
+  const speech = Math.min(14, cues.length * 1.6)
+  const keywords = Math.min(32, hits * 5)
+  const score = Math.round(Math.min(97, 48 + keywords + speech + durFit))
+  return { score, hits, text }
+}
+
+function detectFromCues(cues, min, max, cfg = NICHES.fuga) {
+  const windows = []
+  for (let i = 0; i < cues.length; i++) {
+    const startT = cues[i].start
+    let j = i
+    while (j + 1 < cues.length && cues[j].end - startT < min) j++
+    if (j + 1 < cues.length && cues[j + 1].end - startT <= Math.min(max, min + 8)) j++
+    const slice = cues.slice(i, j + 1)
+    if (!slice.length) continue
+    const dur = slice[slice.length - 1].end - startT
+    if (dur < min * 0.82 || dur > max * 1.15) continue
+    const { score, hits, text } = scoreWindow(slice, min, max, cfg)
+    windows.push({ start: startT, end: Math.min(startT + max, slice[slice.length - 1].end), cues: slice, score, hits, text })
+  }
+  windows.sort((a, b) => b.score - a.score || b.hits - a.hits)
+  const chosen = []
+  for (const w of windows) {
+    if (chosen.length >= 8) break
+    if (chosen.some((c) => w.start < c.end + 3 && w.end > c.start - 3)) continue
+    chosen.push(w)
+  }
+  return chosen.sort((a, b) => a.start - b.start)
+}
+
+async function detectFromAudio(video, job) {
+  updateJob(job, { step: 'Lendo o áudio em busca de movimento' })
+  try {
+    const { stderr } = await run(FFMPEG_BIN, ['-hide_banner', '-i', video, '-af', 'silencedetect=noise=-32dB:d=1.4', '-f', 'null', '-'], { timeout: 1000 * 60 * 8 })
+    const starts = [...stderr.matchAll(/silence_start: ([\d.]+)/g)].map((m) => Number(m[1]))
+    const ends = [...stderr.matchAll(/silence_end: ([\d.]+)/g)].map((m) => Number(m[1]))
+    const { duration } = await probe(video)
+    const silences = starts.map((s, i) => [s, ends[i] ?? duration])
+    const active = []
+    let cursor = 0
+    for (const [s, e] of silences) {
+      if (s - cursor > 6) active.push([cursor, s])
+      cursor = Math.max(cursor, e)
+    }
+    if (duration - cursor > 6) active.push([cursor, duration])
+    active.sort((a, b) => (b[1] - b[0]) - (a[1] - a[0]))
+    return active.slice(0, 5).map(([s, e], i) => {
+      const len = Math.min(Math.max(e - s, 20), 34)
+      const start = Math.max(0, s + Math.min(3, (e - s - len) / 2))
+      return {
+        start,
+        end: start + len,
+        cues: [],
+        score: 72 - i * 3,
+        hits: 0,
+        text: '',
+      }
+    })
+  } catch {
+    return []
+  }
+}
+
+function spreadWindows(duration, min, max) {
+  const len = Math.min(Math.max(min + 6, 22), max)
+  const count = 6
+  const first = Math.min(15, duration * 0.05)
+  const span = Math.max(0, duration - first - len - 2)
+  const out = []
+  for (let i = 0; i < count; i++) {
+    const start = first + (span * i) / (count - 1)
+    out.push({
+      start,
+      end: Math.min(duration - 0.4, start + len),
+      cues: [],
+      score: 72 - i * 2,
+      hits: 0,
+      text: '',
+    })
+  }
+  return out
+}
+
+async function extractCover(video, time, outFile, width = 432) {
+  await run(FFMPEG_BIN, [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    '-ss', time.toFixed(2), '-i', video, '-frames:v', '1',
+    '-vf', `crop=ih*9/16:ih,scale=${width}:-2`, '-q:v', '3', outFile,
+  ], { timeout: 1000 * 60 })
+}
+
+async function extractWide(video, time, outFile) {
+  await run(FFMPEG_BIN, [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    '-ss', time.toFixed(2), '-i', video, '-frames:v', '1',
+    '-vf', 'scale=960:-2', '-q:v', '3', outFile,
+  ], { timeout: 1000 * 60 })
+}
+
+export async function computeFraming(video, start, end) {
+  try {
+    const { width, height } = await probe(video)
+    if (width / height <= 9 / 16 + 0.02) return 0.5
+    const sampleW = 120
+    const cropFrac = (9 / 16) / (width / height)
+    const maxX = 1 - cropFrac
+    const positions = []
+    for (const p of [0.25, 0.55, 0.8]) {
+      const t = start + (end - start) * p
+      const { stdout } = await run(FFMPEG_BIN, [
+        '-v', 'error', '-ss', t.toFixed(2), '-i', video, '-frames:v', '1',
+        '-vf', `scale=${sampleW}:-2`, '-f', 'rawvideo', '-pix_fmt', 'gray', '-',
+      ], { timeout: 1000 * 60, encoding: 'buffer' }).then((r) => ({ stdout: Buffer.isBuffer(r.stdout) ? r.stdout : Buffer.from(r.stdout) }))
+      const buf = stdout
+      const h = Math.floor(buf.length / sampleW)
+      if (!h) continue
+      const col = new Array(sampleW).fill(0)
+      for (let y = 1; y < h; y++) {
+        for (let x = 1; x < sampleW; x++) {
+          const i = y * sampleW + x
+          const gx = Math.abs(buf[i] - buf[i - 1])
+          const gy = Math.abs(buf[i] - buf[i - sampleW])
+          col[x] += gx + gy * 0.6
+        }
+      }
+      const win = Math.max(4, Math.round(sampleW * cropFrac))
+      let bestX = 0
+      let best = -1
+      for (let x = 0; x <= sampleW - win; x++) {
+        let s = 0
+        for (let k = 0; k < win; k++) s += col[x + k]
+        if (s > best) { best = s; bestX = x }
+      }
+      const center = (bestX + win / 2) / sampleW
+      positions.push(Math.min(1, Math.max(0, (center - cropFrac / 2) / maxX)))
+    }
+    if (!positions.length) return 0.5
+    const avg = positions.reduce((a, b) => a + b, 0) / positions.length
+    return Math.min(0.92, Math.max(0.06, avg))
+  } catch {
+    return 0.5
+  }
+}
+
+export async function clipFrame(clipId) {
+  const clip = findClip(clipId)
+  if (!clip) throw new Error('Corte não encontrado')
+  const liveSrc = clip.media
+    ? await ensureLocalMedia(clip.mediaKey || mediaPathFromUrl(clip.media), liveMediaFile(clip), `${clip.id}.mp4`)
+    : null
+  const source = findSource(clip.sourceId)
+  const src = liveSrc || await ensureLocalMedia(source?.mediaKey, sourceVideo(clip.sourceId), `${clip.sourceId}.mp4`)
+  if (!src) throw new Error('Sem vídeo para esta fonte')
+  const len = Math.max(1, clip.end - clip.start)
+  const t = liveSrc ? Math.min(1.5, len / 3) : clip.start + Math.min(2.5, len / 2)
+  const { stdout } = await run(FFMPEG_BIN, [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    '-ss', t.toFixed(2), '-i', src, '-frames:v', '1',
+    '-vf', 'scale=960:-2', '-q:v', '4', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-',
+  ], { timeout: 1000 * 60, encoding: 'buffer' })
+  if (!stdout?.length) throw new Error('Sem quadro')
+  return stdout
+}
+
+async function findSubFile(sourceId) {
+  const files = fs.readdirSync(SRC_MEDIA).filter((f) => f.startsWith(sourceId) && f.endsWith('.vtt'))
+  if (!files.length) return null
+  files.sort((a, b) => {
+    const pa = /\.pt/i.test(a) ? 0 : 1
+    const pb = /\.pt/i.test(b) ? 0 : 1
+    return pa - pb
+  })
+  return path.join(SRC_MEDIA, files[0])
+}
+
+function isBlocked(err) {
+  return /not a bot|Sign in to confirm|confirm your age/i.test(String(err?.message || err))
+}
+
+function isOffline(err) {
+  return /channel is offline|not currently live|is offline|live stream (?:has )?ended/i.test(String(err?.message || err))
+}
+
+// Erros de IP/datacenter e de live fora do ar também precisam cair nos espelhos.
+function canMirror(err) {
+  return isBlocked(err) || isOffline(err)
+    || /Failed to extract any player response|HTTP Error 403/i.test(String(err?.message || err))
+}
+
+const FRIENDLY = [
+  'Este vídeo não está disponível agora. Tente de novo daqui a pouco ou use outro link…',
+  'A análise demorou mais que o esperado. Tente novamente.',
+  'Este vídeo não está disponível publicamente.',
+  'Não encontramos esse vídeo. Confira o link.',
+  'Não foi possível processar este link agora. Tente novamente.',
+  'Não foi possível pegar este vídeo agora. Tente de novo…',
+  'Essa transmissão ainda não começou. Volte quando estiver ao vivo…',
+  'Essa fonte não está ao vivo agora. Cole o link de uma transmissão em andamento…',
+  'O arquivo enviado está vazio ou inválido.',
+  'Não foi possível ler este arquivo de vídeo. Envie um MP4, MOV, WebM ou MKV válido.',
+]
+
+const UPLOAD_EMPTY = FRIENDLY[8]
+const UPLOAD_INVALID = FRIENDLY[9]
+
+function friendlyError(err) {
+  const s = String(err?.message || err)
+  if (FRIENDLY.includes(s)) return s
+  if (isBlocked(err) || /HTTP Error 403/i.test(s)) return FRIENDLY[0]
+  if (/timeout/i.test(s)) return FRIENDLY[1]
+  if (/^service/i.test(s)) return FRIENDLY[5]
+  if (/will begin|premieres in/i.test(s)) return FRIENDLY[6]
+  if (/channel is offline|not currently live/i.test(s)) return FRIENDLY[7]
+  if (/Private video|Sign in|login|not available/i.test(s)) return FRIENDLY[2]
+  if (/Video unavailable|HTTP Error 404/i.test(s)) return FRIENDLY[3]
+  return FRIENDLY[4]
+}
+
+const DL_API = (process.env.DOWNLOAD_API_URL || '').trim().replace(/\/+$/, '')
+const DL_KEY = (process.env.DOWNLOAD_API_KEY || '').trim()
+const DL_ONLY = /^(1|true|yes)$/i.test(process.env.DOWNLOAD_API_ONLY || '')
+const YT_API_KEY = (process.env.YOUTUBE_API_KEY || '').trim()
+
+function canUseService() {
+  return Boolean(DL_API)
+}
+
+function videoIdFromUrl(url) {
+  const m = String(url || '').match(/(?:[?&]v=|\/live\/|\/shorts\/|\/embed\/|youtu\.be\/)([\w-]{6,})/)
+  return m ? m[1] : ''
+}
+
+async function ytApiMeta(videoId) {
+  if (!YT_API_KEY) return null
+  try {
+    const res = await fetch(
+      `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,liveStreamingDetails,status&id=${videoId}&key=${YT_API_KEY}`,
+      { signal: AbortSignal.timeout(15000) }
+    )
+    if (!res.ok) return null
+    const json = await res.json()
+    const item = json.items?.[0]
+    if (!item) return null
+    const isLive = item.liveStreamingDetails?.actualStartTime && !item.liveStreamingDetails?.actualEndTime
+    return {
+      id: item.id,
+      title: item.snippet.title,
+      channel: item.snippet.channelTitle,
+      thumbnail: item.snippet.thumbnails?.maxres?.url || item.snippet.thumbnails?.high?.url || item.snippet.thumbnails?.medium?.url,
+      duration: item.contentDetails.duration ? parseISO8601Duration(item.contentDetails.duration) : 0,
+      is_live: isLive,
+      liveId: isLive ? item.id : undefined,
+      liveChannel: item.snippet.channelId,
+    }
+  } catch {
+    return null
+  }
+}
+
+function youtubeChannelRef(url) {
+  try {
+    const u = new URL(String(url || ''))
+    const handle = u.pathname.match(/^\/@([\w.-]+)/)
+    if (handle) return { handle: `@${handle[1]}` }
+    const channel = u.pathname.match(/^\/channel\/(UC[\w-]{20,})/)
+    if (channel) return { id: channel[1] }
+    const user = u.pathname.match(/^\/(?:c|user)\/([^/]+)/)
+    if (user) return { username: decodeURIComponent(user[1]) }
+  } catch {}
+  return null
+}
+
+async function ytApiGet(endpoint, params) {
+  if (!YT_API_KEY) return null
+  const qs = new URLSearchParams({ ...params, key: YT_API_KEY })
+  try {
+    const res = await fetch(`https://www.googleapis.com/youtube/v3/${endpoint}?${qs}`, {
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
+async function youtubeChannelId(url) {
+  const ref = youtubeChannelRef(url)
+  if (!ref) return ''
+  if (ref.id) return ref.id
+  const json = ref.handle
+    ? await ytApiGet('channels', { part: 'id', forHandle: ref.handle })
+    : await ytApiGet('channels', { part: 'id', forUsername: ref.username })
+  const id = json?.items?.[0]?.id
+  if (id) return String(id)
+  if (ref.username) {
+    const search = await ytApiGet('search', { part: 'snippet', type: 'channel', maxResults: '1', q: ref.username })
+    return String(search?.items?.[0]?.snippet?.channelId || '')
+  }
+  return ''
+}
+
+async function youtubeLiveId(channelId) {
+  if (!channelId) return ''
+  const json = await ytApiGet('search', {
+    part: 'snippet', channelId, eventType: 'live', type: 'video', maxResults: '1',
+  })
+  return String(json?.items?.[0]?.id?.videoId || '')
+}
+
+/** Resolve o vídeo ao vivo de uma URL de canal (@handle, /c/, /channel/). */
+async function youtubeLiveMeta(url) {
+  const id = await youtubeLiveId(await youtubeChannelId(url))
+  if (!id) return null
+  const meta = await ytApiMeta(id)
+  if (!meta?.is_live) return null
+  return { ...meta, sourceUrl: watchUrl(id) }
+}
+
+function parseISO8601Duration(d) {
+  const m = d.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/)
+  if (!m) return 0
+  const h = parseInt(m[1] || 0), min = parseInt(m[2] || 0), s = parseInt(m[3] || 0)
+  return h * 3600 + min * 60 + s
+}
+
+async function oembedMeta(url) {
+  const res = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`, {
+    signal: AbortSignal.timeout(15000),
+  })
+  if (!res.ok) throw new Error(FRIENDLY[0])
+  const j = await res.json()
+  return { title: j.title, channel: j.author_name, thumbnail: j.thumbnail_url, duration: 0 }
+}
+
+async function serviceMediaUrl(url) {
+  const headers = { 'Content-Type': 'application/json', Accept: 'application/json' }
+  if (DL_KEY) {
+    headers.Authorization = `Api-Key ${DL_KEY}`
+    headers['X-Api-Key'] = DL_KEY
+  }
+  const res = await fetch(DL_API, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ url, videoQuality: '720', downloadMode: 'auto' }),
+    signal: AbortSignal.timeout(60000),
+  })
+  if (!res.ok) throw new Error(`service-${res.status}`)
+  const json = await res.json()
+  if (json.status === 'error' || json.error) throw new Error('service-error')
+  if (json.status === 'picker') throw new Error('service-picker')
+  const link = json.url || json.link || json.download || json.downloadUrl || json.video || json.mp4
+  if (!link || typeof link !== 'string') throw new Error('service-no-link')
+  return link
+}
+
+async function downloadHttp(url, destPath) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(1000 * 60 * 20) })
+  if (!res.ok || !res.body) throw new Error(`service-${res.status}`)
+  await streamPipeline(Readable.fromWeb(res.body), fs.createWriteStream(destPath))
+  const size = fs.existsSync(destPath) ? fs.statSync(destPath).size : 0
+  if (size < 1024) throw new Error('service-empty')
+}
+
+async function downloadViaService(url, destPath) {
+  const link = await serviceMediaUrl(url)
+  await downloadHttp(link, destPath)
+}
+
+async function downloadViaCobalt(url, destPath) {
+  const resolved = await cobaltResolve(url, { quality: '720' })
+  if (resolved.kind === 'single' || resolved.kind === 'hls') {
+    await downloadHttp(resolved.url, destPath)
+    return
+  }
+  if (resolved.kind === 'merge') {
+    const dir = fs.mkdtempSync(path.join(DATA, 'cobalt-'))
+    const video = path.join(dir, 'video.mp4')
+    const audio = path.join(dir, 'audio.m4a')
+    try {
+      await downloadHttp(resolved.video, video)
+      await downloadHttp(resolved.audio, audio)
+      await run(FFMPEG_BIN, ['-y', '-hide_banner', '-loglevel', 'error', '-i', video, '-i', audio, '-c', 'copy', '-shortest', destPath], { timeout: 1000 * 60 * 20 })
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+    if (!fs.existsSync(destPath) || fs.statSync(destPath).size < 1024) throw new Error('service-empty')
+    return
+  }
+  throw new Error('cobalt-unsupported')
+}
+
+async function downloadViaInvidious(url, destPath) {
+  const info = await invidiousInfo(url)
+  if (info.hls) {
+    await run(FFMPEG_BIN, [
+      '-y', '-hide_banner', '-loglevel', 'error',
+      '-i', info.hls, '-c', 'copy', '-bsf:a', 'aac_adtstoasc', destPath,
+    ], { timeout: 1000 * 60 * 20 })
+    const size = fs.existsSync(destPath) ? fs.statSync(destPath).size : 0
+    if (size < 1024) throw new Error('invidious-empty')
+    return
+  }
+  if (info.video && info.audio) {
+    const dir = fs.mkdtempSync(path.join(DATA, 'invidious-'))
+    const video = path.join(dir, 'video.mp4')
+    const audio = path.join(dir, 'audio.m4a')
+    try {
+      await downloadHttp(info.video, video)
+      await downloadHttp(info.audio, audio)
+      await run(FFMPEG_BIN, ['-y', '-hide_banner', '-loglevel', 'error', '-i', video, '-i', audio, '-c', 'copy', '-shortest', destPath], { timeout: 1000 * 60 * 20 })
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+    const size = fs.existsSync(destPath) ? fs.statSync(destPath).size : 0
+    if (size < 1024) throw new Error('invidious-empty')
+    return
+  }
+  if (info.video) {
+    await downloadHttp(info.video, destPath)
+    return
+  }
+  throw new Error('invidious-no-stream')
+}
+
+async function probeMeta(url, job) {
+  // No Render/datacenter o yt-dlp demora ~3 min e ainda cai no bloqueio do YouTube.
+  // Quando há chave Data API v3, ela resolve título/live/duração em ~300 ms.
+  if (YT_API_KEY) {
+    const apiId = videoIdFromUrl(url)
+    if (apiId) {
+      if (job) updateJob(job, { step: 'Lendo as informações da fonte' })
+      const apiMeta = await ytApiMeta(apiId)
+      if (apiMeta) return apiMeta
+    }
+    if (isChannelUrl(url)) {
+      if (job) updateJob(job, { step: 'Procurando a transmissão' })
+      const live = await youtubeLiveMeta(url)
+      if (live) return live
+    }
+  }
+  const args = ['-J', '--no-warnings', '--no-playlist', '--socket-timeout', '20', url]
+  const waits = [0, 6000, 18000]
+  let lastErr
+  for (let i = 0; i < waits.length; i++) {
+    if (waits[i]) {
+      if (job) updateJob(job, { step: 'Estabilizando a conexão. Tentando de novo' })
+      await new Promise((r) => setTimeout(r, waits[i]))
+      if (job) updateJob(job, { step: 'Abrindo o link e lendo a fonte' })
+    }
+    try {
+      return JSON.parse((await ytdlp(args, { timeout: 1000 * 90 })).stdout)
+    } catch (err) {
+      lastErr = err
+      if (!canMirror(err)) {
+        if (hasYtdlpApi()) {
+          try { return await ydlInfo(url) } catch {}
+        }
+        if (isOffline(err)) {
+          const live = await youtubeLiveMeta(url)
+          if (live) return live
+        }
+        throw err
+      }
+    }
+  }
+  if (hasYtdlpApi()) {
+    try { return await ydlInfo(url) } catch {}
+  }
+  if (isChannelUrl(url)) {
+    const live = await youtubeLiveMeta(url)
+    if (live) return live
+  }
+  if (hasInvidious()) {
+    try {
+      const inv = await invidiousInfo(url)
+      if (inv.title || inv.is_live || inv.id) {
+        if (job) updateJob(job, { step: 'Lendo as informações da fonte' })
+        return inv
+      }
+    } catch {}
+  }
+  // Try YouTube Data API v3 as fallback for metadata
+  const videoId = url.match(/(?:[?&]v=|\/live\/|youtu\.be\/)([\w-]{6,})/)?.[1]
+  if (videoId && YT_API_KEY) {
+    if (job) updateJob(job, { step: 'Lendo as informações da fonte…' })
+    const apiMeta = await ytApiMeta(videoId)
+    if (apiMeta) return apiMeta
+  }
+  throw lastErr
+}
+
+export async function runIngest(sourceId, url, opts = {}) {
+  const state = getState()
+  const source = findSource(sourceId)
+  const job = createJob('ingest', { sourceId, ...(opts.jobId ? { id: opts.jobId } : {}) })
+  const localFile = typeof opts.localFile === 'string'
+    ? path.resolve(opts.localFile)
+    : (source.uploaded ? await ensureLocalMedia(source.mediaKey, sourceVideo(sourceId), `${sourceId}.mp4`) : null)
+  const metaHint = opts.metaHint || {}
+  try {
+    updateJob(job, { progress: 4, step: localFile ? 'Lendo o vídeo enviado' : 'Abrindo o link e lendo a fonte' })
+    let viaService = DL_ONLY && (canUseService() || hasCobalt())
+    let viaInvidious = false
+    const videoId = videoIdFromUrl(url || '')
+    let meta = { ...metaHint }
+    const videoPath = localFile || path.join(SRC_MEDIA, `${sourceId}.mp4`)
+    let cues = []
+
+    if (localFile) {
+      if (!fs.existsSync(localFile) || fs.statSync(localFile).size < 1024) throw new Error(UPLOAD_EMPTY)
+      let info
+      try { info = await probe(localFile) } catch { throw new Error(UPLOAD_INVALID) }
+      source.title = String(meta.title || source.title || 'Vídeo enviado').slice(0, 140)
+      source.channel = String(meta.uploader || source.channel || 'Upload local').slice(0, 90)
+      source.duration = Math.round(info.duration || 0)
+      source.url = ''
+      source.mode = 'vod'
+      source.uploaded = true
+      source.demo = false
+      source.status = 'processando'
+      source.progress = 16
+      source.clips = 0
+      source.error = null
+      save()
+      updateJob(job, { progress: 16, step: 'Vídeo enviado. Preparando o material' })
+    } else {
+      if (viaService) {
+        meta = (videoId ? await ytApiMeta(videoId) : null)
+          || (!videoId && isChannelUrl(url) ? await youtubeLiveMeta(url) : null)
+        if (!meta) {
+          try { meta = await oembedMeta(url) } catch { meta = await probeMeta(url, job) }
+        }
+        updateJob(job, { step: 'Preparando o material' })
+      } else {
+        try {
+          meta = await probeMeta(url, job)
+        } catch (err) {
+          if (!canMirror(err) || !(canUseService() || hasCobalt() || hasInvidious())) throw new Error(friendlyError(err))
+          try {
+            const live = isChannelUrl(url) ? await youtubeLiveMeta(url) : null
+            if (live) meta = live
+            else {
+              if (!hasInvidious()) throw new Error('invidious-disabled')
+              meta = await invidiousInfo(url)
+            }
+            updateJob(job, { step: 'Lendo as informações da fonte' })
+          } catch {
+            try { meta = hasYtdlpApi() ? await ydlInfo(url) : await oembedMeta(url) } catch { meta = await oembedMeta(url) }
+            viaService = true
+            updateJob(job, { step: 'Preparando o material' })
+          }
+        }
+      }
+      if (meta.is_live) {
+        source.mode = 'live'
+        source.platform = /kick\.com/i.test(url) ? 'kick' : /twitch\.tv/i.test(url) ? 'twitch' : 'youtube'
+        source.title = String(meta.title || 'Transmissão ao vivo').slice(0, 140)
+        source.channel = String(meta.uploader || meta.channel || source.channel || 'Transmissão').slice(0, 90)
+        if (meta.thumbnail) source.thumb = meta.thumbnail
+        source.originalUrl = url
+        source.url = meta.sourceUrl || (meta.liveId ? watchUrl(meta.liveId) : url)
+        if (meta.liveId) source.liveId = meta.liveId
+        if (meta.liveChannel) source.liveChannel = meta.liveChannel
+        source.status = 'processando'
+        source.progress = 2
+        source.error = null
+        save()
+        addActivity('agent', `Transmissão ao vivo detectada · ${source.channel}`)
+        updateJob(job, { progress: 100, step: 'Ao vivo. Acompanhando a transmissão' })
+        finishJob(job)
+        return []
+      }
+      if (meta.is_upcoming) throw new Error(FRIENDLY[6])
+      const youtubeId = meta.id
+      source.title = meta.title || source.title
+      source.channel = meta.channel || meta.uploader || source.channel || 'Fonte conectada'
+      source.duration = Math.round(meta.duration || 0)
+      source.url = url
+      source.youtubeId = youtubeId || videoId
+      source.demo = false
+      source.status = 'processando'
+      source.progress = 10
+      source.clips = 0
+      source.thumb = meta.thumbnail || source.thumb
+      save()
+      updateJob(job, { progress: 12, step: 'Fonte reconhecida. Preparando o material' })
+    }
+
+    if (localFile) {
+      updateJob(job, { progress: 68, step: 'Vídeo pronto. Lendo o áudio' })
+      source.progress = 68
+      save()
+    } else {
+      updateJob(job, { progress: 16, step: 'Baixando o vídeo em qualidade de corte' })
+      let lastPct = 0
+      const onProgress = (chunk) => {
+        const m = chunk.match(/\[download\]\s+([\d.]+)%/)
+        if (m) {
+          const pct = Number(m[1])
+          if (pct - lastPct >= 8) {
+            lastPct = pct
+            const p = Math.round(16 + pct * 0.5)
+            job.progress = p
+            source.progress = p
+            save()
+          }
+        }
+      }
+      let dlError
+      if (!viaService) {
+        try {
+          await ytdlp([
+            '-f', downloadFormat(sourceMaxHeight()),
+            '--merge-output-format', 'mp4',
+            '--no-playlist', '--newline', '--no-warnings',
+            '--socket-timeout', '20', '--retries', '3',
+            '-o', videoPath, url,
+          ], {
+            timeout: 1000 * 60 * 20,
+            onStderr: onProgress,
+            onStdout: onProgress,
+          })
+        } catch (err) {
+          dlError = err
+          if (!canMirror(err)) throw new Error(friendlyError(err))
+          if (hasInvidious()) {
+            try {
+              console.log('[download:invidious] yt-dlp bloqueado; tentando espelho público')
+              updateJob(job, { step: 'Baixando o vídeo' })
+              await downloadViaInvidious(url, videoPath)
+              viaInvidious = true
+            } catch (invErr) {
+              console.error('[download:invidious]', String(invErr?.message || invErr).slice(0, 400))
+              dlError = invErr
+            }
+          }
+          if (!viaInvidious) {
+            if (!(canUseService() || hasCobalt())) throw new Error(friendlyError(dlError))
+            viaService = true
+          }
+        }
+      }
+      if (viaService) {
+        updateJob(job, { step: 'Baixando o vídeo' })
+        try {
+          let downloaded = false
+          if (!downloaded && hasCobalt()) {
+            try {
+              await downloadViaCobalt(url, videoPath)
+              downloaded = true
+            } catch (err) {
+              console.error('[download:cobalt]', String(err?.message || err).slice(0, 300))
+            }
+          }
+          if (!downloaded && canUseService()) {
+            try {
+              await downloadViaService(url, videoPath)
+              downloaded = true
+            } catch (err) {
+              console.error('[download:servico]', String(err?.message || err).slice(0, 300))
+            }
+          }
+          if (!downloaded && hasInvidious()) {
+            try {
+              await downloadViaInvidious(url, videoPath)
+              viaInvidious = true
+              downloaded = true
+            } catch (err) {
+              console.error('[download:invidious]', String(err?.message || err).slice(0, 300))
+            }
+          }
+          if (!downloaded) throw new Error(FRIENDLY[5])
+        } catch (err) {
+          console.error('[download:servico]', String(err?.message || err).slice(0, 400))
+          throw new Error(FRIENDLY[5])
+        }
+      }
+      const downloaded = fs.existsSync(videoPath) && fs.statSync(videoPath).size > 1024
+      if (!downloaded) throw new Error(friendlyError(dlError))
+      source.mediaKey = await storeLocalFile(videoPath, `media/src/${sourceId}.mp4`, 'video/mp4') || source.mediaKey || null
+      source.hasMedia = true
+      if (!source.duration) {
+        try { source.duration = Math.round((await probe(videoPath)).duration) } catch {}
+      }
+      updateJob(job, { progress: 68, step: 'Vídeo pronto. Buscando a transcrição' })
+      source.progress = 68
+      save()
+
+      if (!viaService) {
+        try {
+          await ytdlp([
+            '--write-auto-subs', '--write-subs',
+            '--sub-langs', 'pt.*,pt,pt-BR,en.*,en',
+            '--sub-format', 'vtt/best', '--convert-subs', 'vtt',
+            '--skip-download', '--no-warnings', '--socket-timeout', '20',
+            '-o', path.join(SRC_MEDIA, `${sourceId}.%(ext)s`), url,
+          ], { timeout: 1000 * 60 * 4 })
+        } catch {}
+      }
+      const subFile = await findSubFile(sourceId)
+      if (subFile) cues = parseVtt(fs.readFileSync(subFile, 'utf8'))
+    }
+    updateJob(job, {
+      progress: cues.length ? 76 : 74,
+      step: cues.length ? `Transcrição pronta · ${cues.length} falas` : 'Sem transcrição. Lendo o áudio',
+    })
+
+    updateJob(job, { progress: 80, step: 'Encontrando os melhores momentos' })
+    const settings = state.settings
+    const niche = settings?.niche === 'games' ? 'games' : 'fuga'
+    const cfg = nicheConfig(state)
+    let windows = cues.length > 4 ? detectFromCues(cues, settings.clipMin, settings.clipMax, cfg) : []
+    if (!windows.length) windows = await detectFromAudio(videoPath, job)
+    if (niche === 'games' && windows.length < 3 && source.duration > 120) {
+      updateJob(job, { step: 'Sem transcrição. Marcando blocos para revisão' })
+      windows = spreadWindows(source.duration, settings.clipMin, settings.clipMax)
+    }
+    if (!windows.length) throw new Error('Não encontramos momentos suficientes neste vídeo.')
+
+    updateJob(job, { progress: 88, step: 'Enquadrando os cortes em 9:16' })
+    const created = []
+    for (let i = 0; i < windows.length; i++) {
+      if (!findSource(sourceId)) throw new Error('Fonte removida durante a análise.')
+      const w = windows[i]
+      const type = w.type || classify(`${w.text} ${meta.title || ''} ${meta.description || ''}`, cfg)
+      const clipId = `clip-${sourceId}-${i + 1}`
+      const coverRel = `/covers/${clipId}.jpg`
+      const coverAbs = path.join(COVERS, `${clipId}.jpg`)
+      try {
+        await extractCover(videoPath, w.start + Math.min(1.5, (w.end - w.start) / 3), coverAbs)
+      } catch {}
+      let coverKey = null
+      if (fs.existsSync(coverAbs)) {
+        try { coverKey = await storeLocalFile(coverAbs, `covers/${clipId}.jpg`, 'image/jpeg') } catch (error) {
+          console.error('[blob:cover]', String(error?.message || error).slice(0, 200))
+        }
+      }
+      const clip = {
+        id: clipId,
+        sourceId,
+        niche,
+        hook: pickHook(type, w.cues, `${sourceId}${i}`, cfg),
+        type,
+        start: Math.round(w.start * 10) / 10,
+        end: Math.round(w.end * 10) / 10,
+        score: Math.min(97, Math.max(58, w.score)),
+        stage: settings.autoApprove && w.score >= 80 ? 'aprovado' : 'rascunho',
+        framing: 'cam',
+        framingBias: 0.5,
+        cover: fs.existsSync(coverAbs) ? coverRel : '',
+        coverKey,
+        hashtags: cfg.hashtags[type] || cfg.hashtags.momento,
+        captionLines: w.cues.length
+          ? w.cues.map((c) => ({ t: Math.max(0, c.start - w.start), text: c.text })).slice(0, 60)
+          : [],
+        description: (w.cues.length ? w.cues.map((c) => c.text).join(' ') : (meta.description || '')).slice(0, 220),
+        createdAt: new Date().toISOString(),
+      }
+      state.clips.push(clip)
+      created.push(clip)
+      source.progress = 88 + Math.round(((i + 1) / windows.length) * 8)
+      save()
+    }
+
+    const wideAbs = path.join(COVERS, `src-${sourceId}.jpg`)
+    try {
+      await extractWide(videoPath, Math.min(20, (source.duration || 30) * 0.1), wideAbs)
+      const coverKey = await storeLocalFile(wideAbs, `covers/src-${sourceId}.jpg`, 'image/jpeg')
+      source.thumb = fs.existsSync(wideAbs) ? `/covers/src-${sourceId}.jpg` : ''
+      source.thumbKey = coverKey || null
+    } catch (error) {
+      console.error('[blob:source-cover]', String(error?.message || error).slice(0, 200))
+    }
+
+    source.status = 'pronto'
+    source.progress = 100
+    source.clips = created.length
+    source.analyzedAt = new Date().toISOString()
+    addActivity('agent', `${created.length} cortes encontrados em "${source.title}"`)
+    save()
+    updateJob(job, { progress: 99, step: 'Cortes prontos para revisão' })
+    finishJob(job)
+    return created
+  } catch (err) {
+    console.error('[ingest]', String(err?.message || err).slice(0, 800))
+    source.status = 'erro'
+    source.error = friendlyError(err)
+    source.progress = 0
+    save()
+    finishJob(job, new Error(friendlyError(err)))
+    throw err
+  }
+}
+
+export async function runAnalyze(sourceId, opts = {}) {
+  const source = findSource(sourceId)
+  if (!source) throw new Error('Fonte não encontrada')
+  const localFile = source.uploaded
+    ? await ensureLocalMedia(source.mediaKey, sourceVideo(sourceId), `${sourceId}.mp4`)
+    : null
+  if (!source.url && !localFile) throw new Error('Conecte um link ou envie um vídeo para analisar esta fonte.')
+  const existing = getState().clips.filter((c) => c.sourceId === sourceId)
+  getState().clips = getState().clips.filter((c) => c.sourceId !== sourceId)
+  getState().sources = getState().sources.map((s) => s.id === sourceId ? { ...s, clips: 0 } : s)
+  save()
+  try {
+    if (localFile) {
+      return await runIngest(sourceId, '', {
+        localFile,
+        metaHint: { title: source.title, uploader: source.channel || 'Upload local', description: '' },
+        jobId: opts.jobId,
+      })
+    }
+    return await runIngest(sourceId, source.url, { jobId: opts.jobId })
+  } catch (err) {
+    getState().clips.push(...existing)
+    save()
+    throw err
+  }
+}
+
+export async function runRender(clipId, opts = {}) {
+  const clip = findClip(clipId)
+  if (!clip) throw new Error('Corte não encontrado')
+  const liveLocal = clip.media
+    ? await ensureLocalMedia(clip.mediaKey || mediaPathFromUrl(clip.media), liveMediaFile(clip), `${clip.id}.mp4`)
+    : null
+  const source = findSource(clip.sourceId)
+  const src = liveLocal || await ensureLocalMedia(source?.mediaKey, sourceVideo(clip.sourceId), `${clip.sourceId}.mp4`)
+  if (!src) throw new Error('Esta fonte ainda não tem vídeo. Conecte um link para renderizar de verdade.')
+  const from = liveLocal ? 0 : clip.start
+  const job = createJob('render', { clipId, sourceId: clip.sourceId, ...(opts.jobId ? { id: opts.jobId } : {}) })
+  try {
+    updateJob(job, { progress: 8, step: 'Preparando o corte' })
+    const out = path.join(EXPORTS, `${clip.id}.mp4`)
+    const size = renderSize()
+    updateJob(job, { progress: 22, step: 'Calculando o enquadramento' })
+    const cam = clip.cam || source?.cam || { ...DEFAULT_CAM }
+    const split = clip.framing === 'cam' && cam && cam.w >= 0.05 && cam.h >= 0.05
+    let frac = 0.5
+    if (!split) {
+      if (clip.framing === 'auto') {
+        if (typeof clip.framingBias === 'number' && clip.framingBias !== 0.5) frac = clip.framingBias
+        else frac = await computeFraming(src, from, from + (clip.end - clip.start))
+      } else if (clip.framing === 'esquerda') frac = 0.05
+      else if (clip.framing === 'direita') frac = 0.95
+    }
+    clip.framingBias = frac
+
+    const { width, height } = await probe(src)
+    const { width: outW, height: outH } = size
+    const bandH = Math.round(outH / 2)
+    const blur = Math.max(8, Math.round(26 * outH / 1280))
+    let vf = ''
+    let filterComplex = null
+    if (split) {
+      const cw = Math.max(2, Math.round(cam.w * width))
+      const ch = Math.max(2, Math.round(cam.h * height))
+      const cx = Math.round(Math.min(width - cw, Math.max(0, cam.x * width)))
+      const cy = Math.round(Math.min(height - ch, Math.max(0, cam.y * height)))
+      filterComplex = '[0:v]split=2[camf][gamef];'
+        + `[camf]crop=${cw}:${ch}:${cx}:${cy},scale=${outW}:${bandH}:force_original_aspect_ratio=increase,crop=${outW}:${bandH},setsar=1[ct];`
+        + `[gamef]scale=${outW}:${bandH}:force_original_aspect_ratio=increase,crop=${outW}:${bandH},setsar=1[gt];`
+        + `[ct][gt]vstack=2,setsar=1[vout]`
+    } else if (clip.framing === 'preencher') {
+      filterComplex = '[0:v]split=2[bgs][fgs];'
+        + `[bgs]scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH},gblur=sigma=${blur}[bg];`
+        + `[fgs]scale=${outW}:-2:flags=lanczos[fg];`
+        + `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[vout]`
+    } else if (width / height >= 9 / 16) {
+      const cropW = Math.floor((height * 9) / 16 / 2) * 2
+      const maxX = Math.max(0, width - cropW)
+      const x = Math.round(maxX * frac)
+      vf = `crop=${cropW}:${height}:${x}:0,scale=${outW}:${outH}:flags=lanczos,setsar=1`
+    } else {
+      vf = `scale=-2:${outH}:flags=lanczos,crop=${outW}:${outH}:(iw-${outW})/2:0,setsar=1`
+    }
+    updateJob(job, { progress: 34, step: split ? `Webcam acima · jogo abaixo · ${sizeLabel(size)}` : `Preparando o corte em 9:16 · ${sizeLabel(size)}` })
+    const outArgs = filterComplex
+      ? ['-filter_complex', filterComplex, '-map', '[vout]', '-map', '0:a?']
+      : ['-vf', vf]
+    await run(FFMPEG_BIN, [
+      '-y', '-hide_banner', '-loglevel', 'error',
+      '-ss', String(from), '-t', String(clip.end - clip.start), '-i', src,
+      ...outArgs,
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '160k', '-ar', '48000',
+      '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
+      '-movflags', '+faststart', '-shortest',
+      path.basename(out),
+    ], { cwd: EXPORTS, timeout: 1000 * 60 * (size.height >= 2000 ? 40 : size.height >= 1000 ? 25 : 15) })
+    clip.renderedKey = await storeLocalFile(out, `media/exports/${clip.id}.mp4`, 'video/mp4')
+    updateJob(job, { progress: 88, step: 'Gerando a capa do corte' })
+    const renderCover = path.join(COVERS, `${clip.id}-render.jpg`)
+    try {
+      await run(FFMPEG_BIN, [
+        '-y', '-hide_banner', '-loglevel', 'error',
+        '-ss', '1.2', '-i', out, '-frames:v', '1',
+        '-vf', 'scale=432:-2', '-q:v', '3',
+        renderCover,
+      ], { timeout: 1000 * 60 })
+      clip.cover = `/covers/${clip.id}-render.jpg`
+      clip.coverKey = await storeLocalFile(renderCover, `covers/${clip.id}-render.jpg`, 'image/jpeg')
+    } catch {}
+    clip.renderedUrl = `/media/exports/${clip.id}.mp4`
+    clip.stage = 'renderizado'
+    clip.renderedAt = new Date().toISOString()
+    clip.framingBias = frac
+    addActivity('render', `Corte "${clip.hook}" renderizado em 9:16 · ${sizeLabel(size)}`)
+    save()
+    updateJob(job, { progress: 99, step: 'Corte finalizado' })
+    finishJob(job)
+    return clip
+  } catch (err) {
+    finishJob(job, new Error('Não foi possível renderizar este corte agora.'))
+    throw new Error('Não foi possível renderizar este corte agora.')
+  }
+}
+
+/**
+ * Recorte manual dentro de um corte já existente. Para vídeos enviados apenas
+ * ajustamos o intervalo absoluto na fonte; para clipes de live o arquivo gravado
+ * já é o corte, então ele é fisicamente recortado com ffmpeg.
+ * `start` e `end` são segundos relativos ao corte atual.
+ */
+export async function runTrim(clipId, startInput, endInput, opts = {}) {
+  const clip = findClip(clipId)
+  if (!clip) throw new Error('Corte não encontrado')
+  const liveSrc = clip.media
+    ? await ensureLocalMedia(clip.mediaKey || mediaPathFromUrl(clip.media), liveMediaFile(clip), `${clip.id}.mp4`)
+    : null
+  const source = findSource(clip.sourceId)
+  const src = liveSrc || await ensureLocalMedia(source?.mediaKey, sourceVideo(clip.sourceId), `${clip.sourceId}.mp4`)
+  if (!src) throw new Error('O vídeo deste corte não está mais disponível para recorte.')
+
+  const total = Math.max(1, Number(clip.end) - Number(clip.start) || 0)
+  const wantedStart = Number(startInput)
+  const wantedEnd = Number(endInput)
+  const start = Math.max(0, Math.min(total - 1, Number.isFinite(wantedStart) ? wantedStart : 0))
+  const end = Math.min(total, Math.max(start + 1, Number.isFinite(wantedEnd) ? wantedEnd : total))
+  const length = Math.round((end - start) * 10) / 10
+
+  const job = createJob('render', { clipId, sourceId: clip.sourceId, ...(opts.jobId ? { id: opts.jobId } : {}) })
+  try {
+    updateJob(job, { progress: 12, step: 'Ajustando o trecho' })
+    if (liveSrc) {
+      const tmp = path.join(LIVE_DIR, `${clip.id}-cut-${Date.now()}.mp4`)
+      await run(FFMPEG_BIN, [
+        '-y', '-hide_banner', '-loglevel', 'error',
+        '-ss', String(start), '-t', String(length), '-i', liveSrc,
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
+        '-movflags', '+faststart', '-avoid_negative_ts', 'make_zero',
+        tmp,
+      ], { timeout: 1000 * 60 * 20 })
+      let measured = length
+      try { measured = (await probe(tmp)).duration || length } catch {}
+      fs.copyFileSync(tmp, liveSrc)
+      fs.rmSync(tmp, { force: true })
+      clip.mediaKey = await storeLocalFile(liveSrc, clip.mediaKey || mediaPathFromUrl(clip.media), 'video/mp4') || clip.mediaKey || null
+      clip.start = 0
+      clip.end = Math.round(measured * 10) / 10
+      try {
+        const coverFile = path.join(COVERS, `${clip.id}.jpg`)
+        await extractCover(liveSrc, Math.min(2, Math.max(0.3, measured / 3)), coverFile)
+        clip.cover = `/covers/${clip.id}.jpg`
+        clip.coverKey = await storeLocalFile(coverFile, `covers/${clip.id}.jpg`, 'image/jpeg')
+      } catch {}
+    } else {
+      const nextStart = Math.round((Number(clip.start) + start) * 10) / 10
+      clip.end = Math.round((Number(clip.start) + end) * 10) / 10
+      clip.start = nextStart
+    }
+    clip.cut = { start: Math.round(start * 10) / 10, end: Math.round(end * 10) / 10 }
+    clip.renderedUrl = undefined
+    clip.renderedAt = undefined
+    if (clip.stage === 'renderizado') clip.stage = 'rascunho'
+    for (const file of [
+      path.join(EXPORTS, `${clip.id}.mp4`),
+      path.join(COVERS, `${clip.id}-render.jpg`),
+    ]) { try { fs.unlinkSync(file) } catch {} }
+    addActivity('agent', `Corte "${clip.hook}" reduzido para ${Math.round(length)}s`)
+    save()
+    updateJob(job, { progress: 45, step: 'Recorte aplicado' })
+    finishJob(job)
+    return clip
+  } catch (err) {
+    finishJob(job, new Error('Não foi possível recortar este corte agora.'))
+    throw new Error('Não foi possível recortar este corte agora.')
+  }
+}
+
+export function uniqueClips(list) {
+  const picked = []
+  for (const clip of list) {
+    const duplicate = picked.some((kept) => {
+      const overlap = Math.min(kept.end, clip.end) - Math.max(kept.start, clip.start)
+      const shorter = Math.min(kept.end - kept.start, clip.end - clip.start)
+      const sameScene = kept.sourceId === clip.sourceId
+        || String(kept.hook || '').trim().toLowerCase() === String(clip.hook || '').trim().toLowerCase()
+      return sameScene && shorter > 0 && overlap / shorter >= 0.7
+    })
+    if (!duplicate) picked.push(clip)
+  }
+  return picked
+}
+
+export async function runCompilation(compilationId, opts = {}) {
+  const state = getState()
+  const comp = (state.compilations || []).find((c) => c.id === compilationId)
+  if (!comp) throw new Error('Compilação não encontrada')
+  const clips = uniqueClips(comp.clipIds.map((id) => findClip(id)).filter(Boolean))
+  if (!clips.length) throw new Error('Nenhum corte válido nesta compilação')
+  if (comp.clipIds.length !== clips.length) comp.clipIds = clips.map((c) => c.id)
+  const job = createJob('compile', { compilationId, ...(opts.jobId ? { id: opts.jobId } : {}) })
+  const work = path.join(EXPORTS, `comp-${compilationId}`)
+  try {
+    comp.status = 'processando'
+    comp.progress = 2
+    comp.error = null
+    save()
+    updateJob(job, { progress: 3, step: 'Preparando a compilação' })
+    fs.rmSync(work, { recursive: true, force: true })
+    fs.mkdirSync(work, { recursive: true })
+
+    updateJob(job, { progress: 5, step: 'Preparando os blocos' })
+    const parts = []
+    let total = 0
+
+    for (let i = 0; i < clips.length; i++) {
+      const clip = clips[i]
+      const liveFile = clip.media
+        ? await ensureLocalMedia(clip.mediaKey || mediaPathFromUrl(clip.media), liveMediaFile(clip), `${clip.id}.mp4`)
+        : null
+      const source = findSource(clip.sourceId)
+      const src = liveFile || await ensureLocalMedia(source?.mediaKey, sourceVideo(clip.sourceId), `${clip.sourceId}.mp4`)
+      if (!src) continue
+      const from = liveFile ? 0 : clip.start
+      const dur = Math.max(2, Math.round((clip.end - clip.start) * 10) / 10)
+      const seg = path.join(work, `${String(i + 1).padStart(2, '0')}-seg.mp4`)
+      const step = Math.min(84, 6 + Math.round(((i + 1) / clips.length) * 76))
+      updateJob(job, { progress: step, step: `Montando bloco ${i + 1} de ${clips.length}` })
+      comp.progress = step
+      save()
+      const vf = 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=30,setsar=1'
+      await run(FFMPEG_BIN, [
+        '-y', '-hide_banner', '-loglevel', 'error',
+        '-ss', String(from), '-t', String(dur), '-i', src,
+        '-vf', vf,
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
+        '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',
+        path.basename(seg),
+      ], { cwd: work, timeout: 1000 * 60 * 10 })
+      parts.push(seg)
+      total += dur
+    }
+
+    if (parts.length < 2) throw new Error('Nenhum corte válido nesta compilação')
+    updateJob(job, { progress: 90, step: 'Unindo os blocos do vídeo' })
+    comp.progress = 92
+    save()
+
+    const TD = 0.45
+    const durs = []
+    for (const p of parts) {
+      try {
+        durs.push(Math.max(TD + 0.2, (await probe(p)).duration || 0))
+      } catch {
+        durs.push(3.5)
+      }
+    }
+    const inputs = parts.flatMap((p) => ['-i', p])
+    const graph = []
+    let vIn = '[0:v]'
+    let aIn = '[0:a]'
+    let offset = 0
+    for (let i = 1; i < parts.length; i++) {
+      offset += durs[i - 1] - TD
+      const vOut = `[v${i}]`
+      const aOut = `[a${i}]`
+      graph.push(`${vIn}[${i}:v]xfade=transition=hblur:duration=${TD}:offset=${offset.toFixed(3)}${vOut}`)
+      graph.push(`${aIn}[${i}:a]acrossfade=d=${TD}:c1=tri:c2=tri${aOut}`)
+      vIn = vOut
+      aIn = aOut
+    }
+    const out = path.join(EXPORTS, `${compilationId}.mp4`)
+    await run(FFMPEG_BIN, [
+      '-y', '-hide_banner', '-loglevel', 'error',
+      ...inputs,
+      '-filter_complex', graph.join(';'),
+      '-map', vIn, '-map', aIn,
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
+      '-movflags', '+faststart',
+      out,
+    ], { cwd: work, timeout: 1000 * 60 * 20 })
+    if (!fs.existsSync(out)) throw new Error('Arquivo final não gerado')
+    comp.mediaKey = await storeLocalFile(out, `media/exports/${compilationId}.mp4`, 'video/mp4')
+
+    let finalDur = total
+    try {
+      finalDur = (await probe(out)).duration || total
+    } catch {}
+
+    const coverFile = path.join(COVERS, `${compilationId}.jpg`)
+    try {
+      await extractCover(out, Math.min(5, Math.max(1, total / 3)), coverFile, 640)
+      comp.cover = `/covers/${compilationId}.jpg`
+      comp.coverKey = await storeLocalFile(coverFile, `covers/${compilationId}.jpg`, 'image/jpeg')
+    } catch {}
+    comp.url = `/media/exports/${compilationId}.mp4`
+    comp.duration = Math.round(finalDur)
+    comp.status = 'pronto'
+    comp.progress = 100
+    comp.finishedAt = new Date().toISOString()
+    addActivity('render', `Vídeo longo "${comp.title}" pronto com ${clips.length} cortes`)
+    save()
+    updateJob(job, { progress: 99, step: 'Vídeo longo finalizado' })
+    finishJob(job)
+    fs.rmSync(work, { recursive: true, force: true })
+    return comp
+  } catch (err) {
+    comp.status = 'erro'
+    comp.error = 'Não foi possível montar este vídeo longo agora.'
+    comp.progress = 0
+    save()
+    finishJob(job, new Error('Não foi possível montar este vídeo longo agora.'))
+    fs.rmSync(work, { recursive: true, force: true })
+    throw new Error('Não foi possível montar este vídeo longo agora.')
+  }
+}
+
+const LIVE_DIR = path.join(MEDIA, 'live')
+fs.mkdirSync(LIVE_DIR, { recursive: true })
+
+const LIVE_WINDOW = Math.max(30, Number(process.env.FUGA_LIVE_WINDOW) || 60)
+const LIVE_MAX_CLIPS = 60
+const liveStops = new Map()
+
+const LIVE_TEXT = {
+  offline: 'Essa fonte não está ao vivo agora. Cole o link de uma transmissão em andamento…',
+  gone: 'A transmissão saiu do ar. O monitoramento foi encerrado…',
+  noStream: 'Não foi possível acessar a transmissão. Verifique se é pública e sem restrição de idade/região…',
+  recordFail: 'Falha ao acompanhar a transmissão. Ela pode ter proteção ou instabilidade…',
+  failed: 'Não foi possível acompanhar esta transmissão agora. Tente de novo…',
+}
+
+export function liveMediaFile(clip) {
+  if (!clip?.media) return null
+  const abs = path.join(MEDIA, String(clip.media).replace(/^\/media\//, ''))
+  return fs.existsSync(abs) ? abs : null
+}
+
+export function isLiveRunning(sourceId) {
+  const source = findSource(sourceId)
+  return Boolean(source?.mode === 'live' && !source.liveEndedAt && ['processando', 'ao-vivo'].includes(source.status))
+}
+
+export function stopLive(sourceId) {
+  const source = findSource(sourceId)
+  if (!source || !isLiveRunning(sourceId)) return false
+  source.liveStopRequested = true
+  const stop = liveStops.get(sourceId)
+  if (stop) {
+    stop.flag = true
+    if (stop.child) { try { stop.child.kill() } catch {} }
+  }
+  save()
+  return true
+}
+
+function liveStamp(seconds) {
+  const s = Math.max(0, Math.round(Number(seconds) || 0))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  const mm = String(m).padStart(2, '0')
+  const ss = String(sec).padStart(2, '0')
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`
+}
+
+async function mediaDuration(file) {
+  try {
+    const { stdout } = await run(FFPROBE_BIN, [
+      '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', file,
+    ], { timeout: 1000 * 60 })
+    const d = Number(JSON.parse(stdout).format?.duration) || 0
+    if (d > 0) return d
+  } catch {}
+  try { return (await probe(file)).duration || 0 } catch { return 0 }
+}
+
+function liveFromMirror(inv) {
+  return {
+    title: inv.title || 'Transmissão ao vivo',
+    channel: inv.channel || inv.uploader || '',
+    thumb: inv.thumbnail || null,
+    liveId: inv.id || '',
+    liveChannel: inv.channel || inv.uploader || '',
+    sourceUrl: inv.id ? watchUrl(inv.id) : '',
+  }
+}
+
+async function liveFromMirrors(id) {
+  if (!hasInvidious() || !id) return null
+  try {
+    const inv = await invidiousInfo(watchUrl(id))
+    return inv.is_live ? liveFromMirror(inv) : null
+  } catch (err) {
+    console.error('[live:invidious]', String(err?.message || err).slice(0, 300))
+    return null
+  }
+}
+
+async function probeLive(url) {
+  if (process.env.FUGA_LIVE_STREAM) {
+    return { title: 'Transmissão monitorada', channel: '' }
+  }
+  try {
+    const { stdout } = await ytdlp([
+      '-J', '--no-warnings', '--no-playlist', '--socket-timeout', '20', url,
+    ], { timeout: 1000 * 120 })
+    const info = JSON.parse(stdout)
+    const id = info.id ? String(info.id) : ''
+    if (info.is_live) {
+      return {
+        title: String(info.title || 'Transmissão ao vivo').slice(0, 140),
+        channel: String(info.uploader || info.channel || '').slice(0, 90),
+        thumb: bestThumb(info.thumbnails),
+        liveId: id,
+        liveChannel: String(info.uploader_id || '').slice(0, 90),
+        sourceUrl: id ? watchUrl(id) : '',
+      }
+    }
+    // Em URL de canal, o yt-dlp pode devolver só o id do vídeo ao vivo.
+    const viaMirror = await liveFromMirrors(id)
+    if (viaMirror) return viaMirror
+    const api = id ? await ytApiMeta(id) : null
+    if (api?.is_live) return { ...api, sourceUrl: watchUrl(id) }
+    if (isChannelUrl(url)) {
+      const live = await youtubeLiveMeta(url)
+      if (live) return live
+    }
+    if (!hasInvidious()) return null
+  } catch (err) {
+    if (!hasInvidious()) {
+      if (isChannelUrl(url)) {
+        const live = await youtubeLiveMeta(url)
+        if (live) return live
+      }
+      throw err
+    }
+    console.error('[live:yt-dlp]', String(err?.message || err).slice(0, 300))
+  }
+  const inv = await invidiousInfo(url)
+  return inv.is_live ? liveFromMirror(inv) : null
+}
+
+async function liveStreamParts(url) {
+  if (process.env.FUGA_LIVE_STREAM) return [process.env.FUGA_LIVE_STREAM]
+  try {
+    const { stdout } = await ytdlp([
+      '-g', '-f', downloadFormat(sourceMaxHeight()).replace(/\[ext=mp4\]/g, ''),
+      '--no-warnings', '--no-playlist', '--socket-timeout', '20', url,
+    ], { timeout: 1000 * 90 })
+    const parts = stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+    if (parts.length) return parts
+  } catch (err) {
+    if (!hasInvidious() && !hasCobalt()) throw err
+    console.error('[live:yt-dlp-stream]', String(err?.message || err).slice(0, 300))
+  }
+  if (hasCobalt()) {
+    try {
+      const resolved = await cobaltResolve(url, { quality: '720' })
+      if (resolved.kind === 'hls' || resolved.kind === 'single') return [resolved.url]
+      console.error('[live:cobalt] formato não reproduzível em live:', resolved.kind)
+    } catch (err) {
+      console.error('[live:cobalt]', String(err?.message || err).slice(0, 300))
+    }
+  }
+  if (!hasInvidious()) return []
+  let mirrorUrl = url
+  if (isChannelUrl(url)) {
+    const live = await youtubeLiveMeta(url)
+    if (live?.sourceUrl) mirrorUrl = live.sourceUrl
+  }
+  const inv = await invidiousInfo(mirrorUrl)
+  if (inv.hls) {
+    console.log('[live:invidious] usando HLS do espelho público')
+    return [inv.hls]
+  }
+  return [inv.video, inv.audio].filter(Boolean)
+}
+
+export async function getLiveHlsUrl(url) {
+  const parts = await liveStreamParts(url)
+  const hls = parts.find((p) => p.includes('.m3u8') || p.includes('manifest') || p.includes('googlevideo.com'))
+  return hls || parts[0] || null
+}
+
+function recordWindow(parts, file, seconds, stop) {
+  return new Promise((resolve) => {
+    const args = ['-hide_banner', '-loglevel', 'error', '-y']
+    // -t antes de -i limita a leitura do stream infinito do relay; como opção
+    // de saída, o ffmpeg pode nunca encerrar quando a entrada não tem fim.
+    for (const part of parts) args.push('-t', String(seconds), '-i', part)
+    if (parts.length > 1) args.push('-map', '0:v:0', '-map', '1:a:0?')
+    args.push('-c', 'copy', '-f', 'mpegts', file)
+    let child
+    try {
+      child = spawn(FFMPEG_BIN, args, { windowsHide: true })
+    } catch {
+      resolve({ ok: false })
+      return
+    }
+    stop.child = child
+    let settled = false
+    let timer = null
+    const done = () => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      if (stop.child === child) stop.child = null
+      let ok = false
+      try { ok = fs.existsSync(file) && fs.statSync(file).size > 1024 * 20 } catch {}
+      resolve({ ok })
+    }
+    timer = setTimeout(() => {
+      console.error('[live:record] timeout; encerrando captura')
+      try { child.kill('SIGKILL') } catch {}
+      setTimeout(() => {
+        console.error('[live:record] liberando janela após kill')
+        done()
+      }, 3000).unref?.()
+    }, (seconds + 45) * 1000)
+    child.on('error', done)
+    child.on('close', done)
+  })
+}
+
+async function loudSpan(file, min, max) {
+  const duration = await mediaDuration(file)
+  if (!duration || duration < 6) return null
+  let starts = []
+  let ends = []
+  try {
+    const { stderr } = await run(FFMPEG_BIN, [
+      '-hide_banner', '-i', file, '-af', 'silencedetect=noise=-30dB:d=1.1', '-f', 'null', '-',
+    ], { timeout: 1000 * 180 })
+    starts = [...stderr.matchAll(/silence_start: ([\d.]+)/g)].map((m) => Number(m[1]))
+    ends = [...stderr.matchAll(/silence_end: ([\d.]+)/g)].map((m) => Number(m[1]))
+  } catch {}
+  const silences = starts.map((s, i) => [s, ends[i] ?? duration])
+  const active = []
+  let cursor = 0
+  for (const [s, e] of silences) {
+    if (s - cursor > 3) active.push([cursor, s])
+    cursor = Math.max(cursor, e)
+  }
+  if (duration - cursor > 3) active.push([cursor, duration])
+  active.sort((a, b) => (b[1] - b[0]) - (a[1] - a[0]))
+  const [s, e] = active[0] || [0, duration]
+  const span = e - s
+  if (span < 7) return null
+  const minLen = Math.min(min, 12)
+  const len = Math.min(max, Math.max(minLen, span))
+  const start = Math.max(0, Math.min(duration - len, s + Math.min(2.5, Math.max(0, (span - len) / 2))))
+  const end = Math.min(duration, start + len)
+  if (end - start < 6) return null
+  return { start, end }
+}
+
+function liveClipType(cfg, index) {
+  const types = Object.keys(cfg.typeWords).filter((t) => cfg.hooks[t])
+  if (!types.includes('momento')) types.push('momento')
+  return types[index % types.length]
+}
+
+async function makeLiveClip(source, windowFile, span, session, index) {
+  const state = getState()
+  const settings = state.settings || {}
+  const cfg = nicheConfig(state)
+  const clipId = `${source.id}-${index}`
+  const outFile = path.join(LIVE_DIR, `${clipId}.mp4`)
+  // Stream copy é quase instantâneo. Re-encode com libx264 estoura o timeout
+  // no Render free (pouca CPU), então só é usado como fallback.
+  const cutArgs = [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    '-ss', span.start.toFixed(2), '-i', windowFile, '-t', (span.end - span.start).toFixed(2),
+  ]
+  try {
+    await run(FFMPEG_BIN, [...cutArgs, '-c', 'copy', '-bsf:a', 'aac_adtstoasc', '-movflags', '+faststart', outFile], { timeout: 1000 * 60 })
+  } catch {}
+  let size = 0
+  try { size = fs.statSync(outFile).size } catch {}
+  if (size < 1024 * 20) {
+    try {
+      await run(FFMPEG_BIN, [
+        ...cutArgs,
+        '-vf', "scale='min(1280,iw)':-2,setsar=1,fps=30",
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '96k', '-ar', '48000', '-movflags', '+faststart',
+        outFile,
+      ], { timeout: 1000 * 150 })
+    } catch {}
+    try { size = fs.statSync(outFile).size } catch {}
+  }
+  if (size < 1024 * 20) throw new Error('live clip vazio')
+  const mediaKey = await storeLocalFile(outFile, `media/live/${clipId}.mp4`, 'video/mp4')
+  const coverAbs = path.join(COVERS, `${clipId}.jpg`)
+  try {
+    await extractCover(outFile, Math.min(1.5, (span.end - span.start) / 3), coverAbs)
+  } catch {}
+  let coverKey = null
+  if (fs.existsSync(coverAbs)) {
+    try { coverKey = await storeLocalFile(coverAbs, `covers/${clipId}.jpg`, 'image/jpeg') } catch {}
+  }
+  const at = Math.round((session + span.start) * 10) / 10
+  const type = liveClipType(cfg, index)
+  const clip = {
+    id: clipId,
+    sourceId: source.id,
+    niche: settings.niche === 'games' ? 'games' : 'fuga',
+    hook: pickHook(type, [], `${source.id}-${index}`, cfg),
+    type,
+    start: at,
+    end: Math.round((session + span.end) * 10) / 10,
+    score: Math.min(92, 72 + (index % 5) * 4),
+    stage: 'rascunho',
+    framing: 'cam',
+    framingBias: 0.5,
+    cover: fs.existsSync(coverAbs) ? `/covers/${clipId}.jpg` : '',
+    hashtags: cfg.hashtags[type] || cfg.hashtags.momento || [],
+    captionLines: [],
+    description: `Cortado ao vivo · ${liveStamp(session + span.start)} da transmissão`,
+    media: `/media/live/${clipId}.mp4`,
+    mediaKey,
+    coverKey,
+    live: { at, stamp: liveStamp(session + span.start) },
+    createdAt: new Date().toISOString(),
+  }
+  state.clips.push(clip)
+  save()
+  return clip
+}
+
+function finishLiveStep(source, job, error = null) {
+  source.status = error ? 'erro' : 'pronto'
+  source.progress = error ? 0 : 100
+  source.error = error
+  source.liveEndedAt = new Date().toISOString()
+  source.liveStopRequested = true
+  save()
+  if (error) finishJob(job, new Error(error))
+  else {
+    finishJob(job)
+    addActivity('agent', `Monitoramento encerrado · ${Number(source.liveMade) || 0} cortes de "${source.title}"`)
+  }
+  return { continue: false, status: source.status }
+}
+
+export async function captureLiveWindow(sourceId) {
+  let source = findSource(sourceId)
+  if (!source) return { continue: false, status: 'removed' }
+
+  let job = source.liveJobId ? getJob(source.liveJobId) : null
+  if (!job) {
+    job = createJob('live', { sourceId })
+    source.liveJobId = job.id
+    save()
+  }
+
+  if (source.liveStopRequested) return finishLiveStep(source, job)
+  if (!source.url) return finishLiveStep(source, job, LIVE_TEXT.failed)
+
+  try {
+    if (!source.liveReady) {
+      const url = source.url
+      updateJob(job, { progress: 6, step: 'Procurando a transmissão' })
+      let meta = null
+      let apiAnswered = false
+      if (YT_API_KEY && /(?:youtube\.com|youtu\.be)/i.test(url)) {
+        const liveId = source.liveId || videoIdFromUrl(url)
+        const apiMeta = liveId ? await ytApiMeta(liveId) : null
+        if (apiMeta) {
+          apiAnswered = true
+          meta = apiMeta.is_live ? { ...apiMeta, sourceUrl: watchUrl(liveId) } : null
+          if (!meta && isChannelUrl(url)) meta = await youtubeLiveMeta(url)
+        } else if (isChannelUrl(url)) {
+          meta = await youtubeLiveMeta(url)
+          apiAnswered = Boolean(meta)
+        }
+      }
+      if (!meta && !apiAnswered) meta = await probeLive(url)
+      source = findSource(sourceId)
+      if (!source) return { continue: false, status: 'removed' }
+      if (!meta) return finishLiveStep(source, job, LIVE_TEXT.offline)
+
+      const priorDuration = Math.max(0, Number(source.duration) || 0)
+      const priorClips = getState().clips.filter((clip) => clip.sourceId === sourceId).length
+      source.url = meta.sourceUrl || (meta.liveId ? watchUrl(meta.liveId) : url)
+      source.title = meta.title || source.title
+      source.channel = meta.channel || source.channel
+      if (meta.thumb) source.thumb = meta.thumb
+      if (meta.liveId) source.liveId = meta.liveId
+      if (meta.liveChannel) source.liveChannel = meta.liveChannel
+      source.status = 'ao-vivo'
+      source.progress = 100
+      source.error = null
+      source.duration = Math.round(priorDuration)
+      source.clips = priorClips
+      source.liveStartedAt ||= new Date().toISOString()
+      source.liveCheckedAt = source.liveStartedAt
+      source.liveSession = priorDuration
+      source.livePriorClips = priorClips
+      source.liveMade = 0
+      source.liveMisses = 0
+      source.liveLastEnd = priorDuration > 0 ? priorDuration : -999
+      source.liveReady = true
+      save()
+      updateJob(job, { progress: 20, step: 'Ao vivo · acompanhando a transmissão' })
+      addActivity('agent', `Monitorando a live "${source.title}"`)
+      return { continue: true }
+    }
+
+    if ((Number(source.liveMade) || 0) >= LIVE_MAX_CLIPS) return finishLiveStep(source, job)
+    const parts = await liveStreamParts(source.url).catch((error) => {
+      console.error('[live] liveStreamParts error:', error?.message || error)
+      return []
+    })
+    if (!parts.length) {
+      source.liveMisses = (Number(source.liveMisses) || 0) + 1
+      if (source.liveMisses >= 3) return finishLiveStep(source, job, LIVE_TEXT.noStream)
+      updateJob(job, { step: 'Reconectando na transmissão' })
+      save()
+      return { continue: true }
+    }
+
+    const session = Math.max(0, Number(source.liveSession) || 0)
+    const made = Number(source.liveMade) || 0
+    const win = path.join(LIVE_DIR, `win-${sourceId}-${Date.now()}.ts`)
+    const stop = { flag: false, child: null }
+    liveStops.set(sourceId, stop)
+    updateJob(job, { progress: 50, step: `Ao vivo · ${liveStamp(session)} acompanhados · ${made} cortes` })
+    let rec
+    try {
+      rec = await recordWindow(parts, win, LIVE_WINDOW, stop)
+    } finally {
+      if (stop.child) { try { stop.child.kill() } catch {} }
+      liveStops.delete(sourceId)
+    }
+    if (source.liveStopRequested || stop.flag) {
+      try { fs.rmSync(win, { force: true }) } catch {}
+      return finishLiveStep(source, job)
+    }
+
+    const duration = rec?.ok ? await mediaDuration(win) : 0
+    if (!rec?.ok || !duration || duration < 6) {
+      try { fs.rmSync(win, { force: true }) } catch {}
+      source.liveMisses = (Number(source.liveMisses) || 0) + 1
+      if (source.liveMisses >= 3) return finishLiveStep(source, job, LIVE_TEXT.recordFail)
+      save()
+      return { continue: true }
+    }
+
+    source.liveMisses = 0
+    const settings = getState().settings || {}
+    const min = Number(settings.clipMin) || 18
+    const max = Number(settings.clipMax) || 38
+    const span = await loudSpan(win, min, max)
+    const lastEnd = Number(source.liveLastEnd) || -999
+    if (span && session + span.start >= lastEnd + 6) {
+      try {
+        const clip = await makeLiveClip(source, win, span, session, (Number(source.livePriorClips) || 0) + made + 1)
+        source.liveMade = made + 1
+        source.liveLastEnd = clip.end
+        source.clips = getState().clips.filter((item) => item.sourceId === sourceId).length
+        source.lastClipAt = new Date().toISOString()
+        addActivity('agent', `Novo corte da live: "${clip.hook}"`)
+        updateJob(job, { step: `Ao vivo · ${liveStamp(session + duration)} · ${source.liveMade} cortes no acervo` })
+      } catch (error) {
+        console.error('[live] makeLiveClip error:', error?.message || error)
+      }
+    }
+
+    source = findSource(sourceId)
+    if (!source) {
+      try { fs.rmSync(win, { force: true }) } catch {}
+      return { continue: false, status: 'removed' }
+    }
+    source.liveSession = session + duration
+    source.duration = Math.round(source.liveSession)
+    source.progress = 100
+    source.liveCheckedAt = new Date().toISOString()
+    if (!source.thumb) {
+      const thumbAbs = path.join(COVERS, `src-${sourceId}.jpg`)
+      try {
+        await extractWide(win, Math.min(5, duration / 3), thumbAbs)
+        source.thumb = `/covers/src-${sourceId}.jpg`
+        source.thumbKey = await storeLocalFile(thumbAbs, `covers/src-${sourceId}.jpg`, 'image/jpeg')
+      } catch {}
+    }
+    save()
+    try { fs.rmSync(win, { force: true }) } catch {}
+    if ((Number(source.liveMade) || 0) >= LIVE_MAX_CLIPS) return finishLiveStep(source, job)
+    return { continue: true }
+  } catch (error) {
+    source = findSource(sourceId)
+    if (!source) return { continue: false, status: 'removed' }
+    const raw = String(error?.message || error)
+    console.error('[live]', raw.slice(0, 800))
+    let message = LIVE_TEXT.failed
+    if ([LIVE_TEXT.offline, LIVE_TEXT.gone, LIVE_TEXT.noStream, LIVE_TEXT.recordFail, LIVE_TEXT.failed].includes(raw)) message = raw
+    else if (isBlocked(error)) message = FRIENDLY[0]
+    else if (/will begin|premieres in/i.test(raw)) message = FRIENDLY[6]
+    else if (/not currently live|channel is offline|is offline/i.test(raw)) message = LIVE_TEXT.offline
+    return finishLiveStep(source, job, message)
+  }
+}
