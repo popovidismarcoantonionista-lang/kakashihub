@@ -1,4 +1,4 @@
-import { start } from 'workflow/api'
+import { runBackground } from '../server/background.mjs'
 import { runAnalyze, runCompilation, runIngest, runRender, runTrim, captureLiveWindow } from '../server/pipeline.mjs'
 import { finishJob, getJob, getState, save, withStore } from '../server/store.mjs'
 import { publishScheduledUpload } from '../server/publishing.mjs'
@@ -62,16 +62,24 @@ export async function captureLiveWindowStep(sourceId) {
 export async function startLiveWorkflowStep(sourceId) {
   'use step'
 
-  const run = await start(liveMonitorWorkflow, [sourceId])
+  // Persiste a liberação antes de iniciar o loop para ele não herdar uma
+  // solicitação de parada de uma execução anterior.
   await withStore(() => {
     const source = getState().sources.find((item) => item.id === sourceId)
     if (source) {
-      source.liveWorkflowId = run.runId
       source.liveStopRequested = false
       save()
     }
   })
-  return run.runId
+  const runId = runBackground('live', liveMonitorWorkflow, [sourceId])
+  await withStore(() => {
+    const source = getState().sources.find((item) => item.id === sourceId)
+    if (source) {
+      source.liveWorkflowId = runId
+      save()
+    }
+  })
+  return runId
 }
 
 export async function getUploadScheduleStep(uploadId) {

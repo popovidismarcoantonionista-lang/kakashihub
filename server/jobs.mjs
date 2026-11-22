@@ -1,5 +1,9 @@
-import { start } from 'workflow/api'
-import { processJobWorkflow, liveMonitorWorkflow, scheduledUploadWorkflow } from '../workflows/jobs.mjs'
+import {
+  liveMonitorWorkflow,
+  processJobWorkflow,
+  scheduledUploadWorkflow,
+} from '../workflows/jobs.mjs'
+import { runBackground } from './background.mjs'
 import { createJob, flushStore, getState, save, saveJobs } from './store.mjs'
 
 const JOB_TYPES = {
@@ -13,31 +17,35 @@ const JOB_TYPES = {
 export async function startProcessJob(kind, payload, metadata = {}) {
   const job = createJob(JOB_TYPES[kind] || kind, metadata)
   await flushStore()
-  const run = await start(processJobWorkflow, [kind, { ...payload, jobId: job.id }])
-  job.workflowRunId = run.runId
+  const runId = runBackground('job', processJobWorkflow, [kind, { ...payload, jobId: job.id }])
+  job.workflowRunId = runId
   saveJobs()
-  return { job, runId: run.runId }
+  return { job, runId }
 }
 
 export async function startLiveWorkflow(sourceId) {
-  await flushStore()
-  const run = await start(liveMonitorWorkflow, [sourceId])
   const source = getState().sources.find((item) => item.id === sourceId)
   if (source) {
-    source.liveWorkflowId = run.runId
     source.liveStopRequested = false
     save()
   }
-  return run.runId
+  await flushStore()
+  const runId = runBackground('live', liveMonitorWorkflow, [sourceId])
+  const target = getState().sources.find((item) => item.id === sourceId)
+  if (target) {
+    target.liveWorkflowId = runId
+    save()
+  }
+  return runId
 }
 
 export async function startUploadWorkflow(uploadId) {
   await flushStore()
-  const run = await start(scheduledUploadWorkflow, [uploadId])
+  const runId = runBackground('upload', scheduledUploadWorkflow, [uploadId])
   const upload = getState().uploads.find((item) => item.id === uploadId)
   if (upload) {
-    upload.workflowRunId = run.runId
+    upload.workflowRunId = runId
     save()
   }
-  return run.runId
+  return runId
 }

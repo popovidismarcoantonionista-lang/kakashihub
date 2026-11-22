@@ -1,4 +1,3 @@
-import { sleep } from 'workflow'
 import {
   captureLiveWindowStep,
   failJobStep,
@@ -9,9 +8,12 @@ import {
   startLiveWorkflowStep,
 } from './steps.mjs'
 
-export async function processJobWorkflow(kind, payload) {
-  'use workflow'
+// `use workflow` / `sleep` do SDK exigem um build Nitro/Next. Aqui as funções
+// são orquestrações comuns executadas por server/background.mjs no mesmo
+// processo do Express (modelo de deploy do Render).
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+export async function processJobWorkflow(kind, payload) {
   try {
     const result = await processJobStep(kind, payload)
     if (kind === 'analyze' && await sourceBecameLiveStep(payload.sourceId)) {
@@ -25,22 +27,20 @@ export async function processJobWorkflow(kind, payload) {
 }
 
 export async function liveMonitorWorkflow(sourceId) {
-  'use workflow'
-
-  while (true) {
+  for (;;) {
     const result = await captureLiveWindowStep(sourceId)
     if (!result?.continue) return result
-    await sleep('5s')
+    await sleep(5000)
   }
 }
 
 export async function scheduledUploadWorkflow(uploadId) {
-  'use workflow'
-
-  while (true) {
+  for (;;) {
     const schedule = await getUploadScheduleStep(uploadId)
     if (!schedule || schedule.status !== 'agendado') return { status: schedule?.status || 'missing' }
     if (schedule.due) return publishUploadStep(uploadId)
-    await sleep(new Date(schedule.scheduledAt))
+    const dueAt = Date.parse(schedule.scheduledAt)
+    const waitMs = Number.isFinite(dueAt) ? Math.min(Math.max(dueAt - Date.now(), 1000), 60000) : 5000
+    await sleep(waitMs)
   }
 }
