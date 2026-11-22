@@ -1,20 +1,12 @@
-import { nitro } from 'nitro/vite'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { workflow } from 'workflow/vite'
 
+// O deploy no Render é um único processo Express que serve `dist/` diretamente.
+// O plugin nitro (preset netlify) consumia index.html como template de renderer
+// e não gerava dist/index.html, deixando a aplicação sem frontend.
 export default defineConfig({
-  plugins: [nitro(), workflow(), react()],
-  nitro: {
-    serverDir: './',
-    preset: 'netlify',
-    routes: {
-      '/api/**': { handler: './server/index.mjs', format: 'node' },
-      '/media/**': { handler: './server/index.mjs', format: 'node' },
-      '/covers/**': { handler: './server/index.mjs', format: 'node' },
-    },
-    workflow: { runtime: 'nodejs24.x' },
-  },
+  plugins: [workflow(), react()],
   server: {
     host: true,
     port: 4780,
