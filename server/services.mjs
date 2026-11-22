@@ -22,8 +22,10 @@ export const YDL_API_KEY = keyOf(process.env.YTDLP_API_KEY || process.env.FUGA_Y
 // yt-dlp é barrado pelo IP de datacenter: eles resolvem o player response por
 // conta própria. Vários hosts entram porque alguns bloqueiam IPs de cloud.
 const DEFAULT_INVIDIOUS = [
-  'https://invidious.slipfox.xyz',
+  // Primeiro da lista: é o único espelho testado que devolve `liveNow` e
+  // `hlsUrl` para lives do YouTube (testado em z2hktG1zUbs, 2026-11).
   'https://yt.chocolatemoo53.com',
+  'https://invidious.slipfox.xyz',
   'https://invidious.tiekoetter.com',
   'https://inv.zoomerville.com',
   'https://invidious.kavin.rocks',
