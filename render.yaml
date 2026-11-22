@@ -22,3 +22,18 @@ services:
       #   mountPath: /var/data
       #   sizeGB: 10
 
+  # Novo frontend (TanStack Start). Processes independente do Express acima:
+  # mesmo repositório, diretório separado e um único processo Node no Render.
+  - type: web
+    name: kakashii-hub
+    runtime: node
+    plan: free
+    rootDir: kakashii-hub
+    buildCommand: npm install --no-audit --no-fund && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+

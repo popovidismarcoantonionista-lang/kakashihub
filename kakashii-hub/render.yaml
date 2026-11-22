@@ -1,0 +1,15 @@
+services:
+  # Single Node process, same model used by the existing Kakashi Hub deployment.
+  # Nitro is configured with the `node-server` preset in vite.config.ts, so the
+  # build emits a real HTTP server at .output/server/index.mjs.
+  - type: web
+    name: kakashii-hub
+    runtime: node
+    plan: free
+    buildCommand: npm install --no-audit --no-fund && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production

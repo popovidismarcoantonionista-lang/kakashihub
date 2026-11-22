@@ -25,7 +25,15 @@ npm start
 
 Para Netlify, o `netlify.toml` usa o preset Netlify do Nitro, publica `dist/` e registra a função gerada em `.netlify/v1/functions/`.
 
-O processo usa `PORT` quando definido (Render), ou `4780` por padrão. `/api/health` é o endpoint de health check. A configuração `render.yaml` descreve apenas um serviço web.
+O processo usa `PORT` quando definido (Render), ou `4780` por padrão. `/api/health` é o endpoint de health check.
+
+## Novo frontend (kakashii-hub)
+
+O diretório `kakashii-hub/` contém a versão mais recente do estúdio, construída com
+TanStack Start. Ela roda como um **segundo Web Service** no mesmo `render.yaml`, com
+`rootDir: kakashii-hub` e um único processo Node (`node .output/server/index.mjs`).
+Todo o processamento de vídeo acontece no navegador, então esse serviço não depende
+do backend Express nem de FFmpeg. Veja `kakashii-hub/README.md` para detalhes.
 
 ## Estrutura
 
