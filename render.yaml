@@ -15,6 +15,24 @@ services:
         value: "true"
       - key: BGUTIL_POT_URL
         value: http://127.0.0.1:4416
+      # YouTube Data API v3: confirma status/título/canal da live antes do yt-dlp.
+      # Valores com sync:false devem ser preenchidos no painel do Render
+      # (o Blueprint não promove novos secrets em serviços já existentes).
+      - key: YOUTUBE_API_KEY
+        sync: false
+      # Resolvedores de stream para contornar o bloqueio de IP de datacenter
+      # do YouTube no Render. Configure pelo menos um deles para gravar a live.
+      - key: COBALT_API_URL
+        sync: false
+      - key: COBALT_API_KEY
+        sync: false
+      - key: YTDLP_API_URL
+        sync: false
+      - key: YTDLP_API_KEY
+        sync: false
+      # URL HLS já autorizada, quando disponível (alternativa aos resolvedores).
+      - key: FUGA_LIVE_STREAM
+        sync: false
       # A interface estática e as rotas /api são atendidas pelo mesmo Express.
       # Configure um disco persistente se precisar manter arquivos entre deploys.
       # disk:

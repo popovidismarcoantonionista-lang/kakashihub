@@ -18,8 +18,8 @@ import {
 } from './store.mjs'
 import { deleteBlobMedia, getPrivateBlob } from './media-store.mjs'
 import {
-  OUTPUT_SIZES, clipFrame, fetchChannelVideos, getLiveHlsUrl, isLiveRunning, liveMediaFile,
-  stopLive, uniqueClips,
+  OUTPUT_SIZES, clipFrame, fetchChannelVideos, getLiveHlsUrl, isLiveRunning, liveCapabilities,
+  liveMediaFile, stopLive, uniqueClips,
 } from './pipeline.mjs'
 import { startLiveWorkflow, startProcessJob, startUploadWorkflow } from './jobs.mjs'
 import {
@@ -92,7 +92,7 @@ app.get('/api/health', async (req, res) => {
       downloader = 'sem-resposta'
     }
   }
-  ok(res, { ok: true, downloader })
+  ok(res, { ok: true, downloader, live: liveCapabilities() })
 })
 
 app.get('/api/radar', async (req, res) => {

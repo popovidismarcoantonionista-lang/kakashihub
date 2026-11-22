@@ -629,6 +629,25 @@ const DL_KEY = (process.env.DOWNLOAD_API_KEY || '').trim()
 const DL_ONLY = /^(1|true|yes)$/i.test(process.env.DOWNLOAD_API_ONLY || '')
 const YT_API_KEY = (process.env.YOUTUBE_API_KEY || '').trim()
 
+/** Resumo das fontes configuradas, exposto em /api/health para diagnóstico no Render. */
+export function liveCapabilities() {
+  return {
+    youtubeDataApi: Boolean(YT_API_KEY),
+    cobalt: hasCobalt(),
+    ytDlpApi: hasYtdlpApi(),
+    mirrors: hasInvidious(),
+    fixedStream: Boolean(process.env.FUGA_LIVE_STREAM),
+  }
+}
+
+/** Evita vazar chaves de API em mensagens salvas em source.liveLastError. */
+function liveErrorText(error, limit = 300) {
+  return String(error?.message || error)
+    .replace(/([?&]key=)[^&\s]+/gi, '$1***')
+    .replace(/(x-api-key|api-key)\s*[:=]\s*[^\s,;]+/gi, '$1=***')
+    .slice(0, limit)
+}
+
 function canUseService() {
   return Boolean(DL_API)
 }
@@ -1552,6 +1571,7 @@ const LIVE_TEXT = {
   gone: 'A transmissão saiu do ar. O monitoramento foi encerrado…',
   noStream: 'Não foi possível acessar a transmissão. Verifique se é pública e sem restrição de idade/região…',
   recordFail: 'Falha ao acompanhar a transmissão. Ela pode ter proteção ou instabilidade…',
+  streamBlocked: 'A live está no ar, mas o servidor não conseguiu acessar o stream. Configure um resolvedor de mídia no Render…',
   failed: 'Não foi possível acompanhar esta transmissão agora. Tente de novo…',
 }
 
@@ -1719,21 +1739,30 @@ function recordWindow(parts, file, seconds, stop) {
     let child
     try {
       child = spawn(FFMPEG_BIN, args, { windowsHide: true })
-    } catch {
-      resolve({ ok: false })
+    } catch (error) {
+      resolve({ ok: false, reason: liveErrorText(error) })
       return
     }
     stop.child = child
     let settled = false
     let timer = null
-    const done = () => {
+    let stderr = ''
+    let exitCode = null
+    child.stderr?.on('data', (chunk) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-4000)
+    })
+    const done = (error) => {
       if (settled) return
       settled = true
       if (timer) clearTimeout(timer)
       if (stop.child === child) stop.child = null
       let ok = false
       try { ok = fs.existsSync(file) && fs.statSync(file).size > 1024 * 20 } catch {}
-      resolve({ ok })
+      const tail = stderr.trim().split(/\r?\n/).filter(Boolean).slice(-2).join(' ')
+      const reason = ok
+        ? ''
+        : liveErrorText(error?.message || tail || (exitCode === null ? '' : `ffmpeg exit ${exitCode}`))
+      resolve({ ok, reason })
     }
     timer = setTimeout(() => {
       console.error('[live:record] timeout; encerrando captura')
@@ -1744,7 +1773,10 @@ function recordWindow(parts, file, seconds, stop) {
       }, 3000).unref?.()
     }, (seconds + 45) * 1000)
     child.on('error', done)
-    child.on('close', done)
+    child.on('close', (code) => {
+      exitCode = code
+      done()
+    })
   })
 }
 
@@ -1889,19 +1921,28 @@ export async function captureLiveWindow(sourceId) {
       updateJob(job, { progress: 6, step: 'Procurando a transmissão' })
       let meta = null
       let apiAnswered = false
+      let metaSource = ''
       if (YT_API_KEY && /(?:youtube\.com|youtu\.be)/i.test(url)) {
         const liveId = source.liveId || videoIdFromUrl(url)
         const apiMeta = liveId ? await ytApiMeta(liveId) : null
         if (apiMeta) {
           apiAnswered = true
+          metaSource = 'youtube-data-api'
           meta = apiMeta.is_live ? { ...apiMeta, sourceUrl: watchUrl(liveId) } : null
-          if (!meta && isChannelUrl(url)) meta = await youtubeLiveMeta(url)
+          if (!meta && isChannelUrl(url)) {
+            meta = await youtubeLiveMeta(url)
+            metaSource = 'youtube-data-api-search'
+          }
         } else if (isChannelUrl(url)) {
           meta = await youtubeLiveMeta(url)
+          metaSource = meta ? 'youtube-data-api-search' : ''
           apiAnswered = Boolean(meta)
         }
       }
-      if (!meta && !apiAnswered) meta = await probeLive(url)
+      if (!meta && !apiAnswered) {
+        meta = await probeLive(url)
+        metaSource = meta ? 'probe' : ''
+      }
       source = findSource(sourceId)
       if (!source) return { continue: false, status: 'removed' }
       if (!meta) return finishLiveStep(source, job, LIVE_TEXT.offline)
@@ -1927,6 +1968,7 @@ export async function captureLiveWindow(sourceId) {
       source.liveMisses = 0
       source.liveLastEnd = priorDuration > 0 ? priorDuration : -999
       source.liveReady = true
+      source.liveMetadataSource = metaSource || 'probe'
       save()
       updateJob(job, { progress: 20, step: 'Ao vivo · acompanhando a transmissão' })
       addActivity('agent', `Monitorando a live "${source.title}"`)
@@ -1934,13 +1976,22 @@ export async function captureLiveWindow(sourceId) {
     }
 
     if ((Number(source.liveMade) || 0) >= LIVE_MAX_CLIPS) return finishLiveStep(source, job)
+    const apiConfirmed = () => Boolean(
+      liveCapabilities().youtubeDataApi
+      && (source?.platform === 'youtube' || /youtube/i.test(source?.url || ''))
+    )
+    let streamError = ''
     const parts = await liveStreamParts(source.url).catch((error) => {
-      console.error('[live] liveStreamParts error:', error?.message || error)
+      streamError = liveErrorText(error)
+      console.error('[live] liveStreamParts error:', streamError)
       return []
     })
     if (!parts.length) {
       source.liveMisses = (Number(source.liveMisses) || 0) + 1
-      if (source.liveMisses >= 3) return finishLiveStep(source, job, LIVE_TEXT.noStream)
+      source.liveLastError = `stream: ${streamError || 'nenhuma URL de mídia retornada'}`
+      if (source.liveMisses >= 3) {
+        return finishLiveStep(source, job, apiConfirmed() ? LIVE_TEXT.streamBlocked : LIVE_TEXT.noStream)
+      }
       updateJob(job, { step: 'Reconectando na transmissão' })
       save()
       return { continue: true }
@@ -1966,9 +2017,13 @@ export async function captureLiveWindow(sourceId) {
 
     const duration = rec?.ok ? await mediaDuration(win) : 0
     if (!rec?.ok || !duration || duration < 6) {
+      const reason = rec?.reason || (duration ? `janela curta (${Math.round(duration)}s)` : 'janela vazia')
+      source.liveLastError = `record: ${reason}`
       try { fs.rmSync(win, { force: true }) } catch {}
       source.liveMisses = (Number(source.liveMisses) || 0) + 1
-      if (source.liveMisses >= 3) return finishLiveStep(source, job, LIVE_TEXT.recordFail)
+      if (source.liveMisses >= 3) {
+        return finishLiveStep(source, job, apiConfirmed() ? LIVE_TEXT.streamBlocked : LIVE_TEXT.recordFail)
+      }
       save()
       return { continue: true }
     }
@@ -2017,12 +2072,12 @@ export async function captureLiveWindow(sourceId) {
   } catch (error) {
     source = findSource(sourceId)
     if (!source) return { continue: false, status: 'removed' }
-    const raw = String(error?.message || error)
-    console.error('[live]', raw.slice(0, 800))
+    const raw = liveErrorText(error, 300)
+    console.error('[live]', raw)
     // Guarda o erro bruto no estado para diagnóstico (`/api/state`).
     source.liveLastError = raw.slice(0, 300)
     let message = LIVE_TEXT.failed
-    if ([LIVE_TEXT.offline, LIVE_TEXT.gone, LIVE_TEXT.noStream, LIVE_TEXT.recordFail, LIVE_TEXT.failed].includes(raw)) message = raw
+    if ([LIVE_TEXT.offline, LIVE_TEXT.gone, LIVE_TEXT.noStream, LIVE_TEXT.recordFail, LIVE_TEXT.streamBlocked, LIVE_TEXT.failed].includes(raw)) message = raw
     else if (isBlocked(error)) message = FRIENDLY[0]
     else if (/will begin|premieres in/i.test(raw)) message = FRIENDLY[6]
     else if (/not currently live|channel is offline|is offline/i.test(raw)) message = LIVE_TEXT.offline
