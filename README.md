@@ -35,8 +35,8 @@ Para ativar no Render:
 
 1. No Google Cloud, habilite a **YouTube Data API v3** e crie uma chave de API.
 2. No serviço `kakashi-hub`, adicione a variável `YOUTUBE_API_KEY` com essa chave. O `render.yaml` declara a variável com `sync: false`, mas o valor precisa ser preenchido manualmente no painel do Render (Blueprints já existentes não pedem esse valor novamente).
-3. Se o erro for de stream (a live é detectada, mas o servidor não grava), configure também `COBALT_API_URL`/`COBALT_API_KEY`, `YTDLP_API_URL`/`YTDLP_API_KEY` ou `FUGA_LIVE_STREAM`.
-4. Verifique em `GET /api/health` se `live.youtubeDataApi` está `true`.
+3. O `render.yaml` já define `COBALT_API_URL=https://rue-cobalt.xenon.zone/` como resolvedor público gratuito, testado sem chave e sem cookies. Se ele ficar instável, troque pelo valor da sua própria instância Cobalt, ou use `YTDLP_API_URL`/`YTDLP_API_KEY` ou `FUGA_LIVE_STREAM`. O `COBALT_API_KEY` só é necessário se a sua instância exigir token.
+4. Verifique em `GET /api/health` se `live.youtubeDataApi` e `live.cobalt` estão `true`.
 
 Quando a API v3 confirma que a transmissão está no ar mas o stream falha, a fonte recebe uma mensagem específica e `/api/state` expõe o detalhe técnico em `source.liveLastError` (sem vazar chaves de API). `source.liveMetadataSource` indica se os metadados vieram da Data API, da busca por canal ou da sondagem com yt-dlp.
 

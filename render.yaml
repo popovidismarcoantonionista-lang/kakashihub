@@ -21,9 +21,10 @@ services:
       - key: YOUTUBE_API_KEY
         sync: false
       # Resolvedores de stream para contornar o bloqueio de IP de datacenter
-      # do YouTube no Render. Configure pelo menos um deles para gravar a live.
+      # do YouTube no Render. Esta instância pública foi testada sem chave e sem
+      # cookies; troque pelo valor da sua própria instância se ela ficar instável.
       - key: COBALT_API_URL
-        sync: false
+        value: https://rue-cobalt.xenon.zone/
       - key: COBALT_API_KEY
         sync: false
       - key: YTDLP_API_URL
