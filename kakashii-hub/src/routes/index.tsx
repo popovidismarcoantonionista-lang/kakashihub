@@ -4061,9 +4061,6 @@ export function KakashiApp() {
                           </Button>
                         ))}
                       </div>
-                      {active.frame === frames[0] && (
-                        <small>Webcam no canto superior esquerdo do vídeo original.</small>
-                      )}
                     </div>
                     <div className="hub-tool-section">
                       <div className="hub-label-row">

@@ -205,7 +205,7 @@ export function EstudioPage() {
             <label className="field-label">Enquadramento</label>
             {games ? (
               <div className="segmented small">
-                <button className="active">Webcam</button>
+                <button className="active">Split</button>
               </div>
             ) : (
               <div className="segmented small scrollable">
@@ -215,7 +215,7 @@ export function EstudioPage() {
                     className={clip.framing === f ? 'active' : ''}
                     onClick={() => patchClip({ framing: f })}
                   >
-                    {f === 'auto' ? 'Auto' : f === 'preencher' ? 'Fundo' : f === 'esquerda' ? 'Esq.' : f === 'direita' ? 'Dir.' : f === 'cam' ? 'Webcam' : 'Centro'}
+                    {f === 'auto' ? 'Auto' : f === 'preencher' ? 'Fundo' : f === 'esquerda' ? 'Esq.' : f === 'direita' ? 'Dir.' : f === 'cam' ? 'Split' : 'Centro'}
                   </button>
                 ))}
               </div>
