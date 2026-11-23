@@ -16,7 +16,7 @@ import {
   save,
   storeMiddleware,
 } from './store.mjs'
-import { deleteBlobMedia, getPrivateBlob } from './media-store.mjs'
+import { blobStorageEnabled, deleteBlobMedia, getPrivateBlob } from './media-store.mjs'
 import {
   OUTPUT_SIZES, clipFrame, fetchChannelVideos, getLiveHlsUrl, isLiveRunning, liveCapabilities,
   liveCaptureConfig, liveErrorText, liveMediaFile, queueBrowserLiveWindow, stopLive, uniqueClips,
@@ -96,6 +96,10 @@ app.get('/api/health', async (req, res) => {
     ok: true,
     commit: process.env.RENDER_GIT_COMMIT || null,
     downloader,
+    storage: {
+      blob: blobStorageEnabled(),
+      database: Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL),
+    },
     live: liveCapabilities(),
   })
 })
