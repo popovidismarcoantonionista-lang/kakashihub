@@ -1,7 +1,6 @@
 import { useApp } from './store'
 import { Shell } from './shell'
 import { useRoute } from './router'
-import { Toasts } from './ui'
 import { CortesPage } from './pages/Cortes'
 import { VideosPage } from './pages/Videos'
 import { EstudioPage } from './pages/Estudio'
@@ -45,7 +44,6 @@ function Boot() {
     <>
       <Shell><CurrentPage /></Shell>
       <LiveCapture />
-      <Toasts />
     </>
   )
 }

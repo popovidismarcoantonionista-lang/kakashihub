@@ -47,6 +47,7 @@ export interface Source {
   liveAudioSilent?: boolean
   liveAudioAt?: string
   liveCaptions?: number
+  liveCaptionLines?: CaptionLine[]
 }
 
 export interface CaptionLine {

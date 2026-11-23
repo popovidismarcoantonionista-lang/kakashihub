@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ChevronDown, X, Info } from 'lucide-react'
-import { useApp } from './store'
+import { Check, ChevronDown, X } from 'lucide-react'
 import type { ClipType } from './types'
 
 export function Logo({ size = 30, className = '' }: { size?: number; className?: string }) {
@@ -256,22 +255,6 @@ export function EmptyState({ icon, title, text = '', action }: { icon: ReactNode
       <p>{text}</p>
       {action}
     </div>
-  )
-}
-
-export function Toasts() {
-  const { toasts, dismiss } = useApp()
-  return createPortal(
-    <div className="toasts">
-      {toasts.map((t) => (
-        <div key={t.id} className="toast" onClick={() => dismiss(t.id)}>
-          <Info size={16} />
-          <span>{t.text}</span>
-          <X size={13} className="toast-x" />
-        </div>
-      ))}
-    </div>,
-    document.body,
   )
 }
 

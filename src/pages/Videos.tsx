@@ -42,6 +42,21 @@ function audioPercent(level?: number | null): number {
   return Math.max(0, Math.min(100, Math.round(((level + 60) / 60) * 100)))
 }
 
+function LiveAudioMeter({ level, silent }: { level?: number | null; silent?: boolean }) {
+  const active = silent === false && audioPercent(level) > 5
+  return (
+    <div className={`live-audio ${active ? 'is-listening' : ''}`}>
+      <span className="mono">{level == null ? 'áudio —' : active ? 'ouvindo' : 'silêncio'}</span>
+      <div className="live-eq" aria-hidden="true">
+        {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+          <i key={i} style={{ animationDelay: `${i * 0.09}s`, animationDuration: `${0.5 + (i % 4) * 0.12}s` }} />
+        ))}
+      </div>
+      {level != null && <span className="mono">{level} dB</span>}
+    </div>
+  )
+}
+
 function liveEmbed(source: Source): string | null {
   const host = window.location.hostname
   const origin = window.location.origin
@@ -64,7 +79,7 @@ function liveEmbed(source: Source): string | null {
 }
 
 export function VideosPage() {
-  const { state, api, toast, setIngestOpen, setIngestTab } = useApp()
+  const { state, api, setIngestOpen, setIngestTab } = useApp()
   const [url, setUrl] = useState('')
   const [liveBusy, setLiveBusy] = useState(false)
   const [liveActing, setLiveActing] = useState('')
@@ -105,20 +120,16 @@ export function VideosPage() {
   const startLive = async () => {
     const target = normalizeLink(url)
     if (!/^https?:\/\//i.test(target)) {
-      toast('Cole o link da transmissão ao vivo.', 'error')
       return
     }
     if (!/twitch\.tv|youtube\.com|youtu\.be|kick\.com/i.test(target)) {
-      toast('Use o link de uma live da Twitch, do YouTube ou da Kick.', 'error')
       return
     }
     setLiveBusy(true)
     try {
       await api('/api/live', { method: 'POST', body: JSON.stringify({ url: target }) })
       setUrl('')
-      toast('Monitorando a live. Os cortes aparecem aqui em instantes.', 'success')
     } catch (e: any) {
-      toast(e.message || 'Não foi possível monitorar esta live.', 'error')
     } finally {
       setLiveBusy(false)
     }
@@ -140,9 +151,7 @@ export function VideosPage() {
         method: 'POST',
         body: JSON.stringify({ url: `https://www.${item.platform}.com/${item.login}` }),
       })
-      toast(`Monitorando ${item.name}. Os cortes aparecem aqui em instantes.`, 'success')
     } catch (e: any) {
-      toast(e.message || 'Não foi possível monitorar agora.', 'error')
     } finally {
       setRadarBusy('')
     }
@@ -151,9 +160,7 @@ export function VideosPage() {
   const stopMonitoring = async (source: Source) => {    setLiveActing(source.id)
     try {
       await api(`/api/live/${source.id}/stop`, { method: 'POST' })
-      toast('Monitoramento encerrado. Os cortes já estão no acervo.', 'info')
     } catch (e: any) {
-      toast(e.message || 'Não foi possível encerrar agora.', 'error')
     } finally {
       setLiveActing('')
     }
@@ -163,9 +170,7 @@ export function VideosPage() {
     setLiveActing(source.id)
     try {
       await api(`/api/live/${source.id}/start`, { method: 'POST' })
-      toast('Voltamos a monitorar a transmissão.', 'success')
     } catch (e: any) {
-      toast(e.message || 'Não foi possível retomar agora.', 'error')
     } finally {
       setLiveActing('')
     }
@@ -173,16 +178,14 @@ export function VideosPage() {
 
   const openStudio = (source: Source) => {
     const first = state?.clips.filter((c) => c.sourceId === source.id).sort((a, b) => a.start - b.start)[0]
-    if (!first) return toast('Esta fonte ainda não tem cortes.', 'error')
+    if (!first) return
     navigate('estudio', { clip: first.id })
   }
 
   const reanalyze = async (source: Source) => {
     try {
       await api(`/api/sources/${source.id}/analyze`, { method: 'POST' })
-      toast('Analisando a fonte de novo. Os cortes serão atualizados.', 'info')
     } catch (e: any) {
-      toast(e.message || 'Não foi possível analisar agora.', 'error')
     }
   }
 
@@ -191,10 +194,8 @@ export function VideosPage() {
     setRemoving(true)
     try {
       await api(`/api/sources/${confirm.id}`, { method: 'DELETE' })
-      toast('Fonte removida do acervo.', 'success')
       setConfirm(null)
     } catch (e: any) {
-      toast(e.message || 'Não foi possível remover a fonte.', 'error')
     } finally {
       setRemoving(false)
     }
@@ -365,15 +366,7 @@ export function VideosPage() {
                         ? <div className="live-bar"><i /></div>
                         : <ProgressBar value={source.progress} animated />}
                       {source.status === 'ao-vivo' && source.liveAudioAt && (
-                        <div className="live-audio">
-                          <span className="mono">{source.liveAudioLevel == null ? 'áudio —' : `áudio ${source.liveAudioLevel} dB`}</span>
-                          <div className="live-audio-track">
-                            <i
-                              className={source.liveAudioSilent ? 'is-silent' : ''}
-                              style={{ width: `${audioPercent(source.liveAudioLevel)}%` }}
-                            />
-                          </div>
-                        </div>
+                        <LiveAudioMeter level={source.liveAudioLevel} silent={source.liveAudioSilent} />
                       )}
                     </div>
                   )}
@@ -397,6 +390,16 @@ export function VideosPage() {
                     {source.lastClipAt && <><i /><span className="mono">último corte {relTime(source.lastClipAt)}</span></>}
                     {!isLive && clips[0] && <TypeBadge type={clips[0].type} />}
                   </div>
+                  {isLive && Boolean(source.liveCaptionLines?.length) && (
+                    <div className="live-transcript">
+                      {source.liveCaptionLines!.slice(-2).map((line, i) => (
+                        <div className="lt-line" key={`${line.t}-${i}`}>
+                          <span className="mono">{fmtTime(line.t)}</span>
+                          <span>{line.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {source.error && (
                     <div className="src-error"><AlertTriangle size={13} /> {source.error}</div>
                   )}

@@ -11,7 +11,7 @@ import { CLIP_TYPES } from '../types'
 import type { Clip, ClipType, Compilation } from '../types'
 
 export function CortesPage() {
-  const { state, api, toast, setIngestOpen, setIngestTab } = useApp()
+  const { state, api, setIngestOpen, setIngestTab } = useApp()
   const [query, setQuery] = useState('')
   const [type, setType] = useState<'todos' | ClipType>('todos')
   const [sort, setSort] = useState<'score' | 'recentes' | 'duracao'>('score')
@@ -57,10 +57,8 @@ export function CortesPage() {
     setBuilding(true)
     try {
       await api('/api/compilations', { method: 'POST', body: JSON.stringify({ clipIds: picked }) })
-      toast('Vídeo longo em produção. O progresso aparece aqui.', 'success')
       setLongOpen(false)
     } catch (e: any) {
-      toast(e.message || 'Não foi possível montar o vídeo longo.', 'error')
     } finally {
       setBuilding(false)
     }
@@ -70,9 +68,7 @@ export function CortesPage() {
     setRemovingComp(comp.id)
     try {
       await api(`/api/compilations/${comp.id}`, { method: 'DELETE' })
-      toast('Vídeo longo removido.', 'success')
     } catch (e: any) {
-      toast(e.message || 'Não foi possível remover este vídeo.', 'error')
     } finally {
       setRemovingComp('')
     }
@@ -92,11 +88,9 @@ export function CortesPage() {
     setAdding(true)
     try {
       await api(`/api/compilations/${addTarget.id}/clips`, { method: 'POST', body: JSON.stringify({ clipIds: addPicked }) })
-      toast('Cortes adicionados. Vamos remontar o vídeo longo.', 'success')
       setAddTarget(null)
       setAddPicked([])
     } catch (e: any) {
-      toast(e.message || 'Não foi possível adicionar os cortes.', 'error')
     } finally {
       setAdding(false)
     }

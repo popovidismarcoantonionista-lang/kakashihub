@@ -19,7 +19,7 @@ const FRAMING_LABEL: Record<string, string> = {
 }
 
 export function EstudioPage() {
-  const { state, api, toast } = useApp()
+  const { state, api } = useApp()
   const route = useRoute()
   const clips = state?.clips || []
 
@@ -61,7 +61,6 @@ export function EstudioPage() {
         method: 'PATCH',
         body: JSON.stringify({ cam, applyCam: true }),
       })
-      toast('Enquadramento aplicado.', 'success')
     }).catch(() => {})
   }, [clip?.id, source?.id, source?.cam])
 
@@ -72,7 +71,6 @@ export function EstudioPage() {
       setSavedFlash(true)
       setTimeout(() => setSavedFlash(false), 1400)
     } catch (e: any) {
-      toast(e.message || 'Não foi possível salvar.', 'error')
     }
   }
 
@@ -80,9 +78,7 @@ export function EstudioPage() {
     if (!clip) return
     try {
       await api(`/api/clips/${clip.id}/render`, { method: 'POST' })
-      toast('Começamos! Acompanhe o progresso aqui.', 'info')
     } catch (e: any) {
-      toast(e.message || 'Não foi possível preparar o vídeo agora.', 'error')
     }
   }
 
@@ -91,7 +87,6 @@ export function EstudioPage() {
     const start = from ?? Number(cutStart)
     const end = to ?? Number(cutEnd)
     if (!Number.isFinite(start) || !Number.isFinite(end) || end - start < 1) {
-      toast('Escolha um trecho com pelo menos 1 segundo.', 'error')
       return
     }
     setTrimming(true)
@@ -100,9 +95,7 @@ export function EstudioPage() {
         method: 'POST',
         body: JSON.stringify({ start, end }),
       })
-      toast('Recorte aplicado. Atualizando o vídeo…', 'success')
     } catch (e: any) {
-      toast(e.message || 'Não foi possível recortar agora.', 'error')
     } finally {
       setTrimming(false)
     }
@@ -526,6 +519,15 @@ function TimelineCanvas({
             <span className="cf-score"><ScoreRing score={clip.score} size={30} /></span>
           </div>
           <p>{clip.hook}</p>
+        </div>
+        <div className="cf-transcript">
+          <span className="kicker mono">LEGENDAS</span>
+          {clip.captionLines?.length ? clip.captionLines.slice(-5).map((line, i) => (
+            <div className="tr-line" key={`${line.t}-${i}`}>
+              <span className="mono">{fmtTime(line.t)}</span>
+              <em>{line.text}</em>
+            </div>
+          )) : <span className="fine">Sem legendas para este corte.</span>}
         </div>
       </div>
     </div>

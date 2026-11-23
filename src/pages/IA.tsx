@@ -11,7 +11,7 @@ import { NICHE_OPTIONS } from '../types'
 import type { Niche } from '../types'
 
 export function IAPage() {
-  const { state, api, toast } = useApp()
+  const { state, api } = useApp()
   const settings = state?.settings
   const [draft, setDraft] = useState({
     clipMin: settings?.clipMin ?? 18,
@@ -43,9 +43,7 @@ export function IAPage() {
         method: 'POST',
         body: JSON.stringify({ agents: { [key]: value } }),
       })
-      toast(value ? 'Agente ativado.' : 'Agente desativado.', 'success')
     } catch (e: any) {
-      toast(e.message || 'Não foi possível atualizar.', 'error')
     }
   }
 
@@ -54,9 +52,7 @@ export function IAPage() {
     if (value === (state.project?.channel ?? '')) return
     try {
       await api('/api/project', { method: 'POST', body: JSON.stringify({ channel: value }) })
-      toast(value ? 'Nome do canal salvo nos cortes.' : 'Cortes saem sem nome do canal.', 'success')
     } catch (e: any) {
-      toast(e.message || 'Não foi possível salvar.', 'error')
     }
   }
 
@@ -64,9 +60,7 @@ export function IAPage() {
     setSaving(true)
     try {
       await api('/api/settings', { method: 'POST', body: JSON.stringify(draft) })
-      toast('Estilo aplicado aos próximos cortes.', 'success')
     } catch (e: any) {
-      toast(e.message || 'Não foi possível salvar.', 'error')
     } finally {
       setSaving(false)
     }
@@ -77,9 +71,7 @@ export function IAPage() {
     try {
       await api('/api/settings', { method: 'POST', body: JSON.stringify({ niche }) })
       const label = NICHE_OPTIONS.find((o) => o.key === niche)?.label || ''
-      toast(`Nicho ${label} ativo. Os próximos cortes seguem esse estilo.`, 'success')
     } catch (e: any) {
-      toast(e.message || 'Não foi possível trocar o nicho.', 'error')
     }
   }
 
@@ -160,7 +152,7 @@ export function IAPage() {
               desc="Aprova sozinha os cortes com melhor score."
               stat={settings.autoApprove ? 'aprovando sozinho' : 'revisão manual'}
               checked={Boolean(settings.autoApprove)}
-              onChange={(v) => api('/api/settings', { method: 'POST', body: JSON.stringify({ autoApprove: v }) }).then(() => toast(v ? 'Aprovação automática ligada.' : 'Revisão manual ativada.', 'success')).catch(() => toast('Não foi possível atualizar.', 'error'))}
+              onChange={(v) => api('/api/settings', { method: 'POST', body: JSON.stringify({ autoApprove: v }) })}
             />
           </div>
 
@@ -238,9 +230,7 @@ export function IAPage() {
                 <button
                   key={r}
                   className={settings.resolution === r ? 'active' : ''}
-                  onClick={() => api('/api/settings', { method: 'POST', body: JSON.stringify({ resolution: r }) })
-                    .then(() => toast(`Resolução ${r} ativada.`, 'success'))
-                    .catch(() => toast('Não foi possível atualizar.', 'error'))}
+                  onClick={() => api('/api/settings', { method: 'POST', body: JSON.stringify({ resolution: r }) })}
                 >
                   {r === '4k' ? '4K' : r}
                 </button>
@@ -263,9 +253,7 @@ export function IAPage() {
                 if (!id) return
                 try {
                   await api(`/api/sources/${id}/analyze`, { method: 'POST' })
-                  toast('Vamos analisar essa fonte de novo.', 'info')
                 } catch (e: any) {
-                  toast(e.message || 'Não foi possível analisar de novo.', 'error')
                 }
               }}
               options={[

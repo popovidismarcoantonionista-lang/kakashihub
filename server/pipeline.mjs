@@ -2077,6 +2077,12 @@ async function processLiveWindowFile(sourceId, win, job) {
     source.liveAudioAt = new Date().toISOString()
   }
   source.liveCaptions = captions.length
+  if (captions.length) {
+    source.liveCaptionLines = captions.slice(-12).map((cue) => ({
+      t: Math.round((session + (Number(cue.t) || 0)) * 10) / 10,
+      text: String(cue.text || '').slice(0, 220),
+    }))
+  }
   const settings = getState().settings || {}
   const min = Number(settings.clipMin) || 18
   const max = Number(settings.clipMax) || 38

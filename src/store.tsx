@@ -1,10 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { State } from './types'
 
-type Tone = 'success' | 'error' | 'info'
 export type IngestTab = 'upload' | 'live'
-interface Toast { id: number; text: string }
 
 interface Ctx {
   state: State | null
@@ -12,9 +10,6 @@ interface Ctx {
   error: string | null
   refresh: () => Promise<void>
   api: (path: string, init?: RequestInit) => Promise<any>
-  toast: (text: string, tone?: Tone) => void
-  toasts: Toast[]
-  dismiss: (id: number) => void
   ingestOpen: boolean
   setIngestOpen: (v: boolean) => void
   ingestTab: IngestTab
@@ -27,21 +22,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [toasts, setToasts] = useState<Toast[]>([])
   const [ingestOpen, setIngestOpen] = useState(false)
   const [ingestTab, setIngestTab] = useState<IngestTab>('upload')
-  const toastId = useRef(1)
-
-  const dismiss = useCallback((id: number) => {
-    setToasts((t) => t.filter((x) => x.id !== id))
-  }, [])
-
-  // Tom é ignorado: todos os avisos aparecem da mesma forma, sem cor de status.
-  const toast = useCallback((text: string, _tone?: Tone) => {
-    const id = toastId.current++
-    setToasts((t) => [...t.slice(-3), { id, text }])
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200)
-  }, [])
 
   const refresh = useCallback(async () => {
     try {
@@ -87,8 +69,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [refresh])
 
   const value = useMemo(() => ({
-    state, loading, error, refresh, api, toast, toasts, dismiss, ingestOpen, setIngestOpen, ingestTab, setIngestTab,
-  }), [state, loading, error, refresh, api, toast, toasts, dismiss, ingestOpen])
+    state, loading, error, refresh, api, ingestOpen, setIngestOpen, ingestTab, setIngestTab,
+  }), [state, loading, error, refresh, api, ingestOpen])
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>
 }

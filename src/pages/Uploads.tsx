@@ -42,7 +42,7 @@ const STATUS_LABEL: Record<Upload['status'], string> = {
 type Target = 'corte' | 'longo'
 
 export function UploadsPage() {
-  const { state, api, toast } = useApp()
+  const { state, api } = useApp()
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState<Upload | null>(null)
@@ -83,8 +83,6 @@ export function UploadsPage() {
     const query = new URLSearchParams(window.location.search)
     const ok = query.get('connected') as Platform | null
     const bad = query.get('connect_error') as Platform | null
-    if (ok && PLATFORMS.includes(ok)) toast(`${INFO[ok].label} conectado. Publicação automática liberada.`, 'success')
-    if (bad && PLATFORMS.includes(bad)) toast(`Não foi possível conectar o ${INFO[bad].label}. Tente de novo.`, 'error')
     if (ok || bad) {
       query.delete('connected')
       query.delete('connect_error')
@@ -92,7 +90,7 @@ export function UploadsPage() {
       window.history.replaceState(null, '', `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`)
       loadConnections()
     }
-  }, [loadConnections, toast])
+  }, [loadConnections])
 
   const sorted = useMemo(
     () => [...uploads].sort((a, b) => +new Date(a.scheduledAt) - +new Date(b.scheduledAt)),
@@ -112,15 +110,12 @@ export function UploadsPage() {
 
   const schedule = async () => {
     if (form.target === 'corte' && !form.clipId) {
-      toast('Escolha um corte para agendar.', 'error')
       return
     }
     if (form.target === 'longo' && !form.compilationId) {
-      toast('Escolha um vídeo longo para agendar.', 'error')
       return
     }
     if (!conns?.[form.platform]?.connected) {
-      toast(`Conecte o ${INFO[form.platform].label} antes de agendar.`, 'error')
       return
     }
     setBusy(true)
@@ -134,10 +129,8 @@ export function UploadsPage() {
           scheduledAt: new Date(form.scheduledAt).toISOString(),
         }),
       })
-      toast('Publicação agendada.', 'success')
       setOpen(false)
     } catch (e: any) {
-      toast(e.message || 'Não foi possível agendar.', 'error')
     } finally {
       setBusy(false)
     }
@@ -147,10 +140,8 @@ export function UploadsPage() {
     if (!publishTarget) return
     try {
       await api(`/api/uploads/${publishTarget.id}/publish`, { method: 'POST' })
-      toast('Publicação iniciada.', 'success')
       setPublishTarget(null)
     } catch (e: any) {
-      toast(e.message || 'Não foi possível publicar.', 'error')
     }
   }
 
@@ -158,10 +149,8 @@ export function UploadsPage() {
     if (!confirm) return
     try {
       await api(`/api/uploads/${confirm.id}`, { method: 'DELETE' })
-      toast('Agendamento removido.', 'success')
       setConfirm(null)
     } catch (e: any) {
-      toast(e.message || 'Não foi possível remover.', 'error')
     }
   }
 
@@ -177,7 +166,6 @@ export function UploadsPage() {
   const saveCreds = async () => {
     if (!credsFor) return
     if (!creds.clientId.trim() || !creds.clientSecret.trim()) {
-      toast('Preencha os dois campos.', 'error')
       return
     }
     setSavingCreds(true)
@@ -186,7 +174,6 @@ export function UploadsPage() {
       await loadConnections()
       window.location.href = `/api/oauth/${credsFor}/start?returnTo=${encodeURIComponent(window.location.href)}`
     } catch (e: any) {
-      toast(e.message || 'Não foi possível salvar o acesso.', 'error')
       setSavingCreds(false)
     }
   }
@@ -195,11 +182,9 @@ export function UploadsPage() {
     if (!disconnectFor) return
     try {
       await api(`/api/connections/${disconnectFor}`, { method: 'DELETE' })
-      toast(`${INFO[disconnectFor].label} desconectado.`, 'success')
       setDisconnectFor(null)
       loadConnections()
     } catch (e: any) {
-      toast(e.message || 'Não foi possível desconectar.', 'error')
     }
   }
 

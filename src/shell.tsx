@@ -173,7 +173,7 @@ function SearchBox() {
 }
 
 function IngestModal() {
-  const { ingestOpen, setIngestOpen, api, refresh, toast, ingestTab, setIngestTab } = useApp()
+  const { ingestOpen, setIngestOpen, api, refresh, ingestTab, setIngestTab } = useApp()
   const fileRef = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
   const [dragging, setDragging] = useState(false)
@@ -221,7 +221,6 @@ function IngestModal() {
         onUploadProgress: ({ percentage }) => setUploadProgress(percentage),
       })
       await refresh()
-      toast('Vídeo enviado. O estúdio já começou a analisar.', 'success')
       setIngestOpen(false)
       setFile(null)
       navigate('videos')
@@ -243,10 +242,6 @@ function IngestModal() {
     setError('')
     try {
       await api('/api/live', { method: 'POST', body: JSON.stringify({ url }) })
-      const inBrowser = /youtube\.com|youtu\.be/i.test(url)
-      toast(inBrowser
-        ? 'Monitorando a transmissão. Deixe esta aba aberta: a captura acontece no navegador.'
-        : 'Monitorando a transmissão. Os cortes aparecem em instantes.', 'success')
       setIngestOpen(false)
       setText('')
       navigate('videos')
