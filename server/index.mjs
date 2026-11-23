@@ -372,7 +372,7 @@ app.post('/api/live', async (req, res) => {
     platform,
     // No YouTube o Render não consegue resolver o stream (IP de datacenter).
     // A captura acontece no navegador que estiver com o estúdio aberto.
-    captureMode: platform === 'youtube' ? 'browser' : 'server',
+    captureMode: 'server',
   }
   state.sources.unshift(source)
   addActivity('agent', 'Nova transmissão enviada para monitoramento')
