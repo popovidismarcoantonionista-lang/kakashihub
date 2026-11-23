@@ -276,7 +276,7 @@ export function EstudioPage() {
               <div className="cam-manual">
                 <div className="cam-manual-head">
                   <span className="field-label">Caixa da webcam</span>
-                  <button type="button" className="btn btn-ghost btn-sm" disabled={camBusy} onClick={redetectCam}>
+                  <button type="button" className="btn btn-soft btn-sm" disabled={camBusy} onClick={redetectCam}>
                     {camBusy ? '…' : 'Detectar automaticamente'}
                   </button>
                 </div>

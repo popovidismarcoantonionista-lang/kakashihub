@@ -138,10 +138,10 @@ function LiveCamEditor({ source }: { source: Source }) {
       <div className="cam-manual-head">
         <span className="field-label">Caixa da webcam · ao vivo</span>
         <div className="live-cam-tools">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setFrameKey(Date.now())}>
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => setFrameKey(Date.now())}>
             Atualizar quadro
           </button>
-          <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={redetect}>
+          <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={redetect}>
             {busy ? '…' : 'Detectar automaticamente'}
           </button>
         </div>

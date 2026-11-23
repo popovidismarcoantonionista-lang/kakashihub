@@ -1537,7 +1537,7 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.02);
 }
-.cam-manual-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.cam-manual-head { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
 .cam-manual-head .field-label { margin: 0; }
 .cam-preview {
   position: relative; margin: 10px 0; aspect-ratio: 16 / 9;
@@ -1545,26 +1545,28 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
 }
 .cam-preview img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0.85; }
 .cbc-box {
-  position: absolute; border: 2px solid #6ee7a0; border-radius: 4px;
-  background: rgba(110, 231, 160, 0.07);
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+  position: absolute; border: 2px solid #ff5a67; border-radius: 4px;
+  background: rgba(224, 49, 49, 0.1);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 90, 103, 0.18);
   cursor: grab; touch-action: none;
 }
 .cbc-box:active { cursor: grabbing; }
 .cbc-handle {
   position: absolute; width: 14px; height: 14px;
-  border: 1px solid #0b0f18; border-radius: 3px;
-  background: #6ee7a0; touch-action: none;
+  border: 1px solid rgba(20, 8, 10, 0.9); border-radius: 3px;
+  background: linear-gradient(180deg, #ff6b76, #d92d3a);
+  box-shadow: 0 0 0 1px rgba(255, 122, 134, 0.25);
+  touch-action: none;
 }
 /* Dentro da caixa para não serem cortados pelo overflow:hidden do preview. */
 .cbc-handle-nw { left: 0; top: 0; cursor: nwse-resize; }
 .cbc-handle-ne { right: 0; top: 0; cursor: nesw-resize; }
 .cbc-handle-sw { left: 0; bottom: 0; cursor: nesw-resize; }
 .cbc-handle-se { right: 0; bottom: 0; cursor: nwse-resize; }
-.cbc-readout { margin: -4px 0 8px; font-size: 9px; color: var(--text-2); text-align: right; }
-.cam-hint { display: block; margin: 0 0 10px; font-size: 9.5px; color: var(--text-3); }
-.live-cam { border-color: rgba(110, 231, 160, 0.28); background: rgba(110, 231, 160, 0.04); }
-.live-cam-tools { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.cbc-readout { margin: -4px 0 8px; font-size: 9px; color: var(--text-2); text-align: center; }
+.cam-hint { display: block; margin: 0 0 10px; font-size: 9.5px; color: var(--text-3); text-align: center; }
+.live-cam { border-color: rgba(224, 49, 49, 0.24); background: rgba(224, 49, 49, 0.04); }
+.live-cam-tools { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
 .live-cam-tools .btn { padding: 5px 8px; font-size: 9.5px; }
 .cam-preview-empty {
   position: absolute; inset: 0; display: grid; place-items: center;
@@ -1573,6 +1575,6 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
 @media (max-width: 480px) {
   .cam-manual-head { flex-direction: column; align-items: stretch; }
   .cam-manual-head .btn { width: 100%; justify-content: center; }
-  .live-cam .cam-manual-head { flex-direction: column; align-items: flex-start; }
+  .live-cam .cam-manual-head { flex-direction: column; align-items: center; }
   .cbc-handle { width: 20px; height: 20px; }
 }
