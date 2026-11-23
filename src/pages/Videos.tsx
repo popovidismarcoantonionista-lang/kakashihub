@@ -463,7 +463,7 @@ export function VideosPage() {
                   {source.error && (
                     <div className="src-error"><AlertTriangle size={13} /> {source.error}</div>
                   )}
-                  {!source.error && source.liveLastError && isLive && (
+                  {!source.error && source.liveLastError && isLive && !(Number(source.liveCaptureLastAt) > 0 && Date.now() - Number(source.liveCaptureLastAt) < 2 * 60 * 1000) && (
                     <div className="src-error"><AlertTriangle size={13} /> {friendlyLiveError(source.liveLastError)}</div>
                   )}
                   {isLive && camEditFor === source.id && <LiveCamEditor source={source} />}
