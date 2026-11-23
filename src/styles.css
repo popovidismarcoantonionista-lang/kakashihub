@@ -1563,8 +1563,7 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
 .cbc-handle-ne { right: 0; top: 0; cursor: nesw-resize; }
 .cbc-handle-sw { left: 0; bottom: 0; cursor: nesw-resize; }
 .cbc-handle-se { right: 0; bottom: 0; cursor: nwse-resize; }
-.cbc-readout { margin: -4px 0 8px; font-size: 9px; color: var(--text-2); text-align: center; }
-.cam-hint { display: block; margin: 0 0 10px; font-size: 9.5px; color: var(--text-3); text-align: center; }
+.cam-hint { display: block; margin: 4px 0 10px; font-size: 9.5px; color: var(--text-3); text-align: center; }
 .live-cam { border-color: rgba(224, 49, 49, 0.24); background: rgba(224, 49, 49, 0.04); }
 .live-cam-tools { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
 .live-cam-tools .btn { padding: 5px 8px; font-size: 9.5px; }

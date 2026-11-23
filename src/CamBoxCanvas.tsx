@@ -138,9 +138,6 @@ export function CamBoxCanvas({
           <span className="cam-preview-empty">{failed ? emptyLabel : 'Carregando quadro…'}</span>
         )}
       </div>
-      <div className="cbc-readout mono">
-        x {Math.round(value.x * 100)}% · y {Math.round(value.y * 100)}% · {Math.round(value.w * 100)}×{Math.round(value.h * 100)}%
-      </div>
     </>
   )
 }
