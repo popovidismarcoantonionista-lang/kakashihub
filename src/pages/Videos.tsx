@@ -455,6 +455,9 @@ export function VideosPage() {
                   {source.error && (
                     <div className="src-error"><AlertTriangle size={13} /> {source.error}</div>
                   )}
+                  {!source.error && source.liveLastError && isLive && (
+                    <div className="src-error"><AlertTriangle size={13} /> {source.liveLastError}</div>
+                  )}
                   {isLive && camEditFor === source.id && <LiveCamEditor source={source} />}
                   <div className="src-actions">
                     <button className="btn btn-soft btn-sm" onClick={() => openStudio(source)} disabled={!clips.length}>

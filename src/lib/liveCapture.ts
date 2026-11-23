@@ -230,26 +230,36 @@ function writeCache(videoId: string, mirror: string, value: PlaylistRefs) {
 }
 
 async function resolvePlaylists(videoId: string, config: CaptureConfig): Promise<PlaylistRefs> {
-  const cached = readCache(videoId, config.mirror)
-  if (cached) return cached
-  try {
-    const apiUrl = `${mirrorBase(config.mirror)}/api/v1/videos/${encodeURIComponent(videoId)}?local=true`
-    const json = JSON.parse(await fetchText(apiUrl, config))
-    if (json?.liveNow === false) throw new Error('a transmissão saiu do ar')
-    const masterUrl = withLocal(normalizeUrl(json?.hlsUrl || '', config.mirror, `${mirrorBase(config.mirror)}/`))
-    if (!masterUrl) throw new Error('o espelho não devolveu HLS')
-    const tracks = parseMaster(await fetchText(masterUrl, config), masterUrl, config.mirror)
-    if (!tracks.video || !tracks.audio) throw new Error('o manifesto não trouxe vídeo e áudio')
-    const value = { at: Date.now(), masterUrl, ...tracks }
-    writeCache(videoId, config.mirror, value)
-    return value
-  } catch (error) {
-    // Em redes móveis o espelho pode falhar por alguns segundos; reaproveita
-    // o último manifesto conhecido em vez de perder a janela inteira.
-    const stale = readCache(videoId, config.mirror, true)
-    if (stale) return stale
-    throw error
+  const mirrors = [config.mirror, ...(config.mirrors || [])]
+    .map(mirrorBase)
+    .filter((m, i, arr) => m && arr.indexOf(m) === i)
+  let lastError: unknown = new Error('o espelho não devolveu HLS')
+  for (const mirror of mirrors) {
+    const cached = readCache(videoId, mirror)
+    if (cached) return cached
   }
+  for (const mirror of mirrors) {
+    try {
+      const apiUrl = `${mirror}/api/v1/videos/${encodeURIComponent(videoId)}?local=true`
+      const json = JSON.parse(await fetchText(apiUrl, config))
+      if (json?.liveNow === false) throw new Error('a transmissão saiu do ar')
+      const hlsRaw = json?.hlsUrl || json?.hls || ''
+      const masterUrl = withLocal(normalizeUrl(String(hlsRaw || ''), mirror, `${mirror}/`))
+      if (!masterUrl) throw new Error('o espelho não devolveu HLS')
+      const tracks = parseMaster(await fetchText(masterUrl, config), masterUrl, mirror)
+      if (!tracks.video || !tracks.audio) throw new Error('o manifesto não trouxe vídeo e áudio')
+      const value = { at: Date.now(), masterUrl, ...tracks }
+      writeCache(videoId, mirror, value)
+      return value
+    } catch (error) {
+      lastError = error
+    }
+  }
+  for (const mirror of mirrors) {
+    const stale = readCache(videoId, mirror, true)
+    if (stale) return stale
+  }
+  throw lastError
 }
 
 function concat(chunks: Uint8Array[]): Uint8Array<ArrayBuffer> {
@@ -455,8 +465,14 @@ export class LiveCaptureSession {
     this.busy = true
     try {
       await captureLiveWindowWithFallback(source, this.api, this.config)
-    } catch {
-      // Falhas de uma janela são silenciosas: a próxima tentativa já corrige.
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error || 'falha na captura')
+      try {
+        await this.api(`/api/live/${source.id}/capture-error`, {
+          method: 'POST',
+          body: JSON.stringify({ error: message.slice(0, 280) }),
+        })
+      } catch {}
     } finally {
       this.busy = false
     }

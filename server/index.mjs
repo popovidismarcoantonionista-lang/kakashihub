@@ -391,6 +391,19 @@ app.post('/api/live/:id/stop', (req, res) => {
   ok(res, { ok: true })
 })
 
+app.post('/api/live/:id/capture-error', (req, res) => {
+  const source = findSource(req.params.id)
+  if (!source) return fail(res, 404, 'Fonte não encontrada.')
+  if (source.mode !== 'live') return fail(res, 400, 'Esta fonte não é uma transmissão ao vivo.')
+  const message = String(req.body?.error || '').trim().slice(0, 300)
+  if (message) {
+    source.liveLastError = message
+    source.liveCheckedAt = new Date().toISOString()
+    save()
+  }
+  ok(res, { ok: true })
+})
+
 app.post('/api/live/:id/start', async (req, res) => {
   const source = findSource(req.params.id)
   if (!source) return fail(res, 404, 'Fonte não encontrada.')
