@@ -2153,7 +2153,7 @@ export async function captureLiveWindow(sourceId) {
       if (last && Date.now() - last > BROWSER_WINDOW_TIMEOUT) {
         return finishLiveStep(source, job, LIVE_TEXT.browserClosed)
       }
-      updateJob(job, { progress: 50, step: 'Aguardando a janela do navegador' })
+      updateJob(job, { progress: 50, step: 'Monitorando a transmissão' })
       source.liveLastError = null
       source.liveCheckedAt = new Date().toISOString()
       save()
