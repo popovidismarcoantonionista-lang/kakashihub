@@ -1897,7 +1897,7 @@ export async function runCompilation(compilationId, opts = {}) {
 const LIVE_DIR = path.join(MEDIA, 'live')
 fs.mkdirSync(LIVE_DIR, { recursive: true })
 
-const LIVE_WINDOW = Math.max(30, Number(process.env.FUGA_LIVE_WINDOW) || 60)
+const LIVE_WINDOW = Math.max(30, Number(process.env.FUGA_LIVE_WINDOW) || 30)
 const LIVE_MAX_CLIPS = 60
 const liveStops = new Map()
 // Resolver o stream é caro (yt-dlp + vários espelhos) e as URLs são assinadas.
