@@ -335,12 +335,17 @@ export function VideosPage() {
               ? source.status === 'ao-vivo' ? 'AO VIVO' : source.status === 'erro' ? 'ATENÇÃO' : source.status === 'pronto' ? 'ENCERRADA' : 'CONECTANDO'
               : source.status === 'pronto' ? 'PRONTA' : source.status === 'erro' ? 'ATENÇÃO' : 'ANALISANDO'
             const embed = isLive ? liveEmbed(source) : null
+            const liveThumb = isLive && !source.thumb && source.liveId
+              ? `https://i.ytimg.com/vi/${source.liveId}/hqdefault.jpg`
+              : source.thumb
             return (
               <article className={`source-card panel ${processing || source.status === 'ao-vivo' ? 'is-processing' : ''}`} key={source.id}>
-                <div className="src-thumb">
-                  <Cover src={source.thumb} alt={source.title} className="src-img" />
+                <div className={`src-thumb ${liveOn ? 'is-live' : ''}`}>
+                  {liveOn && !liveThumb ? <div className="src-img" /> : (
+                    <Cover src={liveThumb} alt={source.title} className="src-img" />
+                  )}
                   <div className="src-grad" />
-                  {processing && !isLive && (
+                  {(processing || liveOn) && (
                     <div className="src-loading" aria-hidden="true"><Logo size={44} className="src-spin" /></div>
                   )}
                   <span className={`src-badge ${source.status} ${isLive ? 'live' : ''}`}>{badge}</span>
