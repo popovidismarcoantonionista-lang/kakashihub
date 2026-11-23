@@ -51,8 +51,11 @@ function Boot() {
 function Wallpaper() {
   return (
     <div className="wallpaper" aria-hidden="true">
-      <video className="bg-video" autoPlay muted loop playsInline preload="auto" poster="/bg/kakashi-eyes.jpg">
+      <video className="bg-video bg-video-desktop" autoPlay muted loop playsInline preload="auto" poster="/bg/kakashi-eyes.jpg">
         <source src="/bg/kakashi-eyes.mp4" type="video/mp4" />
+      </video>
+      <video className="bg-video bg-video-mobile" autoPlay muted loop playsInline preload="auto" poster="/bg/kakashi-mobile.jpg">
+        <source src="/bg/kakashi-mobile.mp4" type="video/mp4" />
       </video>
       <img className="bg-still" src="/bg/kakashi-eyes.jpg" alt="" />
       <div className="bg-scrim" />
