@@ -2567,7 +2567,7 @@ export async function captureLiveWindow(sourceId) {
         : Date.now() - started > Math.max(90, LIVE_WINDOW + 30) * 1000
       if (browserStale) {
         // No Render, captura no servidor de YouTube é bloqueada por IP; mantém no navegador.
-        updateJob(job, { progress: 50, step: 'Reconectando captura da live' })
+        updateJob(job, { progress: 50, step: 'Monitorando a transmissão' })
         source.liveLastError = null
         source.liveCheckedAt = new Date().toISOString()
         save()
