@@ -236,9 +236,10 @@ async function readMirror(base, pathname, label, params) {
   const text = await res.text()
   let json = null
   try { json = JSON.parse(text) } catch {}
-  if (!res.ok) throw new Error(`${label}-${res.status}`)
-  if (!json || typeof json !== 'object') throw new Error(`${label}-invalid-json ${text.slice(0, 80)}`)
-  if (json.error) throw new Error(`${label}-error ${String(json.error).slice(0, 120)}`)
+  const host = new URL(base).host
+  if (!res.ok) throw new Error(`${label}-${res.status}@${host} ${text.slice(0, 80)}`)
+  if (!json || typeof json !== 'object') throw new Error(`${label}-invalid-json@${host} ${text.slice(0, 80)}`)
+  if (json.error) throw new Error(`${label}-error@${host} ${String(json.error).slice(0, 120)}`)
   return json
 }
 
@@ -312,6 +313,6 @@ export async function invidiousInfo(url) {
   const settled = await Promise.allSettled(attempts)
   const ok = settled.find((r) => r.status === 'fulfilled')
   if (ok) return ok.value
-  const first = settled.find((r) => r.status === 'rejected')
-  throw first?.reason || new Error('invidious-unavailable')
+  const reasons = settled.filter((r) => r.status === 'rejected').map((r) => String(r.reason?.message || r.reason))
+  throw new Error(`invidious-unavailable: ${[...new Set(reasons)].slice(0, 4).join(' | ')}`)
 }

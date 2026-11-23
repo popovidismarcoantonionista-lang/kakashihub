@@ -641,7 +641,7 @@ export function liveCapabilities() {
 }
 
 /** Evita vazar chaves de API em mensagens salvas em source.liveLastError. */
-function liveErrorText(error, limit = 300) {
+export function liveErrorText(error, limit = 300) {
   return String(error?.message || error)
     .replace(/([?&]key=)[^&\s]+/gi, '$1***')
     .replace(/(x-api-key|api-key)\s*[:=]\s*[^\s,;]+/gi, '$1=***')
@@ -1565,6 +1565,11 @@ fs.mkdirSync(LIVE_DIR, { recursive: true })
 const LIVE_WINDOW = Math.max(30, Number(process.env.FUGA_LIVE_WINDOW) || 60)
 const LIVE_MAX_CLIPS = 60
 const liveStops = new Map()
+// Resolver o stream é caro (yt-dlp + vários espelhos) e as URLs são assinadas.
+// Guardamos o resultado por alguns minutos para não repetir a busca a cada janela.
+const LIVE_STREAM_CACHE = new Map()
+const LIVE_STREAM_TTL = Math.max(60, Number(process.env.LIVE_STREAM_TTL_MS) || 5 * 60 * 1000)
+const LIVE_STREAM_RETRY_MS = Math.max(10, Number(process.env.LIVE_STREAM_RETRY_MS) || 60 * 1000)
 
 const LIVE_TEXT = {
   offline: 'Essa fonte não está ao vivo agora. Cole o link de uma transmissão em andamento…',
@@ -1686,8 +1691,44 @@ async function probeLive(url) {
   return inv.is_live ? liveFromMirror(inv) : null
 }
 
+function liveStreamCacheKey(url) {
+  const id = youtubeVideoId(url) || String(url || '')
+  return id
+}
+
+function rememberLiveStream(url, parts) {
+  if (LIVE_STREAM_CACHE.size > 40) {
+    const oldest = LIVE_STREAM_CACHE.keys().next().value
+    if (oldest) LIVE_STREAM_CACHE.delete(oldest)
+  }
+  LIVE_STREAM_CACHE.set(liveStreamCacheKey(url), { parts, expiresAt: Date.now() + LIVE_STREAM_TTL })
+}
+
 async function liveStreamParts(url) {
+  const key = liveStreamCacheKey(url)
+  const cached = LIVE_STREAM_CACHE.get(key)
+  if (cached && cached.expiresAt > Date.now()) {
+    if (cached.parts.length) return cached.parts
+    throw new Error(cached.error || 'stream indisponível')
+  }
+  try {
+    const parts = await resolveLiveStreamParts(url)
+    if (parts.length) rememberLiveStream(url, parts)
+    return parts
+  } catch (err) {
+    // Falha recente: evita martelar todos os espelhos a cada janela de 30s.
+    LIVE_STREAM_CACHE.set(key, {
+      parts: [],
+      expiresAt: Date.now() + LIVE_STREAM_RETRY_MS,
+      error: liveErrorText(err, 300),
+    })
+    throw err
+  }
+}
+
+async function resolveLiveStreamParts(url) {
   if (process.env.FUGA_LIVE_STREAM) return [process.env.FUGA_LIVE_STREAM]
+  const failures = []
   try {
     const { stdout } = await ytdlpLive([
       '-g', '-f', downloadFormat(sourceMaxHeight()).replace(/\[ext=mp4\]/g, ''),
@@ -1695,7 +1736,9 @@ async function liveStreamParts(url) {
     ], 1000 * 90)
     const parts = stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
     if (parts.length) return parts
+    failures.push(`yt-dlp: vazio`)
   } catch (err) {
+    failures.push(`yt-dlp: ${liveErrorText(err, 160)}`)
     if (!hasInvidious() && !hasCobalt()) throw err
     console.error('[live:yt-dlp-stream]', String(err?.message || err).slice(0, 300))
   }
@@ -1703,23 +1746,33 @@ async function liveStreamParts(url) {
     try {
       const resolved = await cobaltResolve(url, { quality: '720' })
       if (resolved.kind === 'hls' || resolved.kind === 'single') return [resolved.url]
+      failures.push(`cobalt: formato ${resolved.kind}`)
       console.error('[live:cobalt] formato não reproduzível em live:', resolved.kind)
     } catch (err) {
+      failures.push(`cobalt: ${liveErrorText(err, 160)}`)
       console.error('[live:cobalt]', String(err?.message || err).slice(0, 300))
     }
   }
-  if (!hasInvidious()) return []
+  if (!hasInvidious()) throw new Error(failures.join(' | ') || 'nenhum resolvedor configurado')
   let mirrorUrl = url
   if (isChannelUrl(url)) {
     const live = await youtubeLiveMeta(url)
     if (live?.sourceUrl) mirrorUrl = live.sourceUrl
   }
-  const inv = await invidiousInfo(mirrorUrl)
+  let inv
+  try {
+    inv = await invidiousInfo(mirrorUrl)
+  } catch (err) {
+    failures.push(`espelhos: ${liveErrorText(err, 220)}`)
+    throw new Error(failures.join(' | '))
+  }
   if (inv.hls) {
     console.log('[live:invidious] usando HLS do espelho público')
     return [inv.hls]
   }
-  return [inv.video, inv.audio].filter(Boolean)
+  const parts = [inv.video, inv.audio].filter(Boolean)
+  if (!parts.length) throw new Error(`${failures.join(' | ')} | espelhos: sem mídia`)
+  return parts
 }
 
 export async function getLiveHlsUrl(url) {

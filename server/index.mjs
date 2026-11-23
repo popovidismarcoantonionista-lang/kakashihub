@@ -19,7 +19,7 @@ import {
 import { deleteBlobMedia, getPrivateBlob } from './media-store.mjs'
 import {
   OUTPUT_SIZES, clipFrame, fetchChannelVideos, getLiveHlsUrl, isLiveRunning, liveCapabilities,
-  liveMediaFile, stopLive, uniqueClips,
+  liveErrorText, liveMediaFile, stopLive, uniqueClips,
 } from './pipeline.mjs'
 import { startLiveWorkflow, startProcessJob, startUploadWorkflow } from './jobs.mjs'
 import {
@@ -50,7 +50,7 @@ app.use('/covers', express.static(COVERS, { maxAge: 0 }))
 app.use('/media', express.static(MEDIA, { maxAge: 0 }))
 
 function ok(res, data = {}) { res.json(data) }
-function fail(res, status, message) { res.status(status).json({ error: message }) }
+function fail(res, status, message, extra) { res.status(status).json({ error: message, ...(extra || {}) }) }
 
 async function servePrivateMedia(req, res, next, prefix) {
   try {
@@ -400,7 +400,7 @@ app.get('/api/live/:id/hls', async (req, res) => {
     ok(res, { hlsUrl })
   } catch (e) {
     console.error('[live hls]', e?.message || e)
-    fail(res, 500, 'Erro ao obter stream da live.')
+    fail(res, 500, 'Erro ao obter stream da live.', { detail: liveErrorText(e, 400) })
   }
 })
 
