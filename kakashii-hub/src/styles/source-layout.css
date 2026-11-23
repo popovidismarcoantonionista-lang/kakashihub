@@ -617,16 +617,12 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 14px; heigh
 .ingest-steps > div svg { color: var(--violet-2); }
 .ingest-steps > i { display: none; }
 .toasts { position: fixed; right: 22px; bottom: 22px; z-index: 300; display: flex; flex-direction: column; gap: 8px; max-width: min(400px, -30px + 100vw); }
-.toast { display: flex; align-items: center; gap: 9px; padding: 11px 12px; border-radius: 10px; background: rgb(16, 21, 31); border-top-color: ; border-top-style: ; border-top-width: ; border-right-color: ; border-right-style: ; border-right-width: ; border-bottom-color: ; border-bottom-style: ; border-bottom-width: ; border-image-source: ; border-image-slice: ; border-image-width: ; border-image-outset: ; border-image-repeat: ; border-left: 2px solid var(--violet-2); box-shadow: rgba(0, 0, 0, 0.9) 0px 22px 50px -20px; font-size: 11.5px; color: var(--text); cursor: pointer; animation: 0.25s cubic-bezier(0.2, 0.7, 0.2, 1) 0s 1 normal both running toastIn; }
+.toast { display: flex; align-items: center; gap: 9px; padding: 11px 12px; border-radius: 10px; background: rgb(16, 21, 31); border-top-color: ; border-top-style: ; border-top-width: ; border-right-color: ; border-right-style: ; border-right-width: ; border-bottom-color: ; border-bottom-style: ; border-bottom-width: ; border-image-source: ; border-image-slice: ; border-image-width: ; border-image-outset: ; border-image-repeat: ; border-left: 2px solid var(--line-strong); box-shadow: rgba(0, 0, 0, 0.9) 0px 22px 50px -20px; font-size: 11.5px; color: var(--text); cursor: pointer; animation: 0.25s cubic-bezier(0.2, 0.7, 0.2, 1) 0s 1 normal both running toastIn; }
 @keyframes toastIn { 
   0% { opacity: 0; transform: translate(20px); }
   100% { opacity: 1; transform: none; }
 }
-.toast svg { flex: 0 0 auto; color: var(--violet-2); }
-.toast-success { border-left-color: var(--green); }
-.toast-success svg { color: var(--green); }
-.toast-error { border-left-color: var(--red); }
-.toast-error svg { color: var(--red); }
+.toast svg { flex: 0 0 auto; color: var(--text-2); }
 .toast span { flex: 1 1 0%; line-height: 1.45; }
 .toast-x { opacity: 0.4; }
 .empty { border: 1px dashed var(--line-strong); border-radius: 16px; padding: 48px 24px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.01); }

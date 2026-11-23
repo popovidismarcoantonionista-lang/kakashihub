@@ -636,7 +636,7 @@ function Index() {
       )}
       {notice && (
         <div className="toasts" role="status">
-          <div className="toast toast-error">
+          <div className="toast">
             <span>{notice}</span>
             <button className="btn-icon" aria-label="Fechar aviso" onClick={() => setNotice("")}>
               ×
