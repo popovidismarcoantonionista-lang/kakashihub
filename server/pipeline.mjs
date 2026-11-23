@@ -2269,7 +2269,7 @@ async function makeLiveClip(source, windowFile, span, session, index, captions =
     '-ss', span.start.toFixed(2), '-i', windowFile, '-t', (span.end - span.start).toFixed(2),
   ]
   try {
-    await run(FFMPEG_BIN, [...cutArgs, '-c', 'copy', '-bsf:a', 'aac_adtstoasc', '-movflags', '+faststart', outFile], { timeout: 1000 * 60 })
+    await run(FFMPEG_BIN, [...cutArgs, '-threads', '1', '-c', 'copy', '-bsf:a', 'aac_adtstoasc', '-movflags', '+faststart', outFile], { timeout: 1000 * 60 })
   } catch {}
   let size = 0
   try { size = fs.statSync(outFile).size } catch {}
@@ -2277,6 +2277,7 @@ async function makeLiveClip(source, windowFile, span, session, index, captions =
     try {
       await run(FFMPEG_BIN, [
         ...cutArgs,
+        '-threads', '1',
         '-vf', "scale='min(1280,iw)':-2,setsar=1,fps=30",
         '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '96k', '-ar', '48000', '-movflags', '+faststart',
@@ -2408,6 +2409,7 @@ async function processLiveWindowFile(sourceId, win, job) {
     if (winFile) { try { fs.rmSync(winFile, { force: true }) } catch {} }
     return { continue: false, status: 'removed' }
   }
+  try {
   const session = Math.max(0, Number(source.liveSession) || 0)
   const made = Number(source.liveMade) || 0
   const duration = await mediaDuration(winFile)
@@ -2421,13 +2423,7 @@ async function processLiveWindowFile(sourceId, win, job) {
 
   source.liveMisses = 0
   source.liveLastError = null
-  const level = await liveAudioLevel(winFile)
-  if (level) {
-    source.liveAudioLevel = level.mean
-    source.liveAudioPeak = level.peak
-    source.liveAudioSilent = level.silent
-    source.liveAudioAt = new Date().toISOString()
-  }
+  const level = null
   source.liveCaptions = captions.length
   if (captions.length) {
     source.liveCaptionLines = captions.slice(-12).map((cue) => ({
@@ -2438,7 +2434,11 @@ async function processLiveWindowFile(sourceId, win, job) {
   const settings = getState().settings || {}
   const min = Number(settings.clipMin) || 18
   const max = Number(settings.clipMax) || 38
-  const span = await loudSpan(winFile, min, max)
+  const maxSpan = Math.max(6, Math.min(max, duration - 1))
+  const minSpan = Math.max(6, Math.min(min, maxSpan))
+  const spanLen = Math.min(maxSpan, Math.max(minSpan, Math.min(20, duration - 1)))
+  const spanStart = Math.max(0, Math.min(duration - spanLen, 0.5))
+  const span = duration >= 6 ? { start: spanStart, end: Math.min(duration, spanStart + spanLen) } : null
   const lastEnd = Number(source.liveLastEnd) || -999
   if (span && session + span.start >= lastEnd + 6) {
     try {
@@ -2479,6 +2479,17 @@ async function processLiveWindowFile(sourceId, win, job) {
   try { fs.rmSync(winFile, { force: true }) } catch {}
   if ((Number(source.liveMade) || 0) >= LIVE_MAX_CLIPS) return finishLiveStep(source, job)
   return { continue: true }
+  } catch (e) {
+    console.error('[live window process]', e?.message || e)
+    try { fs.rmSync(winFile, { force: true }) } catch {}
+    const src = findSource(sourceId)
+    if (src) {
+      src.liveLastError = `record: ${liveErrorText(e, 160)}`
+      src.liveMisses = (Number(src.liveMisses) || 0) + 1
+      save()
+    }
+    return { continue: true }
+  }
 }
 
 export async function captureLiveWindow(sourceId) {
