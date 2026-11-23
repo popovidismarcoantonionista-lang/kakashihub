@@ -11,7 +11,6 @@ const SILENT_WAV = 'UklGRmQGAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YUAGAAAA
 export function LiveCapture() {
   const { state, api } = useApp()
   const [config, setConfig] = useState<CaptureConfig | null>(null)
-  const [statuses, setStatuses] = useState<Record<string, string>>({})
   const sessions = useRef(new Map<string, LiveCaptureSession>())
   const keepAlive = useRef<HTMLAudioElement | null>(null)
   const latest = useRef<Source[]>([])
@@ -46,11 +45,9 @@ export function LiveCapture() {
       wanted.add(source.id)
       if (sessions.current.has(source.id)) continue
       const session = new LiveCaptureSession(
-        source.id,
         () => latest.current.find((item) => item.id === source.id),
         api,
         config,
-        (id, message) => setStatuses((old) => ({ ...old, [id]: message })),
       )
       sessions.current.set(source.id, session)
       session.start()
@@ -59,11 +56,6 @@ export function LiveCapture() {
       if (wanted.has(id)) continue
       session.stop()
       sessions.current.delete(id)
-      setStatuses((old) => {
-        const next = { ...old }
-        delete next[id]
-        return next
-      })
     }
   }, [config, api, state?.sources])
 
@@ -93,13 +85,5 @@ export function LiveCapture() {
     keepAlive.current = null
   }, [])
 
-  const entries = Object.entries(statuses)
-  if (!entries.length) return null
-  return (
-    <div className="capture-status" title="Mantenha esta aba aberta para capturar a transmissão">
-      {entries.slice(0, 2).map(([id, message]) => (
-        <div key={id}><b>●</b> {message}</div>
-      ))}
-    </div>
-  )
+  return null
 }

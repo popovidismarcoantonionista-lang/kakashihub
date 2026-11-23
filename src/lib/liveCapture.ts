@@ -400,11 +400,9 @@ export class LiveCaptureSession {
   private wakeLock: WakeLockSentinelLike | null = null
 
   constructor(
-    private readonly sourceId: string,
     private readonly getSource: () => Source | undefined,
     private readonly api: Api,
     private readonly config: CaptureConfig,
-    private readonly onStatus: (sourceId: string, message: string) => void,
   ) {}
 
   start() {
@@ -457,10 +455,8 @@ export class LiveCaptureSession {
     this.busy = true
     try {
       await captureLiveWindowWithFallback(source, this.api, this.config)
-      // Sucesso é silencioso: o badge só aparece quando a captura falha.
-    } catch (error) {
-      const message = (error instanceof Error ? error.message : String(error)).slice(0, 140)
-      this.onStatus(this.sourceId, `Captura no navegador: ${message}`)
+    } catch {
+      // Falhas de uma janela são silenciosas: a próxima tentativa já corrige.
     } finally {
       this.busy = false
     }
