@@ -2295,16 +2295,9 @@ async function makeLiveClip(source, windowFile, span, session, index, captions =
   if (fs.existsSync(coverAbs)) {
     try { coverKey = await storeLocalFile(coverAbs, `covers/${clipId}.jpg`, 'image/jpeg') } catch {}
   }
-  // O ajuste manual feito enquanto a live roda tem precedência. A detecção
-  // automática só entra quando o usuário ainda não definiu a caixa — senão
-  // cada janela nova sobrescreveria o enquadramento escolhido no preview.
-  const spanSec = Math.max(1, span.end - span.start)
-  let camBox = source.cam ? { ...source.cam } : null
-  if (!camBox) {
-    camBox = await detectCamBox(outFile, Math.min(1.5, spanSec / 3))
-      || await detectCamBox(outFile, Math.min(spanSec - 0.2, spanSec / 2))
-      || { ...DEFAULT_CAM }
-  }
+  // O ajuste manual feito enquanto a live roda tem precedência. Na live, evita
+  // detecção pesada por clip para reduzir risco de crash no Render free.
+  let camBox = source.cam ? { ...source.cam } : { ...DEFAULT_CAM }
 
   const at = Math.round((session + span.start) * 10) / 10
   // Cues chegam em tempo relativo à janela; recorta os que caem no span e
