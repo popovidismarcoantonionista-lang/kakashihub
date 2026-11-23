@@ -1446,7 +1446,9 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
   .strip-card { flex-basis: 88px; }
   .cv-foot { gap: 12px; padding: 12px; }
   .tr-line em { white-space: normal; }
-  .trim-actions .btn { min-height: 40px; }
+  .trim-row .input { height: 40px; font-size: 16px; }
+  .trim-actions { flex-wrap: wrap; }
+  .trim-actions .btn { min-height: 40px; flex: 1 1 140px; }
   .approve-row { flex-wrap: wrap; }
 
   .pipeline-panel { padding: 14px 14px 16px; }
@@ -1522,7 +1524,7 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.02);
 }
-.cam-manual-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cam-manual-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .cam-manual-head .field-label { margin: 0; }
 .cam-preview {
   position: relative; margin: 10px 0; aspect-ratio: 16 / 9;
@@ -1541,10 +1543,11 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
   border: 1px solid #0b0f18; border-radius: 3px;
   background: #6ee7a0; touch-action: none;
 }
-.cbc-handle-nw { left: -2px; top: -2px; cursor: nwse-resize; }
-.cbc-handle-ne { right: -2px; top: -2px; cursor: nesw-resize; }
-.cbc-handle-sw { left: -2px; bottom: -2px; cursor: nesw-resize; }
-.cbc-handle-se { right: -2px; bottom: -2px; cursor: nwse-resize; }
+/* Dentro da caixa para não serem cortados pelo overflow:hidden do preview. */
+.cbc-handle-nw { left: 0; top: 0; cursor: nwse-resize; }
+.cbc-handle-ne { right: 0; top: 0; cursor: nesw-resize; }
+.cbc-handle-sw { left: 0; bottom: 0; cursor: nesw-resize; }
+.cbc-handle-se { right: 0; bottom: 0; cursor: nwse-resize; }
 .cbc-readout { margin: -4px 0 8px; font-size: 9px; color: var(--text-2); text-align: right; }
 .cam-hint { display: block; margin: 0 0 10px; font-size: 9.5px; color: var(--text-3); }
 .live-cam { border-color: rgba(110, 231, 160, 0.28); background: rgba(110, 231, 160, 0.04); }
@@ -1555,6 +1558,8 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
   font-family: var(--font-mono); font-size: 10px; color: var(--text-3);
 }
 @media (max-width: 480px) {
+  .cam-manual-head { flex-direction: column; align-items: stretch; }
+  .cam-manual-head .btn { width: 100%; justify-content: center; }
   .live-cam .cam-manual-head { flex-direction: column; align-items: flex-start; }
   .cbc-handle { width: 20px; height: 20px; }
 }
