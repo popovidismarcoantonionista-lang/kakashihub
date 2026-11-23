@@ -1788,6 +1788,10 @@ export function stopLive(sourceId) {
   const source = findSource(sourceId)
   if (!source || !isLiveRunning(sourceId)) return false
   source.liveStopRequested = true
+  // Atualiza já para a UI refletir no próximo refresh; o workflow termina em seguida.
+  source.status = 'pronto'
+  source.progress = 100
+  source.liveEndedAt = new Date().toISOString()
   const stop = liveStops.get(sourceId)
   if (stop) {
     stop.flag = true

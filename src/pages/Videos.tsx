@@ -216,10 +216,12 @@ export function VideosPage() {
     }
   }
 
-  const stopMonitoring = async (source: Source) => {    setLiveActing(source.id)
+  const stopMonitoring = async (source: Source) => {
+    setLiveActing(source.id)
     try {
       await api(`/api/live/${source.id}/stop`, { method: 'POST' })
     } catch (e: any) {
+      window.alert(e?.message || 'Não foi possível parar a live agora.')
     } finally {
       setLiveActing('')
     }

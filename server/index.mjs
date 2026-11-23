@@ -385,7 +385,8 @@ app.post('/api/live', async (req, res) => {
 app.post('/api/live/:id/stop', (req, res) => {
   const source = findSource(req.params.id)
   if (!source) return fail(res, 404, 'Fonte não encontrada.')
-  if (!isLiveRunning(source.id)) return fail(res, 409, 'Esta transmissão não está sendo monitorada.')
+  // Idempotente: se já parou, responde ok para o mobile não ficar sem feedback.
+  if (!isLiveRunning(source.id)) return ok(res, { ok: true, alreadyStopped: true })
   stopLive(source.id)
   ok(res, { ok: true })
 })
