@@ -39,6 +39,14 @@ function platformName(source: Source) {
   return 'YouTube'
 }
 
+function friendlyLiveError(message: string) {
+  const raw = String(message || '')
+  if (/hls|manifesto|espelho n[aã]o devolveu/i.test(raw)) return 'Reconectando a captura da live para gerar os cortes…'
+  if (/captura no navegador indispon/i.test(raw)) return 'Reconectando a captura da live para gerar os cortes…'
+  if (/timeout|timed? ?out/i.test(raw)) return 'A conexão com a live demorou. Tentando de novo…'
+  return 'Ajustando a captura da live. Os cortes voltam em instantes.'
+}
+
 function audioPercent(level?: number | null): number {
   if (level == null || !Number.isFinite(level)) return 0
   return Math.max(0, Math.min(100, Math.round(((level + 60) / 60) * 100)))
@@ -456,7 +464,7 @@ export function VideosPage() {
                     <div className="src-error"><AlertTriangle size={13} /> {source.error}</div>
                   )}
                   {!source.error && source.liveLastError && isLive && (
-                    <div className="src-error"><AlertTriangle size={13} /> {source.liveLastError}</div>
+                    <div className="src-error"><AlertTriangle size={13} /> {friendlyLiveError(source.liveLastError)}</div>
                   )}
                   {isLive && camEditFor === source.id && <LiveCamEditor source={source} />}
                   <div className="src-actions">
