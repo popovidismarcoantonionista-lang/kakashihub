@@ -92,7 +92,12 @@ app.get('/api/health', async (req, res) => {
       downloader = 'sem-resposta'
     }
   }
-  ok(res, { ok: true, downloader, live: liveCapabilities() })
+  ok(res, {
+    ok: true,
+    commit: process.env.RENDER_GIT_COMMIT || null,
+    downloader,
+    live: liveCapabilities(),
+  })
 })
 
 app.get('/api/radar', async (req, res) => {
