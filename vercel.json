@@ -3,7 +3,7 @@
   "services": {
     "app": {
       "root": ".",
-      "framework": "vite"
+      "framework": "nitro"
     },
     "downloader": {
       "root": "downloader",
