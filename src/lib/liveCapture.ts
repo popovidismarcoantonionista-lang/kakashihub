@@ -15,6 +15,9 @@ interface PlaylistRefs {
   audio: string
 }
 
+export interface CaptionCue { t: number; text: string }
+interface VttCue { start: number; end: number; text: string }
+
 const CACHE_KEY = 'kakashi:live-playlists:v1'
 const CACHE_TTL = 5 * 60 * 1000
 const SEGMENT_MARKER = '/playlist/index.m3u8'
@@ -96,6 +99,87 @@ function parseSegments(text: string, playlistUrl: string, mirror: string, max: n
     .map((line) => proxySegment(line, playlistUrl, mirror))
 }
 
+function timeToSec(raw: string): number | null {
+  const value = clean(raw)
+  const m = value.match(/(\d+):(\d{2}):(\d{2})[.,](\d{3})/) || value.match(/(\d+):(\d{2})[.,](\d{3})/)
+  if (!m) return null
+  return m.length === 5
+    ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(m[4]) / 1000
+    : Number(m[1]) * 60 + Number(m[2]) + Number(m[3]) / 1000
+}
+
+/** VTT do espelho: cues deduplicados, mesma ideia do parseVtt do servidor. */
+function parseVtt(raw: string): VttCue[] {
+  const cues: VttCue[] = []
+  for (const block of String(raw || '').replace(/\r/g, '').split(/\n\n+/)) {
+    const lines = block.split('\n').filter(Boolean)
+    const idx = lines.findIndex((line) => line.includes('-->'))
+    if (idx < 0) continue
+    const [from, to] = lines[idx].split('-->')
+    const start = timeToSec(from || '')
+    const end = timeToSec((to || '').split(/\s/)[0] || '')
+    if (start == null || end == null) continue
+    const text = lines.slice(idx + 1).join(' ')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (text.length > 1 && end - start > 0.5) cues.push({ start, end, text })
+  }
+  cues.sort((a, b) => a.start - b.start)
+  const out: VttCue[] = []
+  for (const cue of cues) {
+    const prev = out[out.length - 1]
+    if (prev && prev.text === cue.text) {
+      prev.end = Math.max(prev.end, cue.end)
+      continue
+    }
+    out.push({ ...cue })
+  }
+  return out
+}
+
+async function fetchCaptions(videoId: string, mirror: string): Promise<VttCue[]> {
+  try {
+    const base = mirrorBase(mirror)
+    const res = await fetch(`${base}/api/v1/captions/${encodeURIComponent(videoId)}`, { cache: 'no-store' })
+    if (!res.ok) return []
+    const json = await res.json()
+    const list = Array.isArray(json?.captions) ? json.captions : []
+    if (!list.length) return []
+    const track = list.find((c: any) => /^pt(?:-BR)?$/i.test(String(c.languageCode || '')))
+      || list.find((c: any) => /portugu/i.test(String(c.label || '')))
+      || list[0]
+    const url = normalizeUrl(String(track?.url || ''), mirror, `${base}/`)
+    if (!url) return []
+    return parseVtt(await fetchText(url))
+  } catch {
+    return []
+  }
+}
+
+/** Cues da ponta da live, já em tempo relativo à janela enviada. */
+function captionsForWindow(cues: VttCue[], seconds: number): CaptionCue[] {
+  if (!cues.length) return []
+  const edge = Math.max(...cues.map((cue) => cue.end))
+  const from = Math.max(0, edge - Math.max(5, seconds))
+  return cues
+    .filter((cue) => cue.end > from)
+    .slice(-80)
+    .map((cue) => ({ t: Math.round(Math.max(0, cue.start - from) * 10) / 10, text: cue.text.slice(0, 220) }))
+}
+
+function playlistDuration(text: string, max: number): number {
+  const seconds = Array.from(text.matchAll(/#EXTINF:([\d.]+)/g))
+    .map((m) => Number(m[1]))
+    .filter((value) => Number.isFinite(value))
+    .slice(-max)
+  return seconds.reduce((sum, value) => sum + value, 0)
+}
+
 function cacheKey(videoId: string, mirror: string) {
   return `${CACHE_KEY}:${mirrorBase(mirror)}:${videoId}`
 }
@@ -159,31 +243,40 @@ async function fetchSegments(urls: string[]): Promise<Uint8Array<ArrayBuffer>> {
   return concat(chunks)
 }
 
-function packWindow(video: Uint8Array<ArrayBuffer>, audio: Uint8Array<ArrayBuffer>): Blob {
-  const header = new Uint8Array(13)
-  header.set(new TextEncoder().encode('LWIN'), 0)
-  header[4] = 1
+/** v2 = vídeo.ts + áudio.ts + JSON de legendas; o servidor ainda aceita v1. */
+function packWindow(video: Uint8Array<ArrayBuffer>, audio: Uint8Array<ArrayBuffer>, captions: CaptionCue[]): Blob {
+  const encoder = new TextEncoder()
+  const json = encoder.encode(JSON.stringify(captions.slice(0, 80)))
+  const header = new Uint8Array(17)
+  header.set(encoder.encode('LWIN'), 0)
+  header[4] = 2
   const view = new DataView(header.buffer)
   view.setUint32(5, video.length, false)
   view.setUint32(9, audio.length, false)
-  return new Blob([header, video, audio], { type: 'application/octet-stream' })
+  view.setUint32(13, json.length, false)
+  return new Blob([header, video, audio, json], { type: 'application/octet-stream' })
 }
 
 export async function captureLiveWindow(source: Source, api: Api, config: CaptureConfig): Promise<void> {
   const id = source.liveId || youtubeId(source.url || '')
   if (!id) throw new Error('link de YouTube inválido')
   const refs = await resolvePlaylists(id, config)
-  const [videoList, audioList] = await Promise.all([
-    fetchText(withLocal(refs.video)).then((text) => parseSegments(text, refs.video, config.mirror, config.maxSegments)),
-    fetchText(withLocal(refs.audio)).then((text) => parseSegments(text, refs.audio, config.mirror, config.maxSegments)),
+  const [videoText, audioText, cues] = await Promise.all([
+    fetchText(withLocal(refs.video)),
+    fetchText(withLocal(refs.audio)),
+    fetchCaptions(id, config.mirror),
   ])
+  const videoList = parseSegments(videoText, refs.video, config.mirror, config.maxSegments)
+  const audioList = parseSegments(audioText, refs.audio, config.mirror, config.maxSegments)
   if (!videoList.length || !audioList.length) throw new Error('playlist sem segmentos')
   const [video, audio] = await Promise.all([fetchSegments(videoList), fetchSegments(audioList)])
   if (video.length < 1024 || audio.length < 1024) throw new Error('janela vazia')
+  const seconds = playlistDuration(videoText, config.maxSegments) || config.windowSeconds
+  const captions = captionsForWindow(cues, seconds)
   await api(`/api/live/${source.id}/window`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/octet-stream' },
-    body: packWindow(video, audio),
+    body: packWindow(video, audio, captions),
   })
 }
 

@@ -37,6 +37,11 @@ function platformName(source: Source) {
   return 'YouTube'
 }
 
+function audioPercent(level?: number | null): number {
+  if (level == null || !Number.isFinite(level)) return 0
+  return Math.max(0, Math.min(100, Math.round(((level + 60) / 60) * 100)))
+}
+
 function liveEmbed(source: Source): string | null {
   const host = window.location.hostname
   const origin = window.location.origin
@@ -359,6 +364,17 @@ export function VideosPage() {
                       {source.status === 'ao-vivo'
                         ? <div className="live-bar"><i /></div>
                         : <ProgressBar value={source.progress} animated />}
+                      {source.status === 'ao-vivo' && source.liveAudioAt && (
+                        <div className="live-audio">
+                          <span className="mono">{source.liveAudioLevel == null ? 'áudio —' : `áudio ${source.liveAudioLevel} dB`}</span>
+                          <div className="live-audio-track">
+                            <i
+                              className={source.liveAudioSilent ? 'is-silent' : ''}
+                              style={{ width: `${audioPercent(source.liveAudioLevel)}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -371,6 +387,7 @@ export function VideosPage() {
                   <h3>{source.title}</h3>
                   <div className="src-meta">
                     <span className="mono">{clips.length} cortes</span>
+                    {isLive && typeof source.liveCaptions === 'number' && <><i /><span className="mono">{source.liveCaptions} falas</span></>}
                     <i />
                     <span className="mono">{isLive && source.status === 'ao-vivo' && source.liveStartedAt
                       ? `monitorando ${relTime(source.liveStartedAt)}`

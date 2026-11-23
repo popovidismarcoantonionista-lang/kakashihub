@@ -592,6 +592,10 @@ h1, h2, h3 { font-weight: 600; }
 .live-bar { position: relative; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
 .live-bar i { position: absolute; top: 0; bottom: 0; width: 38%; background: linear-gradient(90deg, transparent, #ff4d5e, transparent); animation: liveSweep 1.5s linear infinite; }
 @keyframes liveSweep { from { transform: translateX(-110%); } to { transform: translateX(300%); } }
+.live-audio { display: flex; align-items: center; gap: 8px; margin-top: 7px; font-size: 8px; color: rgba(255, 255, 255, 0.72); }
+.live-audio-track { position: relative; flex: 1; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+.live-audio-track i { position: absolute; inset: 0 auto 0 0; border-radius: 2px; background: linear-gradient(90deg, #7c5cff, #c08cff); transition: width 0.5s ease; }
+.live-audio-track i.is-silent { background: rgba(255, 255, 255, 0.28); }
 .src-dur { position: absolute; right: 10px; bottom: 10px; font-size: 8px; color: #fff; background: rgba(8, 5, 15, 0.7); border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 4px; padding: 2px 5px; }
 .src-progress { position: absolute; left: 12px; right: 12px; bottom: 11px; background: rgba(8, 5, 15, 0.72); backdrop-filter: blur(8px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 8px 10px; }
 .sp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }

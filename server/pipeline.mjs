@@ -1639,6 +1639,30 @@ async function mediaDuration(file) {
   try { return (await probe(file)).duration || 0 } catch { return 0 }
 }
 
+/** Nível de áudio da janela, sem decodizar vídeo: usado pelo medidor da live. */
+async function liveAudioLevel(file) {
+  let log = ''
+  try {
+    await run(FFMPEG_BIN, [
+      '-hide_banner', '-nostats', '-i', file, '-vn',
+      '-af', 'volumedetect', '-f', 'null', '-',
+    ], {
+      timeout: 1000 * 60,
+      onStderr: (chunk) => { if (log.length < 20000) log += chunk },
+    })
+  } catch (error) {
+    log = String(error?.stderr || log)
+  }
+  const mean = Number(log.match(/mean_volume:\s*(-?[\d.]+) dB/)?.[1])
+  const peak = Number(log.match(/max_volume:\s*(-?[\d.]+) dB/)?.[1])
+  if (!Number.isFinite(mean)) return null
+  return {
+    mean: Math.round(mean * 10) / 10,
+    peak: Number.isFinite(peak) ? Math.round(peak * 10) / 10 : null,
+    silent: mean <= -45,
+  }
+}
+
 function liveFromMirror(inv) {
   return {
     title: inv.title || 'Transmissão ao vivo',
@@ -1885,7 +1909,7 @@ function liveClipType(cfg, index) {
   return types[index % types.length]
 }
 
-async function makeLiveClip(source, windowFile, span, session, index) {
+async function makeLiveClip(source, windowFile, span, session, index, captions = []) {
   const state = getState()
   const settings = state.settings || {}
   const cfg = nicheConfig(state)
@@ -1925,12 +1949,23 @@ async function makeLiveClip(source, windowFile, span, session, index) {
     try { coverKey = await storeLocalFile(coverAbs, `covers/${clipId}.jpg`, 'image/jpeg') } catch {}
   }
   const at = Math.round((session + span.start) * 10) / 10
-  const type = liveClipType(cfg, index)
+  // Cues chegam em tempo relativo à janela; recorta os que caem no span e
+  // reancora no início do corte, igual ao captionLines dos vídeos.
+  const clipCues = captions
+    .filter((cue) => Number(cue?.t) <= span.end && Number(cue?.t) + 6 >= span.start)
+    .map((cue) => ({ t: Math.round((Number(cue.t) - span.start) * 10) / 10, text: String(cue.text || '') }))
+    .filter((cue) => cue.text && cue.t > -6)
+  const speech = clipCues.map((cue) => cue.text).join(' ')
+  const spokenType = clipCues.length ? classify(speech, cfg) : 'momento'
+  const type = spokenType !== 'momento' ? spokenType : liveClipType(cfg, index)
+  const description = clipCues.length
+    ? speech.replace(/\s+/g, ' ').trim().slice(0, 220)
+    : `Cortado ao vivo · ${liveStamp(session + span.start)} da transmissão`
   const clip = {
     id: clipId,
     sourceId: source.id,
     niche: settings.niche === 'games' ? 'games' : 'fuga',
-    hook: pickHook(type, [], `${source.id}-${index}`, cfg),
+    hook: pickHook(type, clipCues, `${source.id}-${index}`, cfg),
     type,
     start: at,
     end: Math.round((session + span.end) * 10) / 10,
@@ -1940,8 +1975,11 @@ async function makeLiveClip(source, windowFile, span, session, index) {
     framingBias: 0.5,
     cover: fs.existsSync(coverAbs) ? `/covers/${clipId}.jpg` : '',
     hashtags: cfg.hashtags[type] || cfg.hashtags.momento || [],
-    captionLines: [],
-    description: `Cortado ao vivo · ${liveStamp(session + span.start)} da transmissão`,
+    captionLines: clipCues
+      .filter((cue) => cue.t >= -1)
+      .map((cue) => ({ t: Math.max(0, cue.t), text: cue.text.slice(0, 220) }))
+      .slice(0, 60),
+    description,
     media: `/media/live/${clipId}.mp4`,
     mediaKey,
     coverKey,
@@ -1969,7 +2007,7 @@ function finishLiveStep(source, job, error = null) {
 }
 
 /** Recebe vídeo e áudio .ts capturados no navegador e monta uma janela muxada. */
-export async function queueBrowserLiveWindow(sourceId, video, audio) {
+export async function queueBrowserLiveWindow(sourceId, video, audio, captions = []) {
   if (!Buffer.isBuffer(video) || !Buffer.isBuffer(audio)) throw new Error('janela inválida')
   if (video.length < 1024 || audio.length < 1024) throw new Error('janela vazia')
   const stamp = `${sourceId}-${Date.now()}`
@@ -1988,7 +2026,7 @@ export async function queueBrowserLiveWindow(sourceId, video, audio) {
     if (size < 1024 * 20) throw new Error('janela muxada vazia')
     const previous = browserLiveWindows.get(sourceId)
     if (previous) { try { fs.rmSync(previous.file, { force: true }) } catch {} }
-    browserLiveWindows.set(sourceId, { file: out, at: Date.now() })
+    browserLiveWindows.set(sourceId, { file: out, at: Date.now(), captions: Array.isArray(captions) ? captions : [] })
     return { bytes: size }
   } finally {
     fs.rmSync(vFile, { force: true })
@@ -2005,22 +2043,25 @@ export function takeBrowserLiveWindow(sourceId) {
     try { fs.rmSync(entry.file, { force: true }) } catch {}
     return null
   }
-  return entry.file
+  return { file: entry.file, captions: entry.captions || [] }
 }
 
 /** Processa uma janela já gravada (servidor ou navegador) e atualiza a fonte. */
 async function processLiveWindowFile(sourceId, win, job) {
+  // Navegador entrega { file, captions }; captura no servidor entrega o caminho.
+  const winFile = typeof win === 'string' ? win : win?.file
+  const captions = win && typeof win === 'object' && Array.isArray(win.captions) ? win.captions : []
   let source = findSource(sourceId)
-  if (!source) {
-    try { fs.rmSync(win, { force: true }) } catch {}
+  if (!source || !winFile) {
+    if (winFile) { try { fs.rmSync(winFile, { force: true }) } catch {} }
     return { continue: false, status: 'removed' }
   }
   const session = Math.max(0, Number(source.liveSession) || 0)
   const made = Number(source.liveMade) || 0
-  const duration = await mediaDuration(win)
+  const duration = await mediaDuration(winFile)
   if (!duration || duration < 6) {
     source.liveLastError = `record: janela curta ou vazia (${Math.round(duration)}s)`
-    try { fs.rmSync(win, { force: true }) } catch {}
+    try { fs.rmSync(winFile, { force: true }) } catch {}
     source.liveMisses = (Number(source.liveMisses) || 0) + 1
     save()
     return { continue: true }
@@ -2028,20 +2069,32 @@ async function processLiveWindowFile(sourceId, win, job) {
 
   source.liveMisses = 0
   source.liveLastError = null
+  const level = await liveAudioLevel(winFile)
+  if (level) {
+    source.liveAudioLevel = level.mean
+    source.liveAudioPeak = level.peak
+    source.liveAudioSilent = level.silent
+    source.liveAudioAt = new Date().toISOString()
+  }
+  source.liveCaptions = captions.length
   const settings = getState().settings || {}
   const min = Number(settings.clipMin) || 18
   const max = Number(settings.clipMax) || 38
-  const span = await loudSpan(win, min, max)
+  const span = await loudSpan(winFile, min, max)
   const lastEnd = Number(source.liveLastEnd) || -999
   if (span && session + span.start >= lastEnd + 6) {
     try {
-      const clip = await makeLiveClip(source, win, span, session, (Number(source.livePriorClips) || 0) + made + 1)
+      const clip = await makeLiveClip(
+        source, winFile, span, session, (Number(source.livePriorClips) || 0) + made + 1, captions,
+      )
       source.liveMade = made + 1
       source.liveLastEnd = clip.end
       source.clips = getState().clips.filter((item) => item.sourceId === sourceId).length
       source.lastClipAt = new Date().toISOString()
       addActivity('agent', `Novo corte da live: "${clip.hook}"`)
-      updateJob(job, { step: `Ao vivo · ${liveStamp(session + duration)} · ${source.liveMade} cortes no acervo` })
+      updateJob(job, {
+        step: `Ao vivo · ${liveStamp(session + duration)} · ${source.liveMade} cortes no acervo${level ? ` · áudio ${level.mean} dB` : ''}`,
+      })
     } catch (error) {
       console.error('[live] makeLiveClip error:', error?.message || error)
     }
@@ -2049,7 +2102,7 @@ async function processLiveWindowFile(sourceId, win, job) {
 
   source = findSource(sourceId)
   if (!source) {
-    try { fs.rmSync(win, { force: true }) } catch {}
+    try { fs.rmSync(winFile, { force: true }) } catch {}
     return { continue: false, status: 'removed' }
   }
   source.liveSession = session + duration
@@ -2059,13 +2112,13 @@ async function processLiveWindowFile(sourceId, win, job) {
   if (!source.thumb) {
     const thumbAbs = path.join(COVERS, `src-${sourceId}.jpg`)
     try {
-      await extractWide(win, Math.min(5, duration / 3), thumbAbs)
+      await extractWide(winFile, Math.min(5, duration / 3), thumbAbs)
       source.thumb = `/covers/src-${sourceId}.jpg`
       source.thumbKey = await storeLocalFile(thumbAbs, `covers/src-${sourceId}.jpg`, 'image/jpeg')
     } catch {}
   }
   save()
-  try { fs.rmSync(win, { force: true }) } catch {}
+  try { fs.rmSync(winFile, { force: true }) } catch {}
   if ((Number(source.liveMade) || 0) >= LIVE_MAX_CLIPS) return finishLiveStep(source, job)
   return { continue: true }
 }

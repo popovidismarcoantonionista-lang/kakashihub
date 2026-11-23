@@ -405,14 +405,34 @@ app.post('/api/live/:id/window', express.raw({ type: 'application/octet-stream',
   if (source.captureMode !== 'browser') return fail(res, 400, 'Esta fonte não usa captura no navegador.')
   const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)
   if (body.length < 13 || body.toString('ascii', 0, 4) !== 'LWIN') return fail(res, 400, 'Janela inválida.')
+  const version = body[4]
   const videoLen = body.readUInt32BE(5)
   const audioLen = body.readUInt32BE(9)
-  if (videoLen + audioLen + 13 !== body.length) return fail(res, 400, 'Janela incompleta.')
+  let captions = []
+  let offset = 13
+  if (version >= 2) {
+    if (body.length < 17) return fail(res, 400, 'Janela inválida.')
+    const captionsLen = body.readUInt32BE(13)
+    offset = 17
+    if (videoLen + audioLen + captionsLen + offset !== body.length) return fail(res, 400, 'Janela incompleta.')
+    try {
+      const parsed = JSON.parse(body.toString('utf8', offset + videoLen + audioLen))
+      if (Array.isArray(parsed)) {
+        captions = parsed.slice(0, 80).map((cue) => ({
+          t: Math.max(0, Number(cue?.t) || 0),
+          text: String(cue?.text || '').slice(0, 220),
+        })).filter((cue) => cue.text)
+      }
+    } catch {}
+  } else if (videoLen + audioLen + offset !== body.length) {
+    return fail(res, 400, 'Janela incompleta.')
+  }
   try {
     const result = await queueBrowserLiveWindow(
       source.id,
-      body.subarray(13, 13 + videoLen),
-      body.subarray(13 + videoLen),
+      body.subarray(offset, offset + videoLen),
+      body.subarray(offset + videoLen, offset + videoLen + audioLen),
+      captions,
     )
     source.liveCaptureLastAt = Date.now()
     source.liveLastError = null

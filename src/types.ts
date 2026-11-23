@@ -42,6 +42,11 @@ export interface Source {
   captureMode?: 'browser' | 'server'
   liveCaptureLastAt?: number
   liveLastError?: string | null
+  liveAudioLevel?: number | null
+  liveAudioPeak?: number | null
+  liveAudioSilent?: boolean
+  liveAudioAt?: string
+  liveCaptions?: number
 }
 
 export interface CaptionLine {
