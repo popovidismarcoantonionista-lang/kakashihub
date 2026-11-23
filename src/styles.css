@@ -1517,3 +1517,30 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
   .clip-thumb { aspect-ratio: 9 / 13; }
   .tab { font-size: 7px; }
 }
+
+/* Ajuste manual da caixa da webcam no split */
+.cam-manual {
+  margin: 12px 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.cam-manual-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cam-manual-head .field-label { margin: 0; }
+.cam-preview {
+  position: relative; margin: 10px 0; aspect-ratio: 16 / 9;
+  overflow: hidden; border-radius: 8px; background: #000;
+}
+.cam-preview img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0.85; }
+.cam-preview-box {
+  position: absolute; border: 2px solid #6ee7a0;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35); pointer-events: none;
+}
+.cam-sliders { display: grid; gap: 7px; margin-bottom: 10px; }
+.cam-sliders label {
+  display: grid; grid-template-columns: 74px 1fr 36px;
+  align-items: center; gap: 8px; font-size: 11px; color: var(--text-3);
+}
+.cam-sliders input[type='range'] { width: 100%; accent-color: #6ee7a0; }
+.cam-sliders b { text-align: right; font-size: 10px; color: var(--text-2); }

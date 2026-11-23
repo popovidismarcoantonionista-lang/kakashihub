@@ -14,10 +14,19 @@ export function LiveCapture() {
 
   useEffect(() => {
     let alive = true
-    fetch('/api/live/capture-config')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((value) => { if (alive && value?.mirror) setConfig(value) })
-      .catch(() => {})
+    const load = async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const res = await fetch('/api/live/capture-config', { cache: 'no-store' })
+          if (res.ok) {
+            const value = await res.json()
+            if (alive && value?.mirror) { setConfig(value); return }
+          }
+        } catch {}
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 800))
+      }
+    }
+    void load()
     return () => { alive = false }
   }, [])
 

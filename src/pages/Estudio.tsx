@@ -18,6 +18,8 @@ const FRAMING_LABEL: Record<string, string> = {
   direita: 'Fundo à direita',
 }
 
+const DEFAULT_CAM: CamBox = { x: 0.68, y: 0.02, w: 0.3, h: 0.36 }
+
 export function EstudioPage() {
   const { state, api } = useApp()
   const route = useRoute()
@@ -40,12 +42,18 @@ export function EstudioPage() {
   const [cutEnd, setCutEnd] = useState('')
   const [trimming, setTrimming] = useState(false)
   const [savedFlash, setSavedFlash] = useState(false)
+  const [camDraft, setCamDraft] = useState<CamBox>(DEFAULT_CAM)
+  const [camBusy, setCamBusy] = useState(false)
   const autoCamDone = useRef<Set<string>>(new Set())
   const games = state?.settings?.niche === 'games'
 
   useEffect(() => {
     setHook(clip?.hook || '')
   }, [clip?.id, clip?.hook])
+
+  useEffect(() => {
+    setCamDraft({ ...(clip?.cam || source?.cam || DEFAULT_CAM) })
+  }, [clip?.id, clip?.cam, source?.cam])
 
   useEffect(() => {
     setCutStart('0')
@@ -71,6 +79,36 @@ export function EstudioPage() {
       setSavedFlash(true)
       setTimeout(() => setSavedFlash(false), 1400)
     } catch (e: any) {
+    }
+  }
+
+  const applyCamManual = async () => {
+    if (!clip) return
+    setCamBusy(true)
+    try {
+      await api(`/api/clips/${clip.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ cam: camDraft, framing: 'cam' }),
+      })
+      await api(`/api/sources/${source?.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ cam: camDraft, applyCam: true }),
+      })
+      setSavedFlash(true)
+      setTimeout(() => setSavedFlash(false), 1400)
+    } catch {} finally {
+      setCamBusy(false)
+    }
+  }
+
+  const redetectCam = async () => {
+    if (!clip) return
+    setCamBusy(true)
+    try {
+      const box = await autoCamBox(clip.id)
+      if (box) setCamDraft(box)
+    } catch {} finally {
+      setCamBusy(false)
     }
   }
 
@@ -211,6 +249,53 @@ export function EstudioPage() {
                     {f === 'auto' ? 'Auto' : f === 'preencher' ? 'Fundo' : f === 'esquerda' ? 'Esq.' : f === 'direita' ? 'Dir.' : f === 'cam' ? 'Split' : 'Centro'}
                   </button>
                 ))}
+              </div>
+            )}
+
+            {clip.framing === 'cam' && (
+              <div className="cam-manual">
+                <div className="cam-manual-head">
+                  <span className="field-label">Caixa da webcam</span>
+                  <button type="button" className="btn btn-ghost btn-sm" disabled={camBusy} onClick={redetectCam}>
+                    {camBusy ? '…' : 'Detectar de novo'}
+                  </button>
+                </div>
+                <div className="cam-preview">
+                  <img src={`/api/clips/${clip.id}/frame?t=${Date.now()}`} alt="Quadro do corte" />
+                  <span
+                    className="cam-preview-box"
+                    style={{
+                      left: `${camDraft.x * 100}%`,
+                      top: `${camDraft.y * 100}%`,
+                      width: `${camDraft.w * 100}%`,
+                      height: `${camDraft.h * 100}%`,
+                    }}
+                  />
+                </div>
+                <div className="cam-sliders">
+                  {([
+                    ['x', 'Horizontal', 0],
+                    ['y', 'Vertical', 0],
+                    ['w', 'Largura', 0.08],
+                    ['h', 'Altura', 0.08],
+                  ] as const).map(([key, label, min]) => (
+                    <label key={key}>
+                      <span>{label}</span>
+                      <input
+                        type="range"
+                        min={min}
+                        max={key === 'x' ? 1 - camDraft.w : key === 'y' ? 1 - camDraft.h : 1}
+                        step="0.01"
+                        value={camDraft[key]}
+                        onChange={(e) => setCamDraft((old) => ({ ...old, [key]: Number(e.target.value) }))}
+                      />
+                      <b className="mono">{Math.round(camDraft[key] * 100)}%</b>
+                    </label>
+                  ))}
+                </div>
+                <button type="button" className="btn btn-primary btn-sm w-full" disabled={camBusy} onClick={applyCamManual}>
+                  Aplicar caixa ao corte
+                </button>
               </div>
             )}
 

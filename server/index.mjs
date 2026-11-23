@@ -327,7 +327,10 @@ app.patch('/api/sources/:id', (req, res) => {
     }
   }
   if (body.applyCam && source.cam) {
-    for (const clip of state.clips.filter((c) => c.sourceId === source.id)) clip.framing = 'cam'
+    for (const clip of state.clips.filter((c) => c.sourceId === source.id)) {
+      clip.framing = 'cam'
+      clip.cam = { ...source.cam }
+    }
   }
   save()
   ok(res, { source })
@@ -670,6 +673,20 @@ app.patch('/api/clips/:id', (req, res) => {
   const allowed = ['hook', 'type', 'start', 'end', 'stage', 'framing', 'hashtags', 'description', 'captionLines']
   for (const key of allowed) {
     if (req.body[key] !== undefined) clip[key] = req.body[key]
+  }
+  if (req.body.cam) {
+    const num = (v, lo, hi, d) => {
+      const n = Number(v)
+      return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d
+    }
+    const w = num(req.body.cam.w, 0.08, 1, 0.3)
+    const h = num(req.body.cam.h, 0.08, 1, 0.42)
+    clip.cam = {
+      w: +w.toFixed(4),
+      h: +h.toFixed(4),
+      x: +num(req.body.cam.x, 0, 1 - w, 0.02).toFixed(4),
+      y: +num(req.body.cam.y, 0, 1 - h, 0.5).toFixed(4),
+    }
   }
   if (state.settings?.niche === 'games') clip.framing = 'cam'
   if (req.body.stage) {

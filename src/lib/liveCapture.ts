@@ -4,6 +4,7 @@ export interface CaptureConfig {
   mirror: string
   mirrors?: string[]
   relay?: string
+  useRelay?: boolean
   windowSeconds: number
   maxSegments: number
 }
@@ -31,7 +32,7 @@ const withLocal = (url: string) => `${url}${url.includes('?') ? '&' : '?'}local=
 
 /** No mobile, busca o HLS pela mesma origem para evitar CORS/rede do espelho. */
 function relayUrl(url: string, config?: CaptureConfig): string {
-  if (!config?.relay) return url
+  if (!config?.relay || config.useRelay === false) return url
   try {
     const parsed = new URL(url, window.location.href)
     if (parsed.protocol !== 'https:') return url
@@ -302,9 +303,12 @@ function packWindow(video: Uint8Array<ArrayBuffer>, audio: Uint8Array<ArrayBuffe
   return new Blob([header, video, audio, json], { type: 'application/octet-stream' })
 }
 
-function failure(stage: string, error: unknown): Error {
+function failure(stage: string, error: unknown, config: CaptureConfig): Error {
   const message = error instanceof Error ? error.message : String(error)
-  return new Error(`${stage}: ${message}`)
+  let host = ''
+  try { host = new URL(config.mirror).hostname } catch {}
+  const mode = config.useRelay ? 'relay' : 'direto'
+  return new Error(`${stage} (${host}/${mode}): ${message}`)
 }
 
 export async function captureLiveWindow(source: Source, api: Api, config: CaptureConfig): Promise<void> {
@@ -314,7 +318,7 @@ export async function captureLiveWindow(source: Source, api: Api, config: Captur
   try {
     refs = await resolvePlaylists(id, config)
   } catch (error) {
-    throw failure('manifesto', error)
+    throw failure('manifesto', error, config)
   }
   let videoText: string
   let audioText: string
@@ -326,7 +330,7 @@ export async function captureLiveWindow(source: Source, api: Api, config: Captur
       fetchCaptions(id, config.mirror, config),
     ])
   } catch (error) {
-    throw failure('playlist', error)
+    throw failure('playlist', error, config)
   }
   const videoList = parseSegments(videoText, refs.video, config.mirror, config.maxSegments)
   const audioList = parseSegments(audioText, refs.audio, config.mirror, config.maxSegments)
@@ -336,7 +340,7 @@ export async function captureLiveWindow(source: Source, api: Api, config: Captur
   try {
     [video, audio] = await Promise.all([fetchSegments(videoList, config), fetchSegments(audioList, config)])
   } catch (error) {
-    throw failure('segmentos', error)
+    throw failure('segmentos', error, config)
   }
   if (video.length < 1024 || audio.length < 1024) throw new Error('segmentos: janela vazia')
   const seconds = playlistDuration(videoText, config.maxSegments) || config.windowSeconds
@@ -348,24 +352,37 @@ export async function captureLiveWindow(source: Source, api: Api, config: Captur
       body: packWindow(video, audio, captions),
     })
   } catch (error) {
-    throw failure('envio', error)
+    throw failure('envio', error, config)
   }
 }
 
-/** Tenta o espelho principal e até dois alternativos antes de desistir da janela. */
+/**
+ * No celular o acesso direto ao espelho é o que funciona (o relay sai pelo IP
+ * do Render, bloqueado nas rotas dinâmicas). Tenta direto primeiro e só usa o
+ * relay se a rede local bloquear o espelho.
+ */
 export async function captureLiveWindowWithFallback(
   source: Source,
   api: Api,
   config: CaptureConfig,
 ): Promise<void> {
-  const mirrors = [...new Set([config.mirror, ...(config.mirrors || [])])].filter(Boolean).slice(0, 3)
+  const mirrors = [...new Set([config.mirror, ...(config.mirrors || [])])].filter(Boolean).slice(0, 2)
   let last: unknown = new Error('sem espelhos disponíveis')
-  for (const mirror of mirrors) {
+  const attempt = async (mirror: string, useRelay: boolean) => {
     try {
-      await captureLiveWindow(source, api, { ...config, mirror })
-      return
+      await captureLiveWindow(source, api, { ...config, mirror, useRelay })
+      return true
     } catch (error) {
       last = error
+      return false
+    }
+  }
+  for (const mirror of mirrors) {
+    if (await attempt(mirror, false)) return
+  }
+  if (config.relay) {
+    for (const mirror of mirrors) {
+      if (await attempt(mirror, true)) return
     }
   }
   throw last
