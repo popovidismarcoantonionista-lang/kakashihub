@@ -27,7 +27,7 @@ type RadarData = { ok: boolean; kickOk?: boolean; items: RadarItem[]; liveCount:
 function normalizeLink(raw: string) {
   const t = raw.trim()
   if (/^@[\w.-]+$/.test(t)) return `https://www.youtube.com/${t}`
-  if (/^(www\.)?(youtube\.com|youtu\.be)\//i.test(t)) return `https://${t}`
+  if (/^((www|m)\.)?(youtube\.com|youtu\.be)\//i.test(t)) return `https://${t}`
   return t
 }
 

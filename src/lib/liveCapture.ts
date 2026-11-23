@@ -280,10 +280,16 @@ export async function captureLiveWindow(source: Source, api: Api, config: Captur
   })
 }
 
+type WakeLockSentinelLike = { release: () => Promise<void> }
+type WakeLockNavigator = Navigator & {
+  wakeLock?: { request: (type: 'screen') => Promise<WakeLockSentinelLike> }
+}
+
 export class LiveCaptureSession {
   private timer: ReturnType<typeof setInterval> | null = null
   private busy = false
   private stopped = true
+  private wakeLock: WakeLockSentinelLike | null = null
 
   constructor(
     private readonly sourceId: string,
@@ -297,6 +303,8 @@ export class LiveCaptureSession {
     if (!this.stopped) return
     this.stopped = false
     const interval = Math.max(10000, (this.config.windowSeconds - 8) * 1000)
+    void this.requestWakeLock()
+    document.addEventListener('visibilitychange', this.onVisibility)
     void this.tick()
     this.timer = setInterval(() => { void this.tick() }, interval)
   }
@@ -305,6 +313,33 @@ export class LiveCaptureSession {
     this.stopped = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    document.removeEventListener('visibilitychange', this.onVisibility)
+    void this.releaseWakeLock()
+  }
+
+  private onVisibility = () => {
+    if (document.visibilityState !== 'visible' || this.stopped) return
+    // O navegador suspende timers em segundo plano; ao voltar, pede a tela de novo
+    // e captura imediatamente para não perder a janela seguinte.
+    void this.requestWakeLock()
+    void this.tick()
+  }
+
+  private async requestWakeLock() {
+    const nav = navigator as WakeLockNavigator
+    if (!nav.wakeLock || this.stopped || this.wakeLock) return
+    try {
+      this.wakeLock = await nav.wakeLock.request('screen')
+    } catch {
+      // Wake Lock não é obrigatório (iOS Safari não oferece). A aba continua capturando.
+    }
+  }
+
+  private async releaseWakeLock() {
+    const lock = this.wakeLock
+    this.wakeLock = null
+    if (!lock) return
+    try { await lock.release() } catch {}
   }
 
   private async tick() {
