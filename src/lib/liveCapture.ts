@@ -221,7 +221,7 @@ export class LiveCaptureSession {
     this.busy = true
     try {
       await captureLiveWindow(source, this.api, this.config)
-      this.onStatus(this.sourceId, 'Janela enviada ao estúdio')
+      // Sucesso é silencioso: o badge só aparece quando a captura falha.
     } catch (error) {
       const message = (error instanceof Error ? error.message : String(error)).slice(0, 140)
       this.onStatus(this.sourceId, `Captura no navegador: ${message}`)
