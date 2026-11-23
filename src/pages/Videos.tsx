@@ -4,6 +4,7 @@ import {
   Play, Plus, Radio, RefreshCw, Square, Trash2, UploadCloud, Youtube,
 } from 'lucide-react'
 import { useApp } from '../store'
+import { CamBoxCanvas } from '../CamBoxCanvas'
 import { navigate } from '../router'
 import { PlayerModal } from '../components'
 import { Cover, EmptyState, Logo, Modal, PageHead, ProgressBar, TypeBadge } from '../ui'
@@ -87,7 +88,6 @@ function LiveCamEditor({ source }: { source: Source }) {
   const [draft, setDraft] = useState<CamBox>({ ...(source.cam || DEFAULT_CAM) })
   const [busy, setBusy] = useState(false)
   const [frameKey, setFrameKey] = useState(0)
-  const [frameOk, setFrameOk] = useState(true)
 
   const redetect = async () => {
     setBusy(true)
@@ -124,47 +124,12 @@ function LiveCamEditor({ source }: { source: Source }) {
           </button>
         </div>
       </div>
-      <div className="cam-preview">
-        <img
-          src={`/api/live/${source.id}/frame?t=${frameKey}`}
-          alt="Quadro recente da live"
-          onLoad={() => setFrameOk(true)}
-          onError={() => setFrameOk(false)}
-        />
-        {frameOk && (
-          <span
-            className="cam-preview-box"
-            style={{
-              left: `${draft.x * 100}%`,
-              top: `${draft.y * 100}%`,
-              width: `${draft.w * 100}%`,
-              height: `${draft.h * 100}%`,
-            }}
-          />
-        )}
-        {!frameOk && <span className="cam-preview-empty">Aguardando o primeiro corte…</span>}
-      </div>
-      <div className="cam-sliders">
-        {([
-          ['x', 'Horizontal', 0],
-          ['y', 'Vertical', 0],
-          ['w', 'Largura', 0.08],
-          ['h', 'Altura', 0.08],
-        ] as const).map(([key, label, min]) => (
-          <label key={key}>
-            <span>{label}</span>
-            <input
-              type="range"
-              min={min}
-              max={key === 'x' ? 1 - draft.w : key === 'y' ? 1 - draft.h : 1}
-              step="0.01"
-              value={draft[key]}
-              onChange={(e) => setDraft((old) => ({ ...old, [key]: Number(e.target.value) }))}
-            />
-            <b className="mono">{Math.round(draft[key] * 100)}%</b>
-          </label>
-        ))}
-      </div>
+      <CamBoxCanvas
+        imageUrl={`/api/live/${source.id}/frame?t=${frameKey}`}
+        value={draft}
+        onChange={setDraft}
+      />
+      <span className="cam-hint">Arraste a caixa para mover e os cantos para redimensionar.</span>
       <button type="button" className="btn btn-primary btn-sm w-full" disabled={busy} onClick={apply}>
         Aplicar à live e aos cortes
       </button>

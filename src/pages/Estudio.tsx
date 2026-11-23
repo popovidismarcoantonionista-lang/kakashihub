@@ -3,6 +3,7 @@ import {
   Check, Clapperboard, Crop, Download, Play, Scissors,
 } from 'lucide-react'
 import { useApp } from '../store'
+import { CamBoxCanvas } from '../CamBoxCanvas'
 import { navigate, useRoute } from '../router'
 import { Preview } from '../components'
 import { Dot, EmptyState, PageHead, ProgressBar, ScoreRing, Select, StagePill, TypeBadge } from '../ui'
@@ -37,6 +38,11 @@ export function EstudioPage() {
   const duration = source?.duration || Math.max(...sourceClips.map((c) => c.end), 60)
   const jobs = state?.jobs || []
   const renderJob = clip ? jobs.find((j) => j.clipId === clip.id && j.status === 'running') : undefined
+  // URL estável por corte: trocar o quadro a cada render derrubaria a caixa no meio do arraste.
+  const frameUrl = useMemo(
+    () => (clip ? `/api/clips/${clip.id}/frame?t=${Date.now()}` : ''),
+    [clip?.id],
+  )
 
   const [hook, setHook] = useState('')
   const [cutStart, setCutStart] = useState('0')
@@ -261,39 +267,12 @@ export function EstudioPage() {
                     {camBusy ? '…' : 'Detectar de novo'}
                   </button>
                 </div>
-                <div className="cam-preview">
-                  <img src={`/api/clips/${clip.id}/frame?t=${Date.now()}`} alt="Quadro do corte" />
-                  <span
-                    className="cam-preview-box"
-                    style={{
-                      left: `${camDraft.x * 100}%`,
-                      top: `${camDraft.y * 100}%`,
-                      width: `${camDraft.w * 100}%`,
-                      height: `${camDraft.h * 100}%`,
-                    }}
-                  />
-                </div>
-                <div className="cam-sliders">
-                  {([
-                    ['x', 'Horizontal', 0],
-                    ['y', 'Vertical', 0],
-                    ['w', 'Largura', 0.08],
-                    ['h', 'Altura', 0.08],
-                  ] as const).map(([key, label, min]) => (
-                    <label key={key}>
-                      <span>{label}</span>
-                      <input
-                        type="range"
-                        min={min}
-                        max={key === 'x' ? 1 - camDraft.w : key === 'y' ? 1 - camDraft.h : 1}
-                        step="0.01"
-                        value={camDraft[key]}
-                        onChange={(e) => setCamDraft((old) => ({ ...old, [key]: Number(e.target.value) }))}
-                      />
-                      <b className="mono">{Math.round(camDraft[key] * 100)}%</b>
-                    </label>
-                  ))}
-                </div>
+                <CamBoxCanvas
+                  imageUrl={frameUrl}
+                  value={camDraft}
+                  onChange={setCamDraft}
+                />
+                <span className="cam-hint">Arraste a caixa para mover e os cantos para redimensionar.</span>
                 <button type="button" className="btn btn-primary btn-sm w-full" disabled={camBusy} onClick={applyCamManual}>
                   Aplicar caixa ao corte
                 </button>

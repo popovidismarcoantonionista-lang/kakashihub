@@ -1529,17 +1529,24 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
   overflow: hidden; border-radius: 8px; background: #000;
 }
 .cam-preview img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0.85; }
-.cam-preview-box {
-  position: absolute; border: 2px solid #6ee7a0;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35); pointer-events: none;
+.cbc-box {
+  position: absolute; border: 2px solid #6ee7a0; border-radius: 4px;
+  background: rgba(110, 231, 160, 0.07);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+  cursor: grab; touch-action: none;
 }
-.cam-sliders { display: grid; gap: 7px; margin-bottom: 10px; }
-.cam-sliders label {
-  display: grid; grid-template-columns: 74px 1fr 36px;
-  align-items: center; gap: 8px; font-size: 11px; color: var(--text-3);
+.cbc-box:active { cursor: grabbing; }
+.cbc-handle {
+  position: absolute; width: 14px; height: 14px;
+  border: 1px solid #0b0f18; border-radius: 3px;
+  background: #6ee7a0; touch-action: none;
 }
-.cam-sliders input[type='range'] { width: 100%; accent-color: #6ee7a0; }
-.cam-sliders b { text-align: right; font-size: 10px; color: var(--text-2); }
+.cbc-handle-nw { left: -2px; top: -2px; cursor: nwse-resize; }
+.cbc-handle-ne { right: -2px; top: -2px; cursor: nesw-resize; }
+.cbc-handle-sw { left: -2px; bottom: -2px; cursor: nesw-resize; }
+.cbc-handle-se { right: -2px; bottom: -2px; cursor: nwse-resize; }
+.cbc-readout { margin: -4px 0 8px; font-size: 9px; color: var(--text-2); text-align: right; }
+.cam-hint { display: block; margin: 0 0 10px; font-size: 9.5px; color: var(--text-3); }
 .live-cam { border-color: rgba(110, 231, 160, 0.28); background: rgba(110, 231, 160, 0.04); }
 .live-cam-tools { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .live-cam-tools .btn { padding: 5px 8px; font-size: 9.5px; }
@@ -1549,4 +1556,5 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
 }
 @media (max-width: 480px) {
   .live-cam .cam-manual-head { flex-direction: column; align-items: flex-start; }
+  .cbc-handle { width: 20px; height: 20px; }
 }
