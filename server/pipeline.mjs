@@ -2573,14 +2573,12 @@ export async function captureLiveWindow(sourceId) {
         ? Date.now() - last > BROWSER_WINDOW_TIMEOUT
         : Date.now() - started > Math.max(90, LIVE_WINDOW + 30) * 1000
       if (browserStale) {
-        source.captureMode = 'server'
-        source.liveMisses = 0
+        // No Render, captura no servidor de YouTube é bloqueada por IP; mantém no navegador.
+        updateJob(job, { progress: 50, step: 'Reconectando captura da live' })
         source.liveLastError = null
         source.liveCheckedAt = new Date().toISOString()
         save()
-        addActivity('agent', `Captura no navegador sem resposta em "${source.title}". Tentando captura no servidor.`)
-        updateJob(job, { progress: 35, step: 'Reconectando captura da live' })
-        // cai para a captura no servidor nesta mesma rodada
+        return { continue: true }
       } else {
         updateJob(job, { progress: 50, step: 'Monitorando a transmissão' })
         source.liveLastError = null

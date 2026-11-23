@@ -372,7 +372,9 @@ app.post('/api/live', async (req, res) => {
     platform,
     // No YouTube o Render não consegue resolver o stream (IP de datacenter).
     // A captura acontece no navegador que estiver com o estúdio aberto.
-    captureMode: 'server',
+    // No YouTube o Render não consegue resolver o stream (IP de datacenter).
+    // A captura acontece no navegador que estiver com o estúdio aberto.
+    captureMode: platform === 'youtube' ? 'browser' : 'server',
   }
   state.sources.unshift(source)
   addActivity('agent', 'Nova transmissão enviada para monitoramento')
@@ -399,12 +401,7 @@ app.post('/api/live/:id/capture-error', (req, res) => {
   if (message) {
     source.liveLastError = message
     source.liveCheckedAt = new Date().toISOString()
-    // Se o navegador não consegue obter HLS dos espelhos, cai para captura no servidor.
-    if (source.captureMode === 'browser' && /hls|manifesto|espelho n[aã]o devolveu/i.test(message)) {
-      source.captureMode = 'server'
-      source.liveLastError = `Captura no navegador indisponível (${message.slice(0, 120)}). Tentando captura no servidor…`
-      source.liveMisses = 0
-    }
+    // Mantém captura no navegador no Render; captura no servidor de YouTube costuma falhar por IP de datacenter.
     save()
   }
   ok(res, { ok: true })
