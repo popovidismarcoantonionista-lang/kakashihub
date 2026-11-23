@@ -505,6 +505,81 @@ async function extractWide(video, time, outFile) {
   ], { timeout: 1000 * 60 })
 }
 
+/** Detecta a webcam do streamer por pele + contraste, sem dependências externas. */
+async function detectCamBox(video, start = 0) {
+  try {
+    const { stdout } = await run(FFMPEG_BIN, [
+      '-v', 'error', '-ss', Math.max(0, Number(start) || 0).toFixed(2), '-i', video,
+      '-frames:v', '1', '-vf', 'scale=160:-2', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-',
+    ], { timeout: 1000 * 30, encoding: 'buffer' })
+    const buf = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout || '')
+    const w = 160
+    const h = Math.floor(buf.length / (w * 3))
+    if (h < 40) return null
+    const cell = 8
+    const gw = Math.floor(w / cell)
+    const gh = Math.floor(h / cell)
+    const grid = new Float32Array(gw * gh)
+    for (let gy = 0; gy < gh; gy++) {
+      for (let gx = 0; gx < gw; gx++) {
+        let skin = 0
+        let edge = 0
+        let total = 0
+        for (let y = gy * cell; y < Math.min(h, (gy + 1) * cell); y++) {
+          for (let x = gx * cell; x < Math.min(w, (gx + 1) * cell); x++) {
+            const i = (y * w + x) * 3
+            const r = buf[i]
+            const g = buf[i + 1]
+            const b = buf[i + 2]
+            const mx = Math.max(r, g, b)
+            const mn = Math.min(r, g, b)
+            if (r > 95 && g > 40 && b > 20 && mx - mn > 15 && Math.abs(r - g) > 15 && r > g && r > b) skin++
+            const lum = 0.299 * r + 0.587 * g + 0.114 * b
+            const j = (y * w + Math.min(w - 1, x + 2)) * 3
+            edge += Math.abs(lum - (0.299 * buf[j] + 0.587 * buf[j + 1] + 0.114 * buf[j + 2]))
+            total++
+          }
+        }
+        grid[gy * gw + gx] = (skin / Math.max(1, total)) * 0.8
+          + Math.min(1, edge / Math.max(1, total * 45)) * 0.2
+      }
+    }
+    let best = null
+    for (const wf of [0.26, 0.32, 0.38]) {
+      for (const hf of [0.32, 0.4, 0.48]) {
+        const bw = Math.max(2, Math.round(gw * wf))
+        const bh = Math.max(2, Math.round(gh * hf))
+        for (let gy = 0; gy + bh <= gh; gy++) {
+          for (let gx = 0; gx + bw <= gw; gx++) {
+            const cx = (gx + bw / 2) / gw
+            const cy = (gy + bh / 2) / gh
+            // Webcam fica numa borda; o meio é gameplay.
+            if (cx > 0.36 && cx < 0.64) continue
+            if (cy > 0.35 && cy < 0.65) continue
+            let sum = 0
+            for (let y = gy; y < gy + bh; y++) {
+              for (let x = gx; x < gx + bw; x++) sum += grid[y * gw + x]
+            }
+            const score = sum / (bw * bh) + (cy < 0.25 ? 0.02 : 0)
+            if (!best || score > best.score) {
+              best = { score, x: gx / gw, y: gy / gh, w: bw / gw, h: bh / gh }
+            }
+          }
+        }
+      }
+    }
+    if (!best || best.score < 0.12) return null
+    return {
+      x: +Math.min(1 - best.w, Math.max(0, best.x)).toFixed(4),
+      y: +Math.min(1 - best.h, Math.max(0, best.y)).toFixed(4),
+      w: +best.w.toFixed(4),
+      h: +best.h.toFixed(4),
+    }
+  } catch {
+    return null
+  }
+}
+
 export async function computeFraming(video, start, end) {
   try {
     const { width, height } = await probe(video)
@@ -1263,7 +1338,15 @@ export async function runRender(clipId, opts = {}) {
     const out = path.join(EXPORTS, `${clip.id}.mp4`)
     const size = renderSize()
     updateJob(job, { progress: 22, step: 'Calculando o enquadramento' })
-    const cam = clip.cam || source?.cam || { ...DEFAULT_CAM }
+    let cam = clip.cam || source?.cam || null
+    if (!cam && clip.framing === 'cam') {
+      updateJob(job, { progress: 26, step: 'Localizando a webcam' })
+      const spanSec = Math.max(1, clip.end - clip.start)
+      cam = await detectCamBox(src, from + Math.min(1.5, spanSec / 3))
+        || await detectCamBox(src, from + Math.min(spanSec - 0.2, spanSec / 2))
+        || { ...DEFAULT_CAM }
+      clip.cam = cam
+    }
     const split = clip.framing === 'cam' && cam && cam.w >= 0.05 && cam.h >= 0.05
     let frac = 0.5
     if (!split) {
@@ -1956,6 +2039,13 @@ async function makeLiveClip(source, windowFile, span, session, index, captions =
   if (fs.existsSync(coverAbs)) {
     try { coverKey = await storeLocalFile(coverAbs, `covers/${clipId}.jpg`, 'image/jpeg') } catch {}
   }
+  // Detecta a webcam dentro do próprio corte (o arquivo já começa em 0), para
+  // o split não ficar preso no canto quando o streamer muda de posição.
+  const spanSec = Math.max(1, span.end - span.start)
+  let camBox = await detectCamBox(outFile, Math.min(1.5, spanSec / 3))
+  if (!camBox) camBox = await detectCamBox(outFile, Math.min(spanSec - 0.2, spanSec / 2))
+  if (!camBox) camBox = source.cam || { ...DEFAULT_CAM }
+
   const at = Math.round((session + span.start) * 10) / 10
   // Cues chegam em tempo relativo à janela; recorta os que caem no span e
   // reancora no início do corte, igual ao captionLines dos vídeos.
@@ -1981,6 +2071,7 @@ async function makeLiveClip(source, windowFile, span, session, index, captions =
     stage: 'rascunho',
     framing: 'cam',
     framingBias: 0.5,
+    cam: camBox,
     cover: fs.existsSync(coverAbs) ? `/covers/${clipId}.jpg` : '',
     hashtags: cfg.hashtags[type] || cfg.hashtags.momento || [],
     captionLines: clipCues
