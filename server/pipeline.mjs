@@ -1303,7 +1303,7 @@ export async function runRender(clipId, opts = {}) {
     } else {
       vf = `scale=-2:${outH}:flags=lanczos,crop=${outW}:${outH}:(iw-${outW})/2:0,setsar=1`
     }
-    updateJob(job, { progress: 34, step: split ? `Webcam acima · jogo abaixo · ${sizeLabel(size)}` : `Preparando o corte em 9:16 · ${sizeLabel(size)}` })
+    updateJob(job, { progress: 34, step: split ? `Split · ${sizeLabel(size)}` : `9:16 · ${sizeLabel(size)}` })
     const outArgs = filterComplex
       ? ['-filter_complex', filterComplex, '-map', '[vout]', '-map', '0:a?']
       : ['-vf', vf]

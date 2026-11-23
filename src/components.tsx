@@ -255,7 +255,6 @@ export function Preview({ clip, source, compact = false }: { clip: Clip; source?
         <div className="pv-shade" />
         <div className="pv-top">
           <span className="chip chip-glass"><Frame size={11} /> 9:16</span>
-          {split && <span className="chip chip-glass">Webcam sobre o jogo</span>}
           <span className="chip chip-glass mono">{fmtTime(plain ? elapsed : from + elapsed)}</span>
         </div>
         {guide && (

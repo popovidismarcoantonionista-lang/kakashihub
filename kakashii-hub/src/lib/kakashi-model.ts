@@ -1,9 +1,9 @@
 import { z } from "zod";
 
 export const STORAGE_KEY = "kakashi-hub-v2";
-export const LIVE_CAPTION = "Webcam do streamer em cima · gameplay embaixo.";
+export const LIVE_CAPTION = "";
 export type Section = "Vídeos" | "Cortes" | "Estúdio" | "Uploads" | "IA";
-export type Frame = "Webcam acima · jogo abaixo" | "Fundo desfocado" | "9:16 automático";
+export type Frame = "Split" | "Fundo desfocado" | "9:16 automático";
 const sourceSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -25,7 +25,7 @@ const clipSchema = z.object({
   end: z.number(),
   score: z.number(),
   type: z.string(),
-  frame: z.enum(["Webcam acima · jogo abaixo", "Fundo desfocado", "9:16 automático"]),
+  frame: z.enum(["Split", "Fundo desfocado", "9:16 automático"]),
   approved: z.boolean(),
   createdAt: z.number(),
 });
@@ -100,7 +100,7 @@ export function initialState(): HubState {
         end: 18,
         score: 96,
         type: "Perseguição",
-        frame: "Webcam acima · jogo abaixo",
+        frame: "Split",
         approved: true,
         createdAt: 4,
       },

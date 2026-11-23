@@ -4,7 +4,7 @@ import type { State } from './types'
 
 type Tone = 'success' | 'error' | 'info'
 export type IngestTab = 'upload' | 'live'
-interface Toast { id: number; text: string; tone: Tone }
+interface Toast { id: number; text: string }
 
 interface Ctx {
   state: State | null
@@ -36,9 +36,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setToasts((t) => t.filter((x) => x.id !== id))
   }, [])
 
-  const toast = useCallback((text: string, tone: Tone = 'info') => {
+  // Tom é ignorado: todos os avisos aparecem da mesma forma, sem cor de status.
+  const toast = useCallback((text: string, _tone?: Tone) => {
     const id = toastId.current++
-    setToasts((t) => [...t.slice(-3), { id, text, tone }])
+    setToasts((t) => [...t.slice(-3), { id, text }])
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200)
   }, [])
 

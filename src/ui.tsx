@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ChevronDown, X, AlertTriangle, Info, CheckCircle2 } from 'lucide-react'
+import { Check, ChevronDown, X, Info } from 'lucide-react'
 import { useApp } from './store'
 import type { ClipType } from './types'
 
@@ -264,8 +264,8 @@ export function Toasts() {
   return createPortal(
     <div className="toasts">
       {toasts.map((t) => (
-        <div key={t.id} className={`toast toast-${t.tone}`} onClick={() => dismiss(t.id)}>
-          {t.tone === 'success' ? <CheckCircle2 size={16} /> : t.tone === 'error' ? <AlertTriangle size={16} /> : <Info size={16} />}
+        <div key={t.id} className="toast" onClick={() => dismiss(t.id)}>
+          <Info size={16} />
           <span>{t.text}</span>
           <X size={13} className="toast-x" />
         </div>

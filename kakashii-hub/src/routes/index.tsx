@@ -2854,7 +2854,7 @@ const hubTabs = [
   { name: "Uploads", icon: Upload },
   { name: "IA", icon: Sparkles },
 ] as const;
-const frames: Frame[] = ["Webcam acima · jogo abaixo", "Fundo desfocado", "9:16 automático"];
+const frames: Frame[] = ["Split", "Fundo desfocado", "9:16 automático"];
 const uid = () => crypto.randomUUID();
 type ResultVideo = { blob: Blob; url: string };
 type PendingVideo = { file: File; url: string; duration: number; thumbnail: string };
@@ -4016,7 +4016,7 @@ export function KakashiApp() {
                       </Button>
                     </div>
                     {active.frame === frames[0] && (
-                      <span className="hub-preview-caption">Webcam sobre o jogo</span>
+                      <span className="hub-preview-caption">Split</span>
                     )}
                     <p className="hub-live-caption">{LIVE_CAPTION}</p>
                   </section>

@@ -12,7 +12,7 @@ import type { CamBox, Clip, Source } from '../types'
 const FRAMING_LABEL: Record<string, string> = {
   auto: '9:16 automático',
   preencher: 'Fundo desfocado',
-  cam: 'Webcam acima · jogo abaixo',
+  cam: 'Split',
   esquerda: 'Fundo à esquerda',
   centro: 'Fundo centralizado',
   direita: 'Fundo à direita',
@@ -184,7 +184,7 @@ export function EstudioPage() {
             <div className="agent-list">
               <div className="agent-row">
                 <span className="agent-ico"><Crop size={14} /></span>
-                <div><b>Enquadramento</b><em>{FRAMING_LABEL[clip.framing] || 'Webcam acima · jogo abaixo'}</em></div>
+                <div><b>Enquadramento</b><em>{FRAMING_LABEL[clip.framing] || 'Split'}</em></div>
                 <span className="agent-state">pronto</span>
               </div>
             </div>
@@ -219,10 +219,6 @@ export function EstudioPage() {
                   </button>
                 ))}
               </div>
-            )}
-
-            {clip.framing === 'cam' && (
-              <span className="fine studio-split-hint">Webcam do streamer em cima · gameplay embaixo.</span>
             )}
 
             <label className="field-label">Gancho do corte</label>

@@ -168,7 +168,7 @@ export async function createVideo(
           const w = video.videoWidth * ratio,
             h = video.videoHeight * ratio;
           ctx.drawImage(video, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
-        } else if (segment.frame === "Webcam acima · jogo abaixo") {
+        } else if (segment.frame === "Split") {
           const camWidth = video.videoWidth * 0.32,
             camHeight = video.videoHeight * 0.42;
           ctx.drawImage(video, 0, 0, camWidth, camHeight, 0, 0, canvas.width, canvas.height * 0.28);

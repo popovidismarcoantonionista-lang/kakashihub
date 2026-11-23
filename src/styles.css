@@ -1049,18 +1049,14 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
   border-radius: 10px;
   background: #10151f;
   border: 1px solid var(--line-strong);
-  border-left: 2px solid var(--violet-2);
+  border-left: 2px solid var(--line-strong);
   box-shadow: 0 22px 50px -20px rgba(0, 0, 0, 0.9);
   font-size: 11.5px; color: var(--text);
   cursor: pointer;
   animation: toastIn 0.25s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
 @keyframes toastIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
-.toast svg { flex: none; color: var(--violet-2); }
-.toast-success { border-left-color: var(--green); }
-.toast-success svg { color: var(--green); }
-.toast-error { border-left-color: var(--red); }
-.toast-error svg { color: var(--red); }
+.toast svg { flex: none; color: var(--text-2); }
 .toast span { flex: 1; line-height: 1.45; }
 .toast-x { opacity: 0.4; }
 
