@@ -75,12 +75,22 @@ function proxySegment(segment: string, playlistUrl: string, mirror: string): str
   return url
 }
 
+async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 15000) {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function fetchText(url: string, config?: CaptureConfig): Promise<string> {
   const target = relayUrl(url, config)
   let last = 'falha de rede'
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await fetch(target, { cache: 'no-store' })
+      const res = await fetchWithTimeout(target, { cache: 'no-store' }, 15000)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const text = await res.text()
       if (!text.trim()) throw new Error('resposta vazia')
@@ -278,7 +288,7 @@ async function fetchBytes(url: string, config?: CaptureConfig): Promise<Uint8Arr
   let last = 'falha de rede'
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await fetch(target, { cache: 'no-store' })
+      const res = await fetchWithTimeout(target, { cache: 'no-store' }, 20000)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       return new Uint8Array(await res.arrayBuffer())
     } catch (error) {
