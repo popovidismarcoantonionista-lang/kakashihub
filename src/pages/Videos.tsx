@@ -88,7 +88,6 @@ export function VideosPage() {
   const [confirm, setConfirm] = useState<Source | null>(null)
   const [removing, setRemoving] = useState(false)
   const [radar, setRadar] = useState<RadarData | null>(null)
-  const [radarBusy, setRadarBusy] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -132,28 +131,6 @@ export function VideosPage() {
     } catch (e: any) {
     } finally {
       setLiveBusy(false)
-    }
-  }
-
-  const radarOn = (item: RadarItem) => sources.some((s) =>
-    s.mode === 'live'
-    && s.platform === item.platform
-    && (s.url || '').toLowerCase().includes(`/${item.login.toLowerCase()}`)
-    && s.status !== 'pronto'
-    && s.status !== 'erro',
-  )
-
-  const monitorRadar = async (item: RadarItem) => {
-    const key = `${item.platform}:${item.login}`
-    setRadarBusy(key)
-    try {
-      await api('/api/live', {
-        method: 'POST',
-        body: JSON.stringify({ url: `https://www.${item.platform}.com/${item.login}` }),
-      })
-    } catch (e: any) {
-    } finally {
-      setRadarBusy('')
     }
   }
 
@@ -303,16 +280,7 @@ export function VideosPage() {
                     <em className="radar-game">{item.live ? item.game || 'Transmissão' : 'fora do ar'}</em>
                     <div className="radar-foot">
                       {item.live ? (
-                        <>
-                          <span className="mono">{fmtViews(item.viewers)}</span>
-                          {radarOn(item) ? (
-                            <span className="radar-on">monitorando</span>
-                          ) : (
-                            <button className="btn btn-live btn-sm" onClick={() => monitorRadar(item)} disabled={radarBusy === key}>
-                              {radarBusy === key ? <span className="spinner" /> : <Radio size={12} />} Monitorar
-                            </button>
-                          )}
-                        </>
+                        <span className="mono">{fmtViews(item.viewers)}</span>
                       ) : (
                         <span className="radar-ago">aparece aqui quando entrar ao vivo</span>
                       )}

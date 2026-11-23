@@ -1337,9 +1337,7 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
 .radar-game { font-style: normal; font-size: 9.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .radar-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 3px; min-height: 26px; }
 .radar-foot .mono { font-size: 9px; color: var(--text-2); }
-.radar-on { font-family: var(--font-mono); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--green); }
 .radar-ago { font-size: 8.5px; color: var(--text-3); }
-.radar-foot .btn { padding: 5px 8px; font-size: 9.5px; }
 @media (max-width: 720px) {
   .radar-head { flex-direction: column; align-items: flex-start; gap: 6px; }
 }
