@@ -19,7 +19,7 @@ import {
 import { deleteBlobMedia, getPrivateBlob } from './media-store.mjs'
 import {
   OUTPUT_SIZES, clipFrame, fetchChannelVideos, getLiveHlsUrl, isLiveRunning, liveCapabilities,
-  liveErrorText, liveMediaFile, stopLive, uniqueClips,
+  liveCaptureConfig, liveErrorText, liveMediaFile, queueBrowserLiveWindow, stopLive, uniqueClips,
 } from './pipeline.mjs'
 import { startLiveWorkflow, startProcessJob, startUploadWorkflow } from './jobs.mjs'
 import {
@@ -357,6 +357,9 @@ app.post('/api/live', async (req, res) => {
     url: raw,
     mode: 'live',
     platform,
+    // No YouTube o Render não consegue resolver o stream (IP de datacenter).
+    // A captura acontece no navegador que estiver com o estúdio aberto.
+    captureMode: platform === 'youtube' ? 'browser' : 'server',
   }
   state.sources.unshift(source)
   addActivity('agent', 'Nova transmissão enviada para monitoramento')
@@ -388,6 +391,38 @@ app.post('/api/live/:id/start', async (req, res) => {
   source.liveWorkflowId = await startLiveWorkflow(source.id)
   save()
   ok(res, { ok: true })
+})
+
+app.get('/api/live/capture-config', (req, res) => {
+  ok(res, liveCaptureConfig())
+})
+
+// Janela de vídeo capturada no navegador: body = LWIN + versão + tamanhos (u32 BE) + vídeo.ts + áudio.ts
+app.post('/api/live/:id/window', express.raw({ type: 'application/octet-stream', limit: '80mb' }), async (req, res) => {
+  const source = findSource(req.params.id)
+  if (!source) return fail(res, 404, 'Fonte não encontrada.')
+  if (source.mode !== 'live' || !isLiveRunning(source.id)) return fail(res, 409, 'Esta transmissão não está sendo monitorada.')
+  if (source.captureMode !== 'browser') return fail(res, 400, 'Esta fonte não usa captura no navegador.')
+  const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)
+  if (body.length < 13 || body.toString('ascii', 0, 4) !== 'LWIN') return fail(res, 400, 'Janela inválida.')
+  const videoLen = body.readUInt32BE(5)
+  const audioLen = body.readUInt32BE(9)
+  if (videoLen + audioLen + 13 !== body.length) return fail(res, 400, 'Janela incompleta.')
+  try {
+    const result = await queueBrowserLiveWindow(
+      source.id,
+      body.subarray(13, 13 + videoLen),
+      body.subarray(13 + videoLen),
+    )
+    source.liveCaptureLastAt = Date.now()
+    source.liveLastError = null
+    source.liveCheckedAt = new Date().toISOString()
+    save()
+    ok(res, { accepted: true, bytes: result.bytes })
+  } catch (e) {
+    console.error('[live window]', e?.message || e)
+    fail(res, 500, 'Não foi possível processar a janela recebida.', { detail: liveErrorText(e, 300) })
+  }
 })
 
 app.get('/api/live/:id/hls', async (req, res) => {

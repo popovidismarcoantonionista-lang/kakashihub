@@ -171,7 +171,7 @@ export function Modal({
   kicker?: string
   title: string
   subtitle?: string
-  children: ReactNode
+  children?: ReactNode
   footer?: ReactNode
   width?: number
 }) {
@@ -248,7 +248,7 @@ export function PageHead({ kicker, title, sub, actions }: { kicker?: string; tit
   )
 }
 
-export function EmptyState({ icon, title, text, action }: { icon: ReactNode; title: string; text: string; action?: ReactNode }) {
+export function EmptyState({ icon, title, text = '', action }: { icon: ReactNode; title: string; text?: string; action?: ReactNode }) {
   return (
     <div className="empty">
       <div className="empty-icon">{icon}</div>

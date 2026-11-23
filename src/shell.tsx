@@ -243,7 +243,10 @@ function IngestModal() {
     setError('')
     try {
       await api('/api/live', { method: 'POST', body: JSON.stringify({ url }) })
-      toast('Monitorando a transmissão. Os cortes aparecem em instantes.', 'success')
+      const inBrowser = /youtube\.com|youtu\.be/i.test(url)
+      toast(inBrowser
+        ? 'Monitorando a transmissão. Deixe esta aba aberta: a captura acontece no navegador.'
+        : 'Monitorando a transmissão. Os cortes aparecem em instantes.', 'success')
       setIngestOpen(false)
       setText('')
       navigate('videos')

@@ -22,7 +22,7 @@ import {
   updateJob,
 } from './store.mjs'
 import { ensureLocalMedia, mediaPathFromUrl, storeLocalFile } from './media-store.mjs'
-import { cobaltResolve, hasCobalt, hasYtdlpApi, hasInvidious, invidiousInfo, ydlInfo } from './services.mjs'
+import { INVIDIOUS_URL, cobaltResolve, hasCobalt, hasYtdlpApi, hasInvidious, invidiousInfo, ydlInfo } from './services.mjs'
 
 const PYTHON = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -1571,12 +1571,26 @@ const LIVE_STREAM_CACHE = new Map()
 const LIVE_STREAM_TTL = Math.max(60, Number(process.env.LIVE_STREAM_TTL_MS) || 5 * 60 * 1000)
 const LIVE_STREAM_RETRY_MS = Math.max(10, Number(process.env.LIVE_STREAM_RETRY_MS) || 60 * 1000)
 
+// Captura no navegador: o IP do Render é bloqueado pelo YouTube e pelos espelhos
+// públicos. O frontend resolve o HLS no IP do usuário e envia janelas já em .ts.
+const browserLiveWindows = new Map()
+const BROWSER_WINDOW_TIMEOUT = Math.max(180, LIVE_WINDOW * 4) * 1000
+
+export function liveCaptureConfig() {
+  return {
+    mirror: INVIDIOUS_URL,
+    windowSeconds: LIVE_WINDOW,
+    maxSegments: Math.ceil(LIVE_WINDOW / 5),
+  }
+}
+
 const LIVE_TEXT = {
   offline: 'Essa fonte não está ao vivo agora. Cole o link de uma transmissão em andamento…',
   gone: 'A transmissão saiu do ar. O monitoramento foi encerrado…',
   noStream: 'Não foi possível acessar a transmissão. Verifique se é pública e sem restrição de idade/região…',
   recordFail: 'Falha ao acompanhar a transmissão. Ela pode ter proteção ou instabilidade…',
   streamBlocked: 'A live está no ar, mas o servidor não conseguiu acessar o stream. Configure um resolvedor de mídia no Render…',
+  browserClosed: 'A captura no navegador foi interrompida. Deixe a aba do estúdio aberta para continuar…',
   failed: 'Não foi possível acompanhar esta transmissão agora. Tente de novo…',
 }
 
@@ -1954,6 +1968,108 @@ function finishLiveStep(source, job, error = null) {
   return { continue: false, status: source.status }
 }
 
+/** Recebe vídeo e áudio .ts capturados no navegador e monta uma janela muxada. */
+export async function queueBrowserLiveWindow(sourceId, video, audio) {
+  if (!Buffer.isBuffer(video) || !Buffer.isBuffer(audio)) throw new Error('janela inválida')
+  if (video.length < 1024 || audio.length < 1024) throw new Error('janela vazia')
+  const stamp = `${sourceId}-${Date.now()}`
+  const vFile = path.join(LIVE_DIR, `browser-${stamp}-v.ts`)
+  const aFile = path.join(LIVE_DIR, `browser-${stamp}-a.ts`)
+  const out = path.join(LIVE_DIR, `browser-${stamp}.ts`)
+  try {
+    fs.writeFileSync(vFile, video)
+    fs.writeFileSync(aFile, audio)
+    await run(FFMPEG_BIN, [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-i', vFile, '-i', aFile,
+      '-map', '0:v:0', '-map', '1:a:0?', '-c', 'copy', '-f', 'mpegts', out,
+    ], { timeout: 1000 * 90 })
+    const size = fs.existsSync(out) ? fs.statSync(out).size : 0
+    if (size < 1024 * 20) throw new Error('janela muxada vazia')
+    const previous = browserLiveWindows.get(sourceId)
+    if (previous) { try { fs.rmSync(previous.file, { force: true }) } catch {} }
+    browserLiveWindows.set(sourceId, { file: out, at: Date.now() })
+    return { bytes: size }
+  } finally {
+    fs.rmSync(vFile, { force: true })
+    fs.rmSync(aFile, { force: true })
+  }
+}
+
+export function takeBrowserLiveWindow(sourceId) {
+  const entry = browserLiveWindows.get(sourceId)
+  if (!entry) return null
+  browserLiveWindows.delete(sourceId)
+  if (!fs.existsSync(entry.file)) return null
+  if (Date.now() - entry.at > BROWSER_WINDOW_TIMEOUT) {
+    try { fs.rmSync(entry.file, { force: true }) } catch {}
+    return null
+  }
+  return entry.file
+}
+
+/** Processa uma janela já gravada (servidor ou navegador) e atualiza a fonte. */
+async function processLiveWindowFile(sourceId, win, job) {
+  let source = findSource(sourceId)
+  if (!source) {
+    try { fs.rmSync(win, { force: true }) } catch {}
+    return { continue: false, status: 'removed' }
+  }
+  const session = Math.max(0, Number(source.liveSession) || 0)
+  const made = Number(source.liveMade) || 0
+  const duration = await mediaDuration(win)
+  if (!duration || duration < 6) {
+    source.liveLastError = `record: janela curta ou vazia (${Math.round(duration)}s)`
+    try { fs.rmSync(win, { force: true }) } catch {}
+    source.liveMisses = (Number(source.liveMisses) || 0) + 1
+    save()
+    return { continue: true }
+  }
+
+  source.liveMisses = 0
+  source.liveLastError = null
+  const settings = getState().settings || {}
+  const min = Number(settings.clipMin) || 18
+  const max = Number(settings.clipMax) || 38
+  const span = await loudSpan(win, min, max)
+  const lastEnd = Number(source.liveLastEnd) || -999
+  if (span && session + span.start >= lastEnd + 6) {
+    try {
+      const clip = await makeLiveClip(source, win, span, session, (Number(source.livePriorClips) || 0) + made + 1)
+      source.liveMade = made + 1
+      source.liveLastEnd = clip.end
+      source.clips = getState().clips.filter((item) => item.sourceId === sourceId).length
+      source.lastClipAt = new Date().toISOString()
+      addActivity('agent', `Novo corte da live: "${clip.hook}"`)
+      updateJob(job, { step: `Ao vivo · ${liveStamp(session + duration)} · ${source.liveMade} cortes no acervo` })
+    } catch (error) {
+      console.error('[live] makeLiveClip error:', error?.message || error)
+    }
+  }
+
+  source = findSource(sourceId)
+  if (!source) {
+    try { fs.rmSync(win, { force: true }) } catch {}
+    return { continue: false, status: 'removed' }
+  }
+  source.liveSession = session + duration
+  source.duration = Math.round(source.liveSession)
+  source.progress = 100
+  source.liveCheckedAt = new Date().toISOString()
+  if (!source.thumb) {
+    const thumbAbs = path.join(COVERS, `src-${sourceId}.jpg`)
+    try {
+      await extractWide(win, Math.min(5, duration / 3), thumbAbs)
+      source.thumb = `/covers/src-${sourceId}.jpg`
+      source.thumbKey = await storeLocalFile(thumbAbs, `covers/src-${sourceId}.jpg`, 'image/jpeg')
+    } catch {}
+  }
+  save()
+  try { fs.rmSync(win, { force: true }) } catch {}
+  if ((Number(source.liveMade) || 0) >= LIVE_MAX_CLIPS) return finishLiveStep(source, job)
+  return { continue: true }
+}
+
 export async function captureLiveWindow(sourceId) {
   let source = findSource(sourceId)
   if (!source) return { continue: false, status: 'removed' }
@@ -2029,6 +2145,21 @@ export async function captureLiveWindow(sourceId) {
     }
 
     if ((Number(source.liveMade) || 0) >= LIVE_MAX_CLIPS) return finishLiveStep(source, job)
+
+    if (source.captureMode === 'browser') {
+      const win = takeBrowserLiveWindow(sourceId)
+      if (win) return processLiveWindowFile(sourceId, win, job)
+      const last = Number(source.liveCaptureLastAt) || 0
+      if (last && Date.now() - last > BROWSER_WINDOW_TIMEOUT) {
+        return finishLiveStep(source, job, LIVE_TEXT.browserClosed)
+      }
+      updateJob(job, { progress: 50, step: 'Aguardando a janela do navegador' })
+      source.liveLastError = null
+      source.liveCheckedAt = new Date().toISOString()
+      save()
+      return { continue: true }
+    }
+
     const apiConfirmed = () => Boolean(
       liveCapabilities().youtubeDataApi
       && (source?.platform === 'youtube' || /youtube/i.test(source?.url || ''))
@@ -2068,60 +2199,7 @@ export async function captureLiveWindow(sourceId) {
       return finishLiveStep(source, job)
     }
 
-    const duration = rec?.ok ? await mediaDuration(win) : 0
-    if (!rec?.ok || !duration || duration < 6) {
-      const reason = rec?.reason || (duration ? `janela curta (${Math.round(duration)}s)` : 'janela vazia')
-      source.liveLastError = `record: ${reason}`
-      try { fs.rmSync(win, { force: true }) } catch {}
-      source.liveMisses = (Number(source.liveMisses) || 0) + 1
-      if (source.liveMisses >= 3) {
-        return finishLiveStep(source, job, apiConfirmed() ? LIVE_TEXT.streamBlocked : LIVE_TEXT.recordFail)
-      }
-      save()
-      return { continue: true }
-    }
-
-    source.liveMisses = 0
-    const settings = getState().settings || {}
-    const min = Number(settings.clipMin) || 18
-    const max = Number(settings.clipMax) || 38
-    const span = await loudSpan(win, min, max)
-    const lastEnd = Number(source.liveLastEnd) || -999
-    if (span && session + span.start >= lastEnd + 6) {
-      try {
-        const clip = await makeLiveClip(source, win, span, session, (Number(source.livePriorClips) || 0) + made + 1)
-        source.liveMade = made + 1
-        source.liveLastEnd = clip.end
-        source.clips = getState().clips.filter((item) => item.sourceId === sourceId).length
-        source.lastClipAt = new Date().toISOString()
-        addActivity('agent', `Novo corte da live: "${clip.hook}"`)
-        updateJob(job, { step: `Ao vivo · ${liveStamp(session + duration)} · ${source.liveMade} cortes no acervo` })
-      } catch (error) {
-        console.error('[live] makeLiveClip error:', error?.message || error)
-      }
-    }
-
-    source = findSource(sourceId)
-    if (!source) {
-      try { fs.rmSync(win, { force: true }) } catch {}
-      return { continue: false, status: 'removed' }
-    }
-    source.liveSession = session + duration
-    source.duration = Math.round(source.liveSession)
-    source.progress = 100
-    source.liveCheckedAt = new Date().toISOString()
-    if (!source.thumb) {
-      const thumbAbs = path.join(COVERS, `src-${sourceId}.jpg`)
-      try {
-        await extractWide(win, Math.min(5, duration / 3), thumbAbs)
-        source.thumb = `/covers/src-${sourceId}.jpg`
-        source.thumbKey = await storeLocalFile(thumbAbs, `covers/src-${sourceId}.jpg`, 'image/jpeg')
-      } catch {}
-    }
-    save()
-    try { fs.rmSync(win, { force: true }) } catch {}
-    if ((Number(source.liveMade) || 0) >= LIVE_MAX_CLIPS) return finishLiveStep(source, job)
-    return { continue: true }
+    return processLiveWindowFile(sourceId, win, job)
   } catch (error) {
     source = findSource(sourceId)
     if (!source) return { continue: false, status: 'removed' }

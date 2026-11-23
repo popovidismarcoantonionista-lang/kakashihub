@@ -39,6 +39,9 @@ export interface Source {
   lastClipAt?: string
   liveId?: string
   liveChannel?: string
+  captureMode?: 'browser' | 'server'
+  liveCaptureLastAt?: number
+  liveLastError?: string | null
 }
 
 export interface CaptionLine {
