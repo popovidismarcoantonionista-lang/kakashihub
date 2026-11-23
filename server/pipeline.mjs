@@ -580,6 +580,68 @@ async function detectCamBox(video, start = 0) {
   }
 }
 
+/** Média de vários quadros: evita que um movimento ponto mude a caixa. */
+async function detectCamBoxMulti(video, times) {
+  const boxes = []
+  for (const t of times) {
+    const box = await detectCamBox(video, Math.max(0, t))
+    if (box) boxes.push(box)
+  }
+  if (!boxes.length) return null
+  const avg = (key) => boxes.reduce((sum, b) => sum + b[key], 0) / boxes.length
+  const x = +avg('x').toFixed(4)
+  const y = +avg('y').toFixed(4)
+  const w = +avg('w').toFixed(4)
+  const h = +avg('h').toFixed(4)
+  return {
+    x: Math.min(1 - w, x),
+    y: Math.min(1 - h, y),
+    w,
+    h,
+  }
+}
+
+/** Detecta a webcam analisando o vídeo real do corte em três momentos. */
+export async function detectCamBoxForClip(clipId) {
+  try {
+    const clip = findClip(clipId)
+    if (!clip) return null
+    const liveSrc = clip.media
+      ? await ensureLocalMedia(clip.mediaKey || mediaPathFromUrl(clip.media), liveMediaFile(clip), `${clip.id}.mp4`)
+      : null
+    const source = findSource(clip.sourceId)
+    const src = liveSrc || await ensureLocalMedia(source?.mediaKey, sourceVideo(clip.sourceId), `${clip.sourceId}.mp4`)
+    if (!src) return null
+    const len = Math.max(1, clip.end - clip.start)
+    const base = liveSrc ? 0 : clip.start
+    return await detectCamBoxMulti(src, [0.2, 0.5, 0.8].map((p) => base + Math.min(len - 0.2, len * p)))
+  } catch {
+    return null
+  }
+}
+
+/** Detecta a webcam na janela ao vivo mais recente, em três quadros. */
+export async function detectCamBoxForLive(sourceId) {
+  try {
+    const files = []
+    const pending = browserLiveWindows.get(sourceId)
+    if (pending?.file && fs.existsSync(pending.file)) files.push(pending.file)
+    const clips = (getState().clips || [])
+      .filter((c) => c.sourceId === sourceId)
+      .slice(-4)
+      .reverse()
+    for (const clip of clips) {
+      const file = liveMediaFile(clip)
+      if (file) files.push(file)
+    }
+    for (const file of files) {
+      const box = await detectCamBoxMulti(file, [0.8, 1.2, 1.6])
+      if (box) return box
+    }
+  } catch {}
+  return null
+}
+
 export async function computeFraming(video, start, end) {
   try {
     const { width, height } = await probe(video)

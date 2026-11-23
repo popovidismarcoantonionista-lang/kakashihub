@@ -1,5 +1,24 @@
 import type { CamBox } from '../types'
 
+type Api = (path: string, init?: RequestInit) => Promise<any>
+
+/** Detecta a webcam no servidor, analisando o vídeo real em vários quadros. */
+export async function detectCamBoxAuto(
+  kind: 'clip' | 'live',
+  id: string,
+  api: Api,
+): Promise<CamBox | null> {
+  try {
+    const path = kind === 'clip' ? `/api/clips/${id}/detect-cam` : `/api/live/${id}/detect-cam`
+    const data = await api(path, { method: 'POST' })
+    const cam = data?.cam
+    if (!cam || ![cam.x, cam.y, cam.w, cam.h].every((n) => Number.isFinite(n))) return null
+    return cam as CamBox
+  } catch {
+    return null
+  }
+}
+
 /** Detecta a webcam num quadro 16:9 usando a faixa de pele, no navegador. */
 export async function detectCamBoxFromImage(url: string): Promise<CamBox | null> {
   try {

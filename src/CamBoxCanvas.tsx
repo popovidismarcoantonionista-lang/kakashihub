@@ -39,15 +39,10 @@ export function CamBoxCanvas({
     }
   }, [imageUrl])
 
-  const start = (e: ReactPointerEvent, mode: Drag['mode']) => {
-    if (!loaded) return
-    e.preventDefault()
-    e.stopPropagation()
-    try { (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId) } catch {}
-    drag.current = { mode, x: e.clientX, y: e.clientY, box: { ...value } }
-  }
-
-  const move = (e: ReactPointerEvent) => {
+  // Escutas na janela inteira: no celular o dedo sai da caixa pequena e o
+  // pointer capture nem sempre é suportado. Assim o arraste não trava.
+  const moveRef = useRef<(e: PointerEvent) => void>(() => {})
+  moveRef.current = (e) => {
     const d = drag.current
     const rect = ref.current?.getBoundingClientRect()
     if (!d || !rect) return
@@ -79,17 +74,27 @@ export function CamBoxCanvas({
     }
     onChange(next)
   }
+  const endRef = useRef<() => void>(() => {})
+  endRef.current = () => { drag.current = null }
 
-  const end = (e: ReactPointerEvent) => {
-    if (!drag.current) return
-    try { (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId) } catch {}
-    drag.current = null
-  }
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => moveRef.current(e)
+    const onEnd = () => endRef.current()
+    window.addEventListener('pointermove', onMove, { passive: false })
+    window.addEventListener('pointerup', onEnd)
+    window.addEventListener('pointercancel', onEnd)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onEnd)
+      window.removeEventListener('pointercancel', onEnd)
+    }
+  }, [])
 
-  const events = {
-    onPointerMove: move,
-    onPointerUp: end,
-    onPointerCancel: end,
+  const start = (e: ReactPointerEvent, mode: Drag['mode']) => {
+    if (!loaded) return
+    e.preventDefault()
+    e.stopPropagation()
+    drag.current = { mode, x: e.clientX, y: e.clientY, box: { ...value } }
   }
 
   return (
@@ -116,7 +121,6 @@ export function CamBoxCanvas({
               height: `${value.h * 100}%`,
             }}
             onPointerDown={(e) => start(e, 'move')}
-            {...events}
           >
             {CORNERS.map((corner) => (
               <span
@@ -126,7 +130,6 @@ export function CamBoxCanvas({
                 tabIndex={0}
                 aria-label={`Redimensionar canto ${corner}`}
                 onPointerDown={(e) => start(e, corner)}
-                {...events}
               />
             ))}
           </div>

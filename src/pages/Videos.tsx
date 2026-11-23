@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle, Clapperboard, Crop,
   Play, Plus, Radio, RefreshCw, Square, Trash2, UploadCloud, Youtube,
@@ -8,7 +8,7 @@ import { CamBoxCanvas } from '../CamBoxCanvas'
 import { navigate } from '../router'
 import { PlayerModal } from '../components'
 import { Cover, EmptyState, Logo, Modal, PageHead, ProgressBar, TypeBadge } from '../ui'
-import { detectCamBoxFromImage } from '../lib/camBox'
+import { detectCamBoxAuto } from '../lib/camBox'
 import { fmtTime, fmtViews, relTime } from '../lib/format'
 import type { CamBox, Source } from '../types'
 
@@ -88,12 +88,34 @@ function LiveCamEditor({ source }: { source: Source }) {
   const [draft, setDraft] = useState<CamBox>({ ...(source.cam || DEFAULT_CAM) })
   const [busy, setBusy] = useState(false)
   const [frameKey, setFrameKey] = useState(0)
+  const apiRef = useRef(api)
+  apiRef.current = api
+
+  // Ao abrir o ajuste, já usa a detecção do servidor em vez da caixa manual anterior.
+  // Roda só uma vez por fonte: api muda a cada refresh e repetiria a detecção.
+  useEffect(() => {
+    const call = apiRef.current
+    void detectCamBoxAuto('live', source.id, call).then(async (cam) => {
+      if (!cam) return
+      setDraft(cam)
+      await call(`/api/sources/${source.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ cam, applyCam: true }),
+      })
+    }).catch(() => {})
+  }, [source.id])
 
   const redetect = async () => {
     setBusy(true)
     try {
-      const box = await detectCamBoxFromImage(`/api/live/${source.id}/frame?t=${Date.now()}`)
-      if (box) setDraft(box)
+      const cam = await detectCamBoxAuto('live', source.id, api)
+      if (cam) {
+        setDraft(cam)
+        await api(`/api/sources/${source.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ cam, applyCam: true }),
+        })
+      }
     } finally {
       setBusy(false)
     }
@@ -120,7 +142,7 @@ function LiveCamEditor({ source }: { source: Source }) {
             Atualizar quadro
           </button>
           <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={redetect}>
-            {busy ? '…' : 'Detectar de novo'}
+            {busy ? '…' : 'Detectar automaticamente'}
           </button>
         </div>
       </div>

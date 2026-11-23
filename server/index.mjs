@@ -18,8 +18,9 @@ import {
 } from './store.mjs'
 import { blobStorageEnabled, deleteBlobMedia, getPrivateBlob } from './media-store.mjs'
 import {
-  OUTPUT_SIZES, clipFrame, fetchChannelVideos, getLiveHlsUrl, isLiveRunning, liveCapabilities,
-  liveCaptureConfig, liveErrorText, liveFrame, liveMediaFile, queueBrowserLiveWindow, stopLive, uniqueClips,
+  OUTPUT_SIZES, clipFrame, detectCamBoxForClip, detectCamBoxForLive, fetchChannelVideos,
+  getLiveHlsUrl, isLiveRunning, liveCapabilities, liveCaptureConfig, liveErrorText, liveFrame,
+  liveMediaFile, queueBrowserLiveWindow, stopLive, uniqueClips,
 } from './pipeline.mjs'
 import { startLiveWorkflow, startProcessJob, startUploadWorkflow } from './jobs.mjs'
 import {
@@ -717,6 +718,26 @@ app.get('/api/clips/:id/frame', async (req, res) => {
     res.type('image/jpeg').send(buf)
   } catch {
     fail(res, 404, 'Não foi possível carregar o quadro desta fonte.')
+  }
+})
+
+app.post('/api/clips/:id/detect-cam', async (req, res) => {
+  try {
+    const cam = await detectCamBoxForClip(req.params.id)
+    if (!cam) return fail(res, 404, 'Não foi possível localizar a webcam neste corte.')
+    ok(res, { cam })
+  } catch (error) {
+    fail(res, 500, 'Falha ao detectar a webcam.', { detail: liveErrorText(error, 200) })
+  }
+})
+
+app.post('/api/live/:id/detect-cam', async (req, res) => {
+  try {
+    const cam = await detectCamBoxForLive(req.params.id)
+    if (!cam) return fail(res, 404, 'Ainda não há quadro da live para detectar a webcam.')
+    ok(res, { cam })
+  } catch (error) {
+    fail(res, 500, 'Falha ao detectar a webcam.', { detail: liveErrorText(error, 200) })
   }
 })
 

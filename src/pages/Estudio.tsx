@@ -8,7 +8,7 @@ import { navigate, useRoute } from '../router'
 import { Preview } from '../components'
 import { Dot, EmptyState, PageHead, ProgressBar, ScoreRing, Select, StagePill, TypeBadge } from '../ui'
 import { fmtRange, fmtTime } from '../lib/format'
-import { detectCamBoxFromImage } from '../lib/camBox'
+import { detectCamBoxAuto } from '../lib/camBox'
 import type { CamBox, Clip, Source } from '../types'
 
 const FRAMING_LABEL: Record<string, string> = {
@@ -52,7 +52,16 @@ export function EstudioPage() {
   const [camDraft, setCamDraft] = useState<CamBox>(DEFAULT_CAM)
   const [camBusy, setCamBusy] = useState(false)
   const autoCamDone = useRef<Set<string>>(new Set())
+  const apiRef = useRef(api)
+  apiRef.current = api
   const games = state?.settings?.niche === 'games'
+  // Depende dos valores, não da identidade do objeto: o refresh periódico troca
+  // a referência de clip.cam e clobberaria o ajuste manual a cada 1,4s.
+  const camSig = clip?.cam
+    ? `${clip.cam.x},${clip.cam.y},${clip.cam.w},${clip.cam.h}`
+    : source?.cam
+      ? `${source.cam.x},${source.cam.y},${source.cam.w},${source.cam.h}`
+      : ''
 
   useEffect(() => {
     setHook(clip?.hook || '')
@@ -60,7 +69,7 @@ export function EstudioPage() {
 
   useEffect(() => {
     setCamDraft({ ...(clip?.cam || source?.cam || DEFAULT_CAM) })
-  }, [clip?.id, clip?.cam, source?.cam])
+  }, [clip?.id, camSig])
 
   useEffect(() => {
     setCutStart('0')
@@ -68,16 +77,16 @@ export function EstudioPage() {
   }, [clip?.id, clip?.start, clip?.end])
 
   useEffect(() => {
-    if (!clip || !source || source.cam || autoCamDone.current.has(source.id)) return
-    autoCamDone.current.add(source.id)
-    autoCamBox(clip.id).then(async (detected) => {
-      const cam = detected || { x: 0.68, y: 0.02, w: 0.3, h: 0.36 }
-      await api(`/api/sources/${source.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ cam, applyCam: true }),
-      })
+    if (!clip || !source || autoCamDone.current.has(clip.id)) return
+    autoCamDone.current.add(clip.id)
+    const call = apiRef.current
+    void detectCamBoxAuto('clip', clip.id, call).then(async (cam) => {
+      if (!cam) return
+      setCamDraft(cam)
+      await call(`/api/clips/${clip.id}`, { method: 'PATCH', body: JSON.stringify({ cam }) })
+      await call(`/api/sources/${source.id}`, { method: 'PATCH', body: JSON.stringify({ cam }) })
     }).catch(() => {})
-  }, [clip?.id, source?.id, source?.cam])
+  }, [clip?.id, source?.id])
 
   const patchClip = async (patch: Partial<Clip>) => {
     if (!clip) return
@@ -112,8 +121,12 @@ export function EstudioPage() {
     if (!clip) return
     setCamBusy(true)
     try {
-      const box = await autoCamBox(clip.id)
-      if (box) setCamDraft(box)
+      const cam = await detectCamBoxAuto('clip', clip.id, api)
+      if (cam) {
+        setCamDraft(cam)
+        await api(`/api/clips/${clip.id}`, { method: 'PATCH', body: JSON.stringify({ cam }) })
+        if (source) await api(`/api/sources/${source.id}`, { method: 'PATCH', body: JSON.stringify({ cam }) })
+      }
     } catch {} finally {
       setCamBusy(false)
     }
@@ -264,7 +277,7 @@ export function EstudioPage() {
                 <div className="cam-manual-head">
                   <span className="field-label">Caixa da webcam</span>
                   <button type="button" className="btn btn-ghost btn-sm" disabled={camBusy} onClick={redetectCam}>
-                    {camBusy ? '…' : 'Detectar de novo'}
+                    {camBusy ? '…' : 'Detectar automaticamente'}
                   </button>
                 </div>
                 <CamBoxCanvas
@@ -381,10 +394,6 @@ export function EstudioPage() {
       </div>
     </div>
   )
-}
-
-function autoCamBox(clipId: string): Promise<CamBox | null> {
-  return detectCamBoxFromImage(`/api/clips/${clipId}/frame?t=${Date.now()}`)
 }
 
 function TimelineCanvas({
