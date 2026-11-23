@@ -1410,6 +1410,131 @@ export async function runAnalyze(sourceId, opts = {}) {
   }
 }
 
+function assTime(seconds) {
+  const s = Math.max(0, Number(seconds) || 0)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = Math.floor(s % 60)
+  const cs = Math.floor((s - Math.floor(s)) * 100)
+  return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`
+}
+
+function assEscape(text) {
+  return String(text || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/\{/g, '(')
+    .replace(/\}/g, ')')
+    .replace(/\r?\n/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function splitCaptionWords(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim().split(/\s+/).filter(Boolean)
+}
+
+function buildCaptionChunks(clip, duration) {
+  const lines = Array.isArray(clip?.captionLines) ? clip.captionLines : []
+  const raw = lines
+    .map((line) => ({ t: Number(line?.t), text: String(line?.text || '').replace(/\s+/g, ' ').trim() }))
+    .filter((line) => line.text && Number.isFinite(line.t))
+    .sort((a, b) => a.t - b.t)
+  const cues = []
+  if (raw.length) {
+    for (let i = 0; i < raw.length; i++) {
+      const cur = raw[i]
+      const next = raw[i + 1]
+      const start = Math.max(0, cur.t)
+      const endLimit = Math.max(start + 0.5, Math.min(duration, next ? Math.max(start + 0.5, next.t) : duration))
+      const end = Math.min(duration, Math.max(start + 0.6, Math.min(endLimit, start + 3.2)))
+      if (end - start < 0.25) continue
+      cues.push({ start, end, text: cur.text })
+    }
+  } else {
+    const fallback = String(clip?.hook || clip?.description || '').replace(/\s+/g, ' ').trim()
+    if (!fallback) return []
+    const words = fallback.split(/\s+/).filter(Boolean)
+    const chunkSize = 4
+    let t = 0.2
+    for (let i = 0; i < words.length && t < duration - 0.2; i += chunkSize) {
+      const text = words.slice(i, i + chunkSize).join(' ')
+      const end = Math.min(duration, t + Math.max(1.2, Math.min(2.8, text.split(/\s+/).length * 0.45)))
+      cues.push({ start: t, end, text })
+      t = end + 0.08
+    }
+  }
+
+  // Quebra cues longos em blocos curtos estilo TikTok.
+  const chunks = []
+  for (const cue of cues) {
+    const words = splitCaptionWords(cue.text)
+    if (!words.length) continue
+    const maxWords = 4
+    const total = Math.max(0.6, cue.end - cue.start)
+    const parts = []
+    for (let i = 0; i < words.length; i += maxWords) parts.push(words.slice(i, i + maxWords))
+    const partDur = total / parts.length
+    parts.forEach((part, i) => {
+      const start = cue.start + i * partDur
+      const end = Math.min(duration, i === parts.length - 1 ? cue.end : cue.start + (i + 1) * partDur)
+      if (end - start >= 0.2) chunks.push({ start, end, words: part })
+    })
+  }
+  return chunks.filter((c) => c.words.length && c.end > c.start).slice(0, 160)
+}
+
+function buildCaptionAss(clip, duration, outW, outH) {
+  const chunks = buildCaptionChunks(clip, duration)
+  if (!chunks.length) return null
+  const fontSize = Math.max(42, Math.round(outH * 0.055))
+  const marginV = Math.max(70, Math.round(outH * 0.14))
+  const outline = Math.max(3, Math.round(fontSize * 0.12))
+  const shadow = Math.max(1, Math.round(outline * 0.5))
+  const playResX = outW
+  const playResY = outH
+  const header = [
+    '[Script Info]',
+    'ScriptType: v4.00+',
+    `PlayResX: ${playResX}`,
+    `PlayResY: ${playResY}`,
+    'ScaledBorderAndShadow: yes',
+    '',
+    '[V4+ Styles]',
+    'Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding',
+    `Style: Default,DejaVu Sans,${fontSize},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,${outline},${shadow},2,60,60,${marginV},1`,
+    '',
+    '[Events]',
+    'Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text',
+  ]
+
+  const events = []
+  for (const chunk of chunks) {
+    const words = chunk.words
+    const total = Math.max(0.2, chunk.end - chunk.start)
+    const step = total / words.length
+    for (let i = 0; i < words.length; i++) {
+      const start = chunk.start + i * step
+      const end = Math.min(chunk.end, i === words.length - 1 ? chunk.end : chunk.start + (i + 1) * step)
+      if (end - start < 0.08) continue
+      const text = words.map((w, idx) => {
+        const word = assEscape(w)
+        if (idx === i) return `{\\c&H0000FFFF&\\3c&H00000000&\\bord${outline + 1}}${word}{\\r}`
+        return `{\\c&H00FFFFFF&\\3c&H00000000&}${word}`
+      }).join(' ')
+      events.push(`Dialogue: 0,${assTime(start)},${assTime(end)},Default,,0,0,0,,${text}`)
+    }
+  }
+  return events.length ? header.concat(events).join('\n') + '\n' : null
+}
+
+function ffmpegFilterPath(file) {
+  return String(file)
+    .replace(/\\/g, '/')
+    .replace(/^([A-Za-z]):\//, '$1\\:/')
+    .replace(/:/g, '\\:')
+    .replace(/'/g, "\\'")
+}
+
 export async function runRender(clipId, opts = {}) {
   const clip = findClip(clipId)
   if (!clip) throw new Error('Corte não encontrado')
@@ -1475,19 +1600,49 @@ export async function runRender(clipId, opts = {}) {
       vf = `scale=-2:${outH}:flags=lanczos,crop=${outW}:${outH}:(iw-${outW})/2:0,setsar=1`
     }
     updateJob(job, { progress: 34, step: split ? `Split · ${sizeLabel(size)}` : `9:16 · ${sizeLabel(size)}` })
-    const outArgs = filterComplex
-      ? ['-filter_complex', filterComplex, '-map', '[vout]', '-map', '0:a?']
-      : ['-vf', vf]
-    await run(FFMPEG_BIN, [
-      '-y', '-hide_banner', '-loglevel', 'error',
-      '-ss', String(from), '-t', String(clip.end - clip.start), '-i', src,
-      ...outArgs,
-      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
-      '-c:a', 'aac', '-b:a', '160k', '-ar', '48000',
-      '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
-      '-movflags', '+faststart', '-shortest',
-      path.basename(out),
-    ], { cwd: EXPORTS, timeout: 1000 * 60 * (size.height >= 2000 ? 40 : size.height >= 1000 ? 25 : 15) })
+    const duration = Math.max(1, Number(clip.end) - Number(clip.start) || 0)
+    const ass = buildCaptionAss(clip, duration, outW, outH)
+    const assFile = ass ? path.join(EXPORTS, `${clip.id}.captions.ass`) : null
+    if (assFile) fs.writeFileSync(assFile, ass, 'utf8')
+    try {
+      let outArgs
+      const assName = assFile ? path.basename(assFile).replace(/'/g, "\\'") : null
+      if (filterComplex) {
+        const fc = assName
+          ? `${filterComplex.replace(/\[vout\]\s*$/, '[vpre]')};[vpre]subtitles='${assName}'[vout]`
+          : filterComplex
+        outArgs = ['-filter_complex', fc, '-map', '[vout]', '-map', '0:a?']
+      } else {
+        const vfWithSubs = assName ? `${vf},subtitles='${assName}'` : vf
+        outArgs = ['-vf', vfWithSubs]
+      }
+      const ffmpegArgs = (args) => [
+        '-y', '-hide_banner', '-loglevel', 'error',
+        '-ss', String(from), '-t', String(duration), '-i', src,
+        ...args,
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '160k', '-ar', '48000',
+        '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
+        '-movflags', '+faststart', '-shortest',
+        path.basename(out),
+      ]
+      const ffmpegTimeout = 1000 * 60 * (size.height >= 2000 ? 40 : size.height >= 1000 ? 25 : 15)
+      try {
+        await run(FFMPEG_BIN, ffmpegArgs(outArgs), { cwd: EXPORTS, timeout: ffmpegTimeout })
+      } catch (err) {
+        if (!assName) throw err
+        const msg = String(err?.stderr || err?.message || '').toLowerCase()
+        const captionFilterIssue = /subtitles|libass|ass filter|no such filter|invalid argument|error parsing|caption/.test(msg)
+        if (!captionFilterIssue) throw err
+        console.error('[render-captions-fallback]', msg.slice(0, 240))
+        const plainArgs = filterComplex
+          ? ['-filter_complex', filterComplex, '-map', '[vout]', '-map', '0:a?']
+          : ['-vf', vf]
+        await run(FFMPEG_BIN, ffmpegArgs(plainArgs), { cwd: EXPORTS, timeout: ffmpegTimeout })
+      }
+    } finally {
+      if (assFile) try { fs.unlinkSync(assFile) } catch {}
+    }
     clip.renderedKey = await storeLocalFile(out, `media/exports/${clip.id}.mp4`, 'video/mp4')
     updateJob(job, { progress: 88, step: 'Gerando a capa do corte' })
     const renderCover = path.join(COVERS, `${clip.id}-render.jpg`)
@@ -1569,6 +1724,13 @@ export async function runTrim(clipId, startInput, endInput, opts = {}) {
       const nextStart = Math.round((Number(clip.start) + start) * 10) / 10
       clip.end = Math.round((Number(clip.start) + end) * 10) / 10
       clip.start = nextStart
+    }
+    if (Array.isArray(clip.captionLines) && clip.captionLines.length) {
+      clip.captionLines = clip.captionLines
+        .map((line) => ({ t: Math.round((Number(line?.t) - start) * 10) / 10, text: String(line?.text || '') }))
+        .filter((line) => line.text && line.t < length && line.t > -6)
+        .map((line) => ({ ...line, t: Math.max(0, line.t) }))
+        .slice(0, 60)
     }
     clip.cut = { start: Math.round(start * 10) / 10, end: Math.round(end * 10) / 10 }
     clip.renderedUrl = undefined
