@@ -1586,6 +1586,7 @@ export function liveCaptureConfig() {
   return {
     mirror: INVIDIOUS_URL,
     mirrors: [...new Set([INVIDIOUS_URL, ...INVIDIOUS_URLS.slice(1), ...LIVE_CAPTURE_FALLBACKS])].filter(Boolean),
+    relay: '/api/live/relay',
     windowSeconds: LIVE_WINDOW,
     maxSegments: Math.ceil(LIVE_WINDOW / 5),
   }

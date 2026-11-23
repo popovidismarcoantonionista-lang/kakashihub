@@ -397,6 +397,51 @@ app.get('/api/live/capture-config', (req, res) => {
   ok(res, liveCaptureConfig())
 })
 
+// Relay dos HLS dos espelhos: no celular alguns navegadores/redes bloqueiam o
+// fetch cross-origin. O servidor busca o recurso e repassa na mesma origem.
+const RELAY_TTL = 4000
+const RELAY_MAX_BYTES = 24 * 1024 * 1024
+const relayCache = new Map()
+
+function relayHosts() {
+  const hosts = new Set()
+  for (const mirror of liveCaptureConfig().mirrors || []) {
+    try { hosts.add(new URL(mirror).hostname) } catch {}
+  }
+  return hosts
+}
+
+app.get('/api/live/relay', async (req, res) => {
+  const raw = String(req.query.url || '')
+  let target
+  try { target = new URL(raw) } catch { return fail(res, 400, 'URL inválida.') }
+  if (target.protocol !== 'https:') return fail(res, 400, 'Só HTTPS é permitido.')
+  const hosts = relayHosts()
+  if (!hosts.has(target.hostname) && !/^yt-comp\d+\.chocolatemoo53\.com$/i.test(target.hostname)) {
+    return fail(res, 403, 'Host não permitido.')
+  }
+  const cached = relayCache.get(raw)
+  if (cached && Date.now() - cached.at < RELAY_TTL) {
+    res.set('Content-Type', cached.type)
+    res.set('Cache-Control', 'no-store')
+    return res.send(cached.buf)
+  }
+  try {
+    const upstream = await fetch(target, { signal: AbortSignal.timeout(45000), redirect: 'follow' })
+    if (!upstream.ok) return fail(res, 502, `espelho HTTP ${upstream.status}`)
+    const buf = Buffer.from(await upstream.arrayBuffer())
+    if (buf.length > RELAY_MAX_BYTES) return fail(res, 413, 'Recurso grande demais.')
+    const type = upstream.headers.get('content-type') || 'application/octet-stream'
+    relayCache.set(raw, { at: Date.now(), buf, type })
+    if (relayCache.size > 40) relayCache.delete(relayCache.keys().next().value)
+    res.set('Content-Type', type)
+    res.set('Cache-Control', 'no-store')
+    res.send(buf)
+  } catch {
+    fail(res, 502, 'Espelho indisponível.')
+  }
+})
+
 // Janela de vídeo capturada no navegador: body = LWIN + versão + tamanhos (u32 BE) + vídeo.ts + áudio.ts
 app.post('/api/live/:id/window', express.raw({ type: 'application/octet-stream', limit: '80mb' }), async (req, res) => {
   const source = findSource(req.params.id)

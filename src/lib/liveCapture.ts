@@ -3,6 +3,7 @@ import type { Source } from '../types'
 export interface CaptureConfig {
   mirror: string
   mirrors?: string[]
+  relay?: string
   windowSeconds: number
   maxSegments: number
 }
@@ -27,6 +28,22 @@ const clean = (value: string) => String(value || '').trim()
 const mirrorBase = (mirror: string) => clean(mirror).replace(/\/$/, '')
 // Sem este parâmetro o espelho devolve URLs absolutas de googlevideo (sem CORS).
 const withLocal = (url: string) => `${url}${url.includes('?') ? '&' : '?'}local=true`
+
+/** No mobile, busca o HLS pela mesma origem para evitar CORS/rede do espelho. */
+function relayUrl(url: string, config?: CaptureConfig): string {
+  if (!config?.relay) return url
+  try {
+    const parsed = new URL(url, window.location.href)
+    if (parsed.protocol !== 'https:') return url
+    const hosts = [config.mirror, ...(config.mirrors || [])]
+      .map((mirror) => { try { return new URL(mirror).hostname } catch { return '' } })
+      .filter(Boolean)
+    if (!hosts.includes(parsed.hostname) && !/^yt-comp\d+\.chocolatemoo53\.com$/i.test(parsed.hostname)) return url
+    return `${config.relay}?url=${encodeURIComponent(parsed.toString())}`
+  } catch {
+    return url
+  }
+}
 
 export function youtubeId(url: string): string | null {
   const match = clean(url).match(/(?:[?&]v=|youtu\.be\/|\/live\/|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{11})/)
@@ -57,11 +74,12 @@ function proxySegment(segment: string, playlistUrl: string, mirror: string): str
   return url
 }
 
-async function fetchText(url: string): Promise<string> {
+async function fetchText(url: string, config?: CaptureConfig): Promise<string> {
+  const target = relayUrl(url, config)
   let last = 'falha de rede'
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await fetch(url, { cache: 'no-store' })
+      const res = await fetch(target, { cache: 'no-store' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const text = await res.text()
       if (!text.trim()) throw new Error('resposta vazia')
@@ -152,20 +170,19 @@ function parseVtt(raw: string): VttCue[] {
   return out
 }
 
-async function fetchCaptions(videoId: string, mirror: string): Promise<VttCue[]> {
+async function fetchCaptions(videoId: string, mirror: string, config?: CaptureConfig): Promise<VttCue[]> {
   try {
     const base = mirrorBase(mirror)
-    const res = await fetch(`${base}/api/v1/captions/${encodeURIComponent(videoId)}`, { cache: 'no-store' })
-    if (!res.ok) return []
-    const json = await res.json()
+    const url = `${base}/api/v1/captions/${encodeURIComponent(videoId)}`
+    const json = JSON.parse(await fetchText(url, config))
     const list = Array.isArray(json?.captions) ? json.captions : []
     if (!list.length) return []
     const track = list.find((c: any) => /^pt(?:-BR)?$/i.test(String(c.languageCode || '')))
       || list.find((c: any) => /portugu/i.test(String(c.label || '')))
       || list[0]
-    const url = normalizeUrl(String(track?.url || ''), mirror, `${base}/`)
-    if (!url) return []
-    return parseVtt(await fetchText(url))
+    const vttUrl = normalizeUrl(String(track?.url || ''), mirror, `${base}/`)
+    if (!vttUrl) return []
+    return parseVtt(await fetchText(vttUrl, config))
   } catch {
     return []
   }
@@ -216,11 +233,11 @@ async function resolvePlaylists(videoId: string, config: CaptureConfig): Promise
   if (cached) return cached
   try {
     const apiUrl = `${mirrorBase(config.mirror)}/api/v1/videos/${encodeURIComponent(videoId)}?local=true`
-    const json = JSON.parse(await fetchText(apiUrl))
+    const json = JSON.parse(await fetchText(apiUrl, config))
     if (json?.liveNow === false) throw new Error('a transmissão saiu do ar')
     const masterUrl = withLocal(normalizeUrl(json?.hlsUrl || '', config.mirror, `${mirrorBase(config.mirror)}/`))
     if (!masterUrl) throw new Error('o espelho não devolveu HLS')
-    const tracks = parseMaster(await fetchText(masterUrl), masterUrl, config.mirror)
+    const tracks = parseMaster(await fetchText(masterUrl, config), masterUrl, config.mirror)
     if (!tracks.video || !tracks.audio) throw new Error('o manifesto não trouxe vídeo e áudio')
     const value = { at: Date.now(), masterUrl, ...tracks }
     writeCache(videoId, config.mirror, value)
@@ -245,11 +262,12 @@ function concat(chunks: Uint8Array[]): Uint8Array<ArrayBuffer> {
   return out
 }
 
-async function fetchBytes(url: string): Promise<Uint8Array<ArrayBuffer>> {
+async function fetchBytes(url: string, config?: CaptureConfig): Promise<Uint8Array<ArrayBuffer>> {
+  const target = relayUrl(url, config)
   let last = 'falha de rede'
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await fetch(url, { cache: 'no-store' })
+      const res = await fetch(target, { cache: 'no-store' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       return new Uint8Array(await res.arrayBuffer())
     } catch (error) {
@@ -260,11 +278,11 @@ async function fetchBytes(url: string): Promise<Uint8Array<ArrayBuffer>> {
   throw new Error(last)
 }
 
-async function fetchSegments(urls: string[]): Promise<Uint8Array<ArrayBuffer>> {
+async function fetchSegments(urls: string[], config?: CaptureConfig): Promise<Uint8Array<ArrayBuffer>> {
   const chunks: Uint8Array[] = []
   for (let i = 0; i < urls.length; i += 4) {
     const group = urls.slice(i, i + 4)
-    const parts = await Promise.all(group.map((url) => fetchBytes(url)))
+    const parts = await Promise.all(group.map((url) => fetchBytes(url, config)))
     chunks.push(...parts)
   }
   return concat(chunks)
@@ -303,9 +321,9 @@ export async function captureLiveWindow(source: Source, api: Api, config: Captur
   let cues: VttCue[]
   try {
     [videoText, audioText, cues] = await Promise.all([
-      fetchText(withLocal(refs.video)),
-      fetchText(withLocal(refs.audio)),
-      fetchCaptions(id, config.mirror),
+      fetchText(withLocal(refs.video), config),
+      fetchText(withLocal(refs.audio), config),
+      fetchCaptions(id, config.mirror, config),
     ])
   } catch (error) {
     throw failure('playlist', error)
@@ -316,7 +334,7 @@ export async function captureLiveWindow(source: Source, api: Api, config: Captur
   let video: Uint8Array<ArrayBuffer>
   let audio: Uint8Array<ArrayBuffer>
   try {
-    [video, audio] = await Promise.all([fetchSegments(videoList), fetchSegments(audioList)])
+    [video, audio] = await Promise.all([fetchSegments(videoList, config), fetchSegments(audioList, config)])
   } catch (error) {
     throw failure('segmentos', error)
   }
