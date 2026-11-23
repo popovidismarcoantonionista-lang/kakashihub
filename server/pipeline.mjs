@@ -2568,14 +2568,26 @@ export async function captureLiveWindow(sourceId) {
       const win = takeBrowserLiveWindow(sourceId)
       if (win) return processLiveWindowFile(sourceId, win, job)
       const last = Number(source.liveCaptureLastAt) || 0
-      if (last && Date.now() - last > BROWSER_WINDOW_TIMEOUT) {
-        return finishLiveStep(source, job, LIVE_TEXT.browserClosed)
+      const started = new Date(source.liveStartedAt || source.addedAt || Date.now()).getTime()
+      const browserStale = last
+        ? Date.now() - last > BROWSER_WINDOW_TIMEOUT
+        : Date.now() - started > Math.max(90, LIVE_WINDOW + 30) * 1000
+      if (browserStale) {
+        source.captureMode = 'server'
+        source.liveMisses = 0
+        source.liveLastError = null
+        source.liveCheckedAt = new Date().toISOString()
+        save()
+        addActivity('agent', `Captura no navegador sem resposta em "${source.title}". Tentando captura no servidor.`)
+        updateJob(job, { progress: 35, step: 'Reconectando captura da live' })
+        // cai para a captura no servidor nesta mesma rodada
+      } else {
+        updateJob(job, { progress: 50, step: 'Monitorando a transmissão' })
+        source.liveLastError = null
+        source.liveCheckedAt = new Date().toISOString()
+        save()
+        return { continue: true }
       }
-      updateJob(job, { progress: 50, step: 'Monitorando a transmissão' })
-      source.liveLastError = null
-      source.liveCheckedAt = new Date().toISOString()
-      save()
-      return { continue: true }
     }
 
     const apiConfirmed = () => Boolean(
