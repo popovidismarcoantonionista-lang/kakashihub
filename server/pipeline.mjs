@@ -22,7 +22,7 @@ import {
   updateJob,
 } from './store.mjs'
 import { ensureLocalMedia, mediaPathFromUrl, storeLocalFile } from './media-store.mjs'
-import { INVIDIOUS_URL, cobaltResolve, hasCobalt, hasYtdlpApi, hasInvidious, invidiousInfo, ydlInfo } from './services.mjs'
+import { INVIDIOUS_URL, INVIDIOUS_URLS, cobaltResolve, hasCobalt, hasYtdlpApi, hasInvidious, invidiousInfo, ydlInfo } from './services.mjs'
 
 const PYTHON = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -1576,9 +1576,16 @@ const LIVE_STREAM_RETRY_MS = Math.max(10, Number(process.env.LIVE_STREAM_RETRY_M
 const browserLiveWindows = new Map()
 const BROWSER_WINDOW_TIMEOUT = Math.max(180, LIVE_WINDOW * 4) * 1000
 
+const LIVE_CAPTURE_FALLBACKS = [
+  'https://inv.nadeko.net',
+  'https://yewtu.be',
+  'https://invidious.nerdvpn.de',
+]
+
 export function liveCaptureConfig() {
   return {
     mirror: INVIDIOUS_URL,
+    mirrors: [...new Set([INVIDIOUS_URL, ...INVIDIOUS_URLS.slice(1), ...LIVE_CAPTURE_FALLBACKS])].filter(Boolean),
     windowSeconds: LIVE_WINDOW,
     maxSegments: Math.ceil(LIVE_WINDOW / 5),
   }

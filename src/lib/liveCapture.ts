@@ -2,6 +2,7 @@ import type { Source } from '../types'
 
 export interface CaptureConfig {
   mirror: string
+  mirrors?: string[]
   windowSeconds: number
   maxSegments: number
 }
@@ -57,11 +58,20 @@ function proxySegment(segment: string, playlistUrl: string, mirror: string): str
 }
 
 async function fetchText(url: string): Promise<string> {
-  const res = await fetch(url, { cache: 'no-store' })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const text = await res.text()
-  if (!text.trim()) throw new Error('resposta vazia')
-  return text
+  let last = 'falha de rede'
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, { cache: 'no-store' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const text = await res.text()
+      if (!text.trim()) throw new Error('resposta vazia')
+      return text
+    } catch (error) {
+      last = error instanceof Error ? error.message : String(error)
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300))
+    }
+  }
+  throw new Error(last)
 }
 
 function parseMaster(text: string, masterUrl: string, mirror: string): Pick<PlaylistRefs, 'video' | 'audio'> {
@@ -184,12 +194,12 @@ function cacheKey(videoId: string, mirror: string) {
   return `${CACHE_KEY}:${mirrorBase(mirror)}:${videoId}`
 }
 
-function readCache(videoId: string, mirror: string): PlaylistRefs | null {
+function readCache(videoId: string, mirror: string, allowStale = false): PlaylistRefs | null {
   try {
     const raw = localStorage.getItem(cacheKey(videoId, mirror))
     if (!raw) return null
     const value = JSON.parse(raw) as PlaylistRefs
-    if (!value || Date.now() - Number(value.at) > CACHE_TTL) return null
+    if (!value || (!allowStale && Date.now() - Number(value.at) > CACHE_TTL)) return null
     if (!value.video || !value.audio || !value.masterUrl) return null
     return value
   } catch {
@@ -204,18 +214,24 @@ function writeCache(videoId: string, mirror: string, value: PlaylistRefs) {
 async function resolvePlaylists(videoId: string, config: CaptureConfig): Promise<PlaylistRefs> {
   const cached = readCache(videoId, config.mirror)
   if (cached) return cached
-  const apiUrl = `${mirrorBase(config.mirror)}/api/v1/videos/${encodeURIComponent(videoId)}?local=true`
-  const res = await fetch(apiUrl, { cache: 'no-store' })
-  if (!res.ok) throw new Error(`espelho HTTP ${res.status}`)
-  const json = await res.json()
-  if (json?.liveNow === false) throw new Error('a transmissão saiu do ar')
-  const masterUrl = withLocal(normalizeUrl(json?.hlsUrl || '', config.mirror, `${mirrorBase(config.mirror)}/`))
-  if (!masterUrl) throw new Error('o espelho não devolveu HLS')
-  const tracks = parseMaster(await fetchText(masterUrl), masterUrl, config.mirror)
-  if (!tracks.video || !tracks.audio) throw new Error('o manifesto não trouxe vídeo e áudio')
-  const value = { at: Date.now(), masterUrl, ...tracks }
-  writeCache(videoId, config.mirror, value)
-  return value
+  try {
+    const apiUrl = `${mirrorBase(config.mirror)}/api/v1/videos/${encodeURIComponent(videoId)}?local=true`
+    const json = JSON.parse(await fetchText(apiUrl))
+    if (json?.liveNow === false) throw new Error('a transmissão saiu do ar')
+    const masterUrl = withLocal(normalizeUrl(json?.hlsUrl || '', config.mirror, `${mirrorBase(config.mirror)}/`))
+    if (!masterUrl) throw new Error('o espelho não devolveu HLS')
+    const tracks = parseMaster(await fetchText(masterUrl), masterUrl, config.mirror)
+    if (!tracks.video || !tracks.audio) throw new Error('o manifesto não trouxe vídeo e áudio')
+    const value = { at: Date.now(), masterUrl, ...tracks }
+    writeCache(videoId, config.mirror, value)
+    return value
+  } catch (error) {
+    // Em redes móveis o espelho pode falhar por alguns segundos; reaproveita
+    // o último manifesto conhecido em vez de perder a janela inteira.
+    const stale = readCache(videoId, config.mirror, true)
+    if (stale) return stale
+    throw error
+  }
 }
 
 function concat(chunks: Uint8Array[]): Uint8Array<ArrayBuffer> {
@@ -229,15 +245,26 @@ function concat(chunks: Uint8Array[]): Uint8Array<ArrayBuffer> {
   return out
 }
 
+async function fetchBytes(url: string): Promise<Uint8Array<ArrayBuffer>> {
+  let last = 'falha de rede'
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, { cache: 'no-store' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return new Uint8Array(await res.arrayBuffer())
+    } catch (error) {
+      last = error instanceof Error ? error.message : String(error)
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300))
+    }
+  }
+  throw new Error(last)
+}
+
 async function fetchSegments(urls: string[]): Promise<Uint8Array<ArrayBuffer>> {
   const chunks: Uint8Array[] = []
   for (let i = 0; i < urls.length; i += 4) {
     const group = urls.slice(i, i + 4)
-    const parts = await Promise.all(group.map(async (url) => {
-      const res = await fetch(url, { cache: 'no-store' })
-      if (!res.ok) throw new Error(`segmento HTTP ${res.status}`)
-      return new Uint8Array(await res.arrayBuffer())
-    }))
+    const parts = await Promise.all(group.map((url) => fetchBytes(url)))
     chunks.push(...parts)
   }
   return concat(chunks)
@@ -257,27 +284,73 @@ function packWindow(video: Uint8Array<ArrayBuffer>, audio: Uint8Array<ArrayBuffe
   return new Blob([header, video, audio, json], { type: 'application/octet-stream' })
 }
 
+function failure(stage: string, error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error)
+  return new Error(`${stage}: ${message}`)
+}
+
 export async function captureLiveWindow(source: Source, api: Api, config: CaptureConfig): Promise<void> {
   const id = source.liveId || youtubeId(source.url || '')
-  if (!id) throw new Error('link de YouTube inválido')
-  const refs = await resolvePlaylists(id, config)
-  const [videoText, audioText, cues] = await Promise.all([
-    fetchText(withLocal(refs.video)),
-    fetchText(withLocal(refs.audio)),
-    fetchCaptions(id, config.mirror),
-  ])
+  if (!id) throw new Error('link: ID do vídeo não encontrado')
+  let refs: PlaylistRefs
+  try {
+    refs = await resolvePlaylists(id, config)
+  } catch (error) {
+    throw failure('manifesto', error)
+  }
+  let videoText: string
+  let audioText: string
+  let cues: VttCue[]
+  try {
+    [videoText, audioText, cues] = await Promise.all([
+      fetchText(withLocal(refs.video)),
+      fetchText(withLocal(refs.audio)),
+      fetchCaptions(id, config.mirror),
+    ])
+  } catch (error) {
+    throw failure('playlist', error)
+  }
   const videoList = parseSegments(videoText, refs.video, config.mirror, config.maxSegments)
   const audioList = parseSegments(audioText, refs.audio, config.mirror, config.maxSegments)
-  if (!videoList.length || !audioList.length) throw new Error('playlist sem segmentos')
-  const [video, audio] = await Promise.all([fetchSegments(videoList), fetchSegments(audioList)])
-  if (video.length < 1024 || audio.length < 1024) throw new Error('janela vazia')
+  if (!videoList.length || !audioList.length) throw new Error('playlist: sem segmentos')
+  let video: Uint8Array<ArrayBuffer>
+  let audio: Uint8Array<ArrayBuffer>
+  try {
+    [video, audio] = await Promise.all([fetchSegments(videoList), fetchSegments(audioList)])
+  } catch (error) {
+    throw failure('segmentos', error)
+  }
+  if (video.length < 1024 || audio.length < 1024) throw new Error('segmentos: janela vazia')
   const seconds = playlistDuration(videoText, config.maxSegments) || config.windowSeconds
   const captions = captionsForWindow(cues, seconds)
-  await api(`/api/live/${source.id}/window`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream' },
-    body: packWindow(video, audio, captions),
-  })
+  try {
+    await api(`/api/live/${source.id}/window`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: packWindow(video, audio, captions),
+    })
+  } catch (error) {
+    throw failure('envio', error)
+  }
+}
+
+/** Tenta o espelho principal e até dois alternativos antes de desistir da janela. */
+export async function captureLiveWindowWithFallback(
+  source: Source,
+  api: Api,
+  config: CaptureConfig,
+): Promise<void> {
+  const mirrors = [...new Set([config.mirror, ...(config.mirrors || [])])].filter(Boolean).slice(0, 3)
+  let last: unknown = new Error('sem espelhos disponíveis')
+  for (const mirror of mirrors) {
+    try {
+      await captureLiveWindow(source, api, { ...config, mirror })
+      return
+    } catch (error) {
+      last = error
+    }
+  }
+  throw last
 }
 
 type WakeLockSentinelLike = { release: () => Promise<void> }
@@ -348,7 +421,7 @@ export class LiveCaptureSession {
     if (!source || source.status !== 'ao-vivo') return
     this.busy = true
     try {
-      await captureLiveWindow(source, this.api, this.config)
+      await captureLiveWindowWithFallback(source, this.api, this.config)
       // Sucesso é silencioso: o badge só aparece quando a captura falha.
     } catch (error) {
       const message = (error instanceof Error ? error.message : String(error)).slice(0, 140)
