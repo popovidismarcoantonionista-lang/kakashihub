@@ -1552,7 +1552,8 @@ export async function runRender(clipId, opts = {}) {
     const size = renderSize()
     updateJob(job, { progress: 22, step: 'Calculando o enquadramento' })
     let cam = clip.cam || source?.cam || null
-    if (!cam && clip.framing === 'cam') {
+    const wantsSplit = clip.framing === 'cam' || clip.framing === 'auto' || !clip.framing
+    if (!cam && wantsSplit) {
       updateJob(job, { progress: 26, step: 'Localizando a webcam' })
       const spanSec = Math.max(1, clip.end - clip.start)
       cam = await detectCamBox(src, from + Math.min(1.5, spanSec / 3))
@@ -1560,7 +1561,8 @@ export async function runRender(clipId, opts = {}) {
         || { ...DEFAULT_CAM }
       clip.cam = cam
     }
-    const split = clip.framing === 'cam' && cam && cam.w >= 0.05 && cam.h >= 0.05
+    const split = wantsSplit && cam && cam.w >= 0.05 && cam.h >= 0.05
+    if (split && clip.framing !== 'cam') clip.framing = 'cam'
     let frac = 0.5
     if (!split) {
       if (clip.framing === 'auto') {
