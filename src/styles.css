@@ -1542,3 +1542,13 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
 }
 .cam-sliders input[type='range'] { width: 100%; accent-color: #6ee7a0; }
 .cam-sliders b { text-align: right; font-size: 10px; color: var(--text-2); }
+.live-cam { border-color: rgba(110, 231, 160, 0.28); background: rgba(110, 231, 160, 0.04); }
+.live-cam-tools { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.live-cam-tools .btn { padding: 5px 8px; font-size: 9.5px; }
+.cam-preview-empty {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-3);
+}
+@media (max-width: 480px) {
+  .live-cam .cam-manual-head { flex-direction: column; align-items: flex-start; }
+}

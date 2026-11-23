@@ -645,6 +645,32 @@ export async function clipFrame(clipId) {
   return stdout
 }
 
+/** Quadro recente da live para o ajuste manual de enquadramento em andamento. */
+export async function liveFrame(sourceId) {
+  const candidates = []
+  const pending = browserLiveWindows.get(sourceId)
+  if (pending?.file && fs.existsSync(pending.file)) candidates.push(pending.file)
+  const clips = (getState().clips || [])
+    .filter((clip) => clip.sourceId === sourceId)
+    .slice(-4)
+    .reverse()
+  for (const clip of clips) {
+    const file = liveMediaFile(clip)
+    if (file) candidates.push(file)
+  }
+  for (const src of candidates) {
+    try {
+      const { stdout } = await run(FFMPEG_BIN, [
+        '-y', '-hide_banner', '-loglevel', 'error',
+        '-ss', '1.2', '-i', src, '-frames:v', '1',
+        '-vf', 'scale=960:-2', '-q:v', '4', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-',
+      ], { timeout: 1000 * 40, encoding: 'buffer' })
+      if (stdout?.length) return stdout
+    } catch {}
+  }
+  throw new Error('Sem quadro disponível para esta live')
+}
+
 async function findSubFile(sourceId) {
   const files = fs.readdirSync(SRC_MEDIA).filter((f) => f.startsWith(sourceId) && f.endsWith('.vtt'))
   if (!files.length) return null
@@ -2039,12 +2065,16 @@ async function makeLiveClip(source, windowFile, span, session, index, captions =
   if (fs.existsSync(coverAbs)) {
     try { coverKey = await storeLocalFile(coverAbs, `covers/${clipId}.jpg`, 'image/jpeg') } catch {}
   }
-  // Detecta a webcam dentro do próprio corte (o arquivo já começa em 0), para
-  // o split não ficar preso no canto quando o streamer muda de posição.
+  // O ajuste manual feito enquanto a live roda tem precedência. A detecção
+  // automática só entra quando o usuário ainda não definiu a caixa — senão
+  // cada janela nova sobrescreveria o enquadramento escolhido no preview.
   const spanSec = Math.max(1, span.end - span.start)
-  let camBox = await detectCamBox(outFile, Math.min(1.5, spanSec / 3))
-  if (!camBox) camBox = await detectCamBox(outFile, Math.min(spanSec - 0.2, spanSec / 2))
-  if (!camBox) camBox = source.cam || { ...DEFAULT_CAM }
+  let camBox = source.cam ? { ...source.cam } : null
+  if (!camBox) {
+    camBox = await detectCamBox(outFile, Math.min(1.5, spanSec / 3))
+      || await detectCamBox(outFile, Math.min(spanSec - 0.2, spanSec / 2))
+      || { ...DEFAULT_CAM }
+  }
 
   const at = Math.round((session + span.start) * 10) / 10
   // Cues chegam em tempo relativo à janela; recorta os que caem no span e

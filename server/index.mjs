@@ -19,7 +19,7 @@ import {
 import { blobStorageEnabled, deleteBlobMedia, getPrivateBlob } from './media-store.mjs'
 import {
   OUTPUT_SIZES, clipFrame, fetchChannelVideos, getLiveHlsUrl, isLiveRunning, liveCapabilities,
-  liveCaptureConfig, liveErrorText, liveMediaFile, queueBrowserLiveWindow, stopLive, uniqueClips,
+  liveCaptureConfig, liveErrorText, liveFrame, liveMediaFile, queueBrowserLiveWindow, stopLive, uniqueClips,
 } from './pipeline.mjs'
 import { startLiveWorkflow, startProcessJob, startUploadWorkflow } from './jobs.mjs'
 import {
@@ -499,6 +499,16 @@ app.post('/api/live/:id/window', express.raw({ type: 'application/octet-stream',
   } catch (e) {
     console.error('[live window]', e?.message || e)
     fail(res, 500, 'Não foi possível processar a janela recebida.', { detail: liveErrorText(e, 300) })
+  }
+})
+
+app.get('/api/live/:id/frame', async (req, res) => {
+  try {
+    const buf = await liveFrame(req.params.id)
+    res.set('Cache-Control', 'no-store')
+    res.type('image/jpeg').send(buf)
+  } catch {
+    fail(res, 404, 'Ainda não há quadro desta live. Aguarde o primeiro corte.')
   }
 })
 

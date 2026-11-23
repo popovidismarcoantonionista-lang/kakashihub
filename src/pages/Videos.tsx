@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react'
 import {
-  AlertTriangle, Clapperboard,
+  AlertTriangle, Clapperboard, Crop,
   Play, Plus, Radio, RefreshCw, Square, Trash2, UploadCloud, Youtube,
 } from 'lucide-react'
 import { useApp } from '../store'
 import { navigate } from '../router'
 import { PlayerModal } from '../components'
 import { Cover, EmptyState, Logo, Modal, PageHead, ProgressBar, TypeBadge } from '../ui'
+import { detectCamBoxFromImage } from '../lib/camBox'
 import { fmtTime, fmtViews, relTime } from '../lib/format'
-import type { Source } from '../types'
+import type { CamBox, Source } from '../types'
 
 type RadarItem = {
   platform: 'twitch' | 'kick'
@@ -78,6 +79,99 @@ function liveEmbed(source: Source): string | null {
   return null
 }
 
+const DEFAULT_CAM: CamBox = { x: 0.68, y: 0.02, w: 0.3, h: 0.36 }
+
+/** Ajuste da caixa da webcam sem sair da live: vale para cortes atuais e futuros. */
+function LiveCamEditor({ source }: { source: Source }) {
+  const { api } = useApp()
+  const [draft, setDraft] = useState<CamBox>({ ...(source.cam || DEFAULT_CAM) })
+  const [busy, setBusy] = useState(false)
+  const [frameKey, setFrameKey] = useState(0)
+  const [frameOk, setFrameOk] = useState(true)
+
+  const redetect = async () => {
+    setBusy(true)
+    try {
+      const box = await detectCamBoxFromImage(`/api/live/${source.id}/frame?t=${Date.now()}`)
+      if (box) setDraft(box)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const apply = async () => {
+    setBusy(true)
+    try {
+      await api(`/api/sources/${source.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ cam: draft, applyCam: true }),
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="cam-manual live-cam">
+      <div className="cam-manual-head">
+        <span className="field-label">Caixa da webcam · ao vivo</span>
+        <div className="live-cam-tools">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setFrameKey(Date.now())}>
+            Atualizar quadro
+          </button>
+          <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={redetect}>
+            {busy ? '…' : 'Detectar de novo'}
+          </button>
+        </div>
+      </div>
+      <div className="cam-preview">
+        <img
+          src={`/api/live/${source.id}/frame?t=${frameKey}`}
+          alt="Quadro recente da live"
+          onLoad={() => setFrameOk(true)}
+          onError={() => setFrameOk(false)}
+        />
+        {frameOk && (
+          <span
+            className="cam-preview-box"
+            style={{
+              left: `${draft.x * 100}%`,
+              top: `${draft.y * 100}%`,
+              width: `${draft.w * 100}%`,
+              height: `${draft.h * 100}%`,
+            }}
+          />
+        )}
+        {!frameOk && <span className="cam-preview-empty">Aguardando o primeiro corte…</span>}
+      </div>
+      <div className="cam-sliders">
+        {([
+          ['x', 'Horizontal', 0],
+          ['y', 'Vertical', 0],
+          ['w', 'Largura', 0.08],
+          ['h', 'Altura', 0.08],
+        ] as const).map(([key, label, min]) => (
+          <label key={key}>
+            <span>{label}</span>
+            <input
+              type="range"
+              min={min}
+              max={key === 'x' ? 1 - draft.w : key === 'y' ? 1 - draft.h : 1}
+              step="0.01"
+              value={draft[key]}
+              onChange={(e) => setDraft((old) => ({ ...old, [key]: Number(e.target.value) }))}
+            />
+            <b className="mono">{Math.round(draft[key] * 100)}%</b>
+          </label>
+        ))}
+      </div>
+      <button type="button" className="btn btn-primary btn-sm w-full" disabled={busy} onClick={apply}>
+        Aplicar à live e aos cortes
+      </button>
+    </div>
+  )
+}
+
 export function VideosPage() {
   const { state, api, setIngestOpen, setIngestTab } = useApp()
   const [url, setUrl] = useState('')
@@ -87,6 +181,7 @@ export function VideosPage() {
   const [liveWatching, setLiveWatching] = useState<Source | null>(null)
   const [confirm, setConfirm] = useState<Source | null>(null)
   const [removing, setRemoving] = useState(false)
+  const [camEditFor, setCamEditFor] = useState('')
   const [radar, setRadar] = useState<RadarData | null>(null)
 
   useEffect(() => {
@@ -371,10 +466,19 @@ export function VideosPage() {
                   {source.error && (
                     <div className="src-error"><AlertTriangle size={13} /> {source.error}</div>
                   )}
+                  {isLive && camEditFor === source.id && <LiveCamEditor source={source} />}
                   <div className="src-actions">
                     <button className="btn btn-soft btn-sm" onClick={() => openStudio(source)} disabled={!clips.length}>
                       <Clapperboard size={13} /> Abrir estúdio
                     </button>
+                    {isLive && (
+                      <button
+                        className="btn btn-soft btn-sm"
+                        onClick={() => setCamEditFor(camEditFor === source.id ? '' : source.id)}
+                      >
+                        <Crop size={12} /> {camEditFor === source.id ? 'Fechar caixa' : 'Ajustar webcam'}
+                      </button>
+                    )}
                     {isLive ? (
                       liveOn ? (
                         <button className="btn btn-ghost btn-sm" onClick={() => stopMonitoring(source)} disabled={liveActing === source.id}>
