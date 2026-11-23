@@ -399,6 +399,12 @@ app.post('/api/live/:id/capture-error', (req, res) => {
   if (message) {
     source.liveLastError = message
     source.liveCheckedAt = new Date().toISOString()
+    // Se o navegador não consegue obter HLS dos espelhos, cai para captura no servidor.
+    if (source.captureMode === 'browser' && /hls|manifesto|espelho n[aã]o devolveu/i.test(message)) {
+      source.captureMode = 'server'
+      source.liveLastError = `Captura no navegador indisponível (${message.slice(0, 120)}). Tentando captura no servidor…`
+      source.liveMisses = 0
+    }
     save()
   }
   ok(res, { ok: true })
