@@ -539,7 +539,10 @@ export function VideosPage() {
                   {((processing && !isLive) || (liveOn && !liveThumb)) && (
                     <div className="src-loading" aria-hidden="true"><Logo size={44} className="src-spin" /></div>
                   )}
-                  <span className={`src-badge ${source.status} ${isLive ? 'live' : ''}`}>{badge}</span>
+                  <span className={`src-badge ${source.status} ${isLive ? 'live' : ''}`}>
+                    {isLive && <Logo size={10} className="badge-spin" />}
+                    {badge}
+                  </span>
                   <span className="src-dur mono">{fmtTime(source.duration)}</span>
                   {(processing || source.status === 'ao-vivo') && (
                     <div className="src-progress">

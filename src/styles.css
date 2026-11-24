@@ -282,7 +282,7 @@ h1, h2, h3 { font-weight: 600; }
 .rl-spin, .rr-spin { filter: drop-shadow(0 0 9px rgba(224, 49, 49, 0.65)); }
 .rl-title, .rr-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
 @media (prefers-reduced-motion: reduce) {
-  .btn-spin, .rl-spin, .rr-spin, .src-spin { animation: none; }
+  .btn-spin, .rl-spin, .rr-spin, .src-spin, .badge-spin { animation: none; }
 }
 
 .link-btn {
@@ -633,7 +633,8 @@ h1, h2, h3 { font-weight: 600; }
 .src-badge.processando { border-color: rgba(255, 176, 46, 0.35); color: #ffd58c; }
 .src-badge.live { display: inline-flex; align-items: center; gap: 5px; }
 .src-badge.ao-vivo { border-color: rgba(255, 77, 94, 0.55); color: #ffd9dd; background: rgba(255, 77, 94, 0.16); }
-.src-badge.ao-vivo::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #ff4d5e; box-shadow: 0 0 7px #ff4d5e; animation: pulseDot 1.4s infinite; }
+.src-badge.ao-vivo::before { display: none; }
+.src-badge .badge-spin { animation: spin 1.3s linear infinite; filter: drop-shadow(0 0 4px rgba(224, 49, 49, 0.75)); }
 .chip-live { border-color: rgba(255, 77, 94, 0.35); color: #ffb3bb; }
 .live-bar { position: relative; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
 .live-bar i { position: absolute; top: 0; bottom: 0; width: 38%; background: linear-gradient(90deg, transparent, #ff4d5e, transparent); animation: liveSweep 1.5s linear infinite; }
