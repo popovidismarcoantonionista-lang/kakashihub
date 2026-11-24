@@ -7,7 +7,7 @@ import {
   sourceBecameLiveStep,
   startLiveWorkflowStep,
 } from './steps.mjs'
-import { beginHeavyWork, endHeavyWork, waitForLiveRecording } from '../server/work-gate.mjs'
+import { beginHeavyWork, endHeavyWork, runHeavyExclusive, waitForLiveRecording } from '../server/work-gate.mjs'
 
 // `use workflow` / `sleep` do SDK exigem um build Nitro/Next. Aqui as funções
 // são orquestrações comuns executadas por server/background.mjs no mesmo
@@ -19,22 +19,29 @@ export async function processJobWorkflow(kind, payload) {
   // da live no Render free: era isso que derrubava o ingest no meio do corte.
   const heavy = kind === 'render' || kind === 'trim' || kind === 'compilation'
     || kind === 'ingest' || kind === 'analyze'
-  if (heavy) {
-    beginHeavyWork()
-    await waitForLiveRecording()
-  }
-  try {
-    const result = await processJobStep(kind, payload)
-    if (kind === 'analyze' && await sourceBecameLiveStep(payload.sourceId)) {
-      await startLiveWorkflowStep(payload.sourceId)
+
+  const execute = async () => {
+    if (heavy) {
+      beginHeavyWork()
+      await waitForLiveRecording()
     }
-    return result
-  } catch (error) {
-    await failJobStep(payload.jobId, error?.message || 'O processamento falhou.')
-    throw error
-  } finally {
-    if (heavy) endHeavyWork()
+    try {
+      const result = await processJobStep(kind, payload)
+      if (kind === 'analyze' && await sourceBecameLiveStep(payload.sourceId)) {
+        await startLiveWorkflowStep(payload.sourceId)
+      }
+      return result
+    } catch (error) {
+      await failJobStep(payload.jobId, error?.message || 'O processamento falhou.')
+      throw error
+    } finally {
+      if (heavy) endHeavyWork()
+    }
   }
+
+  // Um job pesado por vez. Sem a fila, dois renders rodavam juntos, estouravam
+  // RAM/CPU no Render free e o processo reiniciava com o corte pela metade.
+  return heavy ? runHeavyExclusive(execute) : execute()
 }
 
 export async function liveMonitorWorkflow(sourceId) {
