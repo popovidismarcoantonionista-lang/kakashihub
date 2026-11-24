@@ -2701,7 +2701,8 @@ async function processLiveWindowFile(sourceId, win, job) {
       )
       source.liveMade = made + 1
       source.liveLastEnd = clip.end
-      source.clips = getState().clips.filter((item) => item.sourceId === sourceId).length
+      const currentClips = Array.isArray(getState().clips) ? getState().clips : []
+      source.clips = currentClips.filter((item) => item.sourceId === sourceId).length
       source.lastClipAt = new Date().toISOString()
       addActivity('agent', `Novo corte da live: "${clip.hook}"`)
       updateJob(job, {
@@ -2805,7 +2806,8 @@ export async function captureLiveWindow(sourceId) {
       if (!meta) return finishLiveStep(source, job, LIVE_TEXT.offline)
 
       const priorDuration = Math.max(0, Number(source.duration) || 0)
-      const priorClips = getState().clips.filter((clip) => clip.sourceId === sourceId).length
+      const currentClips = Array.isArray(getState().clips) ? getState().clips : []
+      const priorClips = currentClips.filter((clip) => clip.sourceId === sourceId).length
       source.url = meta.sourceUrl || (meta.liveId && /youtube\.com|youtu\.be/i.test(url) ? watchUrl(meta.liveId) : url)
       source.title = meta.title || source.title
       source.channel = meta.channel || source.channel
