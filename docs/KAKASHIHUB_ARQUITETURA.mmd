@@ -1,0 +1,23 @@
+flowchart LR
+  U[Usuário / operador] --> FE[Frontend React ou TanStack Start]
+  FE -->|HTTP JSON| API[Backend Node.js + Express]
+  FE -->|janelas HLS| API
+  API --> STORE[Estado + PostgreSQL]
+  API --> MEDIA[Vercel Blob / mídia]
+  API --> JOBS[Jobs assíncronos]
+  JOBS --> PIPE[Pipeline FFmpeg]
+  PIPE --> MEDIA
+  API --> YT[YouTube Data API<br/>metadados]
+  FE --> MIRROR[Espelho Invidious<br/>playlist HLS]
+  MIRROR --> FE
+  API --> EXT[yt-dlp / Cobalt<br/>vídeos comuns]
+  PIPE --> OUT[Clipes verticais<br/>áudio + vídeo sincronizados]
+  OUT --> MEDIA
+  API --> HEALTH[/api/health<br/>observabilidade/]
+
+  classDef app fill:#172033,stroke:#82aaff,color:#fff
+  classDef ext fill:#243b2f,stroke:#6ee7a0,color:#fff
+  classDef data fill:#3a2a1f,stroke:#f6c177,color:#fff
+  class FE,API,JOBS,PIPE,OUT,HEALTH app
+  class YT,MIRROR,EXT ext
+  class STORE,MEDIA data
