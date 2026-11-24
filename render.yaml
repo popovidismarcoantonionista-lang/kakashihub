@@ -20,6 +20,12 @@ services:
       # (o Blueprint não promove novos secrets em serviços já existentes).
       - key: YOUTUBE_API_KEY
         sync: false
+      # Proxy residencial para downloads de VOD: o YouTube bloqueia IPs de
+      # datacenter com "Sign in to confirm you're not a bot". Formato:
+      # http://usuario:senha@host:porta (ou socks5://...). Sem isso, o VOD
+      # do YouTube falha no Render. Preencher no painel do Render.
+      - key: YTDLP_PROXY
+        sync: false
       # Cobalt resolve VOD (vídeos comuns), mas RECUSA lives
       # (error.api.content.video.live). Mantido para downloads normais.
       - key: COBALT_API_URL

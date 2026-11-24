@@ -248,6 +248,15 @@ function prepareYouTubeCookies() {
 }
 
 const YT_COOKIES = prepareYouTubeCookies()
+// IP de datacenter (Render) cai no "Sign in to confirm you're not a bot".
+// Um proxy residencial faz o YouTube ver uma conexão comum, sem cookies de
+// conta e sem renovação manual. Aceita também as variáveis padrão de proxy.
+const YTDLP_PROXY = String(
+  process.env.YTDLP_PROXY
+  || process.env.HTTPS_PROXY || process.env.https_proxy
+  || process.env.HTTP_PROXY || process.env.http_proxy
+  || '',
+).trim()
 const INVIDIOUS_INSTANCE = process.env.INVIDIOUS_INSTANCE
 // O cliente ANDROID devolve o progressivo itag 18 mesmo em IP de datacenter,
 // onde WEB/TV caem no "Sign in to confirm you're not a bot". Vem primeiro para
@@ -278,6 +287,7 @@ export function ytdlp(args, opts = {}) {
     ...(useExtras && extractorArgs.length ? ['--extractor-args', extractorArgs.join(';')] : []),
     '--force-ipv4',
     '--js-runtimes', 'node',
+    ...(YTDLP_PROXY ? ['--proxy', YTDLP_PROXY] : []),
     ...(useExtras && IMPERSONATE ? ['--impersonate', IMPERSONATE] : []),
     ...(VERBOSE ? ['--verbose'] : []),
     ...args,
