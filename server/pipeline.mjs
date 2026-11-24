@@ -2589,7 +2589,13 @@ async function processLiveWindowFile(sourceId, win, job) {
         step: `Ao vivo · ${liveStamp(session + duration)} · ${source.liveMade} cortes no acervo${level ? ` · áudio ${level.mean} dB` : ''}`,
       })
     } catch (error) {
-      console.error('[live] makeLiveClip error:', error?.message || error)
+      const detail = liveErrorText(error, 200)
+      console.error('[live] makeLiveClip error:', detail)
+      source = findSource(sourceId)
+      if (source) {
+        source.liveLastError = `clip: ${detail}`
+        save()
+      }
     }
   }
 
