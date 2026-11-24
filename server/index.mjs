@@ -847,10 +847,11 @@ app.patch('/api/clips/:id', (req, res) => {
   const state = getState()
   const clip = findClip(req.params.id)
   if (!clip) return fail(res, 404, 'Corte não encontrado.')
-  const allowed = ['hook', 'type', 'start', 'end', 'stage', 'framing', 'hashtags', 'description', 'captionLines']
+  const allowed = ['hook', 'type', 'start', 'end', 'stage', 'framing', 'hashtags', 'description', 'captionLines', 'contextCaption']
   for (const key of allowed) {
     if (req.body[key] !== undefined) clip[key] = req.body[key]
   }
+  if (typeof clip.contextCaption === 'string') clip.contextCaption = clip.contextCaption.slice(0, 180)
   if (req.body.cam) {
     const num = (v, lo, hi, d) => {
       const n = Number(v)

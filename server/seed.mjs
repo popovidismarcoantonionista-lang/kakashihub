@@ -16,6 +16,9 @@ export function seedState() {
       autoApprove: false,
       captions: false,
       watermark: false,
+      xracing: false,
+      bgBlur: false,
+      faceBlur: false,
       agents: {
         radar: true,
         momentos: true,

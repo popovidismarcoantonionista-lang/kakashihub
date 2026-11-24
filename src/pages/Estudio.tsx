@@ -45,6 +45,7 @@ export function EstudioPage() {
   )
 
   const [hook, setHook] = useState('')
+  const [contextDraft, setContextDraft] = useState('')
   const [cutStart, setCutStart] = useState('0')
   const [cutEnd, setCutEnd] = useState('')
   const [trimming, setTrimming] = useState(false)
@@ -66,6 +67,10 @@ export function EstudioPage() {
   useEffect(() => {
     setHook(clip?.hook || '')
   }, [clip?.id, clip?.hook])
+
+  useEffect(() => {
+    setContextDraft(clip?.contextCaption || '')
+  }, [clip?.id, clip?.contextCaption])
 
   useEffect(() => {
     setCamDraft({ ...(clip?.cam || source?.cam || DEFAULT_CAM) })
@@ -584,6 +589,16 @@ function TimelineCanvas({
           <p>{clip.hook}</p>
         </div>
         <div className="cf-transcript">
+          <span className="kicker mono">LEGENDA DA OCORRÊNCIA</span>
+          <input
+            className="input"
+            value={contextDraft}
+            maxLength={110}
+            placeholder="Ex.: Deu pinote e não bancou a curva"
+            onChange={(e) => setContextDraft(e.target.value)}
+            onBlur={() => { if (contextDraft !== (clip?.contextCaption || '')) void patchClip({ contextCaption: contextDraft }) }}
+          />
+          <span className="fine">Usada pelo estilo XRacing.</span>
           <span className="kicker mono">LEGENDAS</span>
           {clip.captionLines?.length ? clip.captionLines.slice(-5).map((line, i) => (
             <div className="tr-line" key={`${line.t}-${i}`}>

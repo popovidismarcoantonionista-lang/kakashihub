@@ -72,6 +72,7 @@ export interface Clip {
   hashtags: string[]
   captionLines: CaptionLine[]
   description: string
+  contextCaption?: string
   createdAt: string
   renderedUrl?: string
   renderedAt?: string
@@ -131,6 +132,9 @@ export interface Settings {
   autoApprove: boolean
   captions?: boolean
   watermark?: boolean
+  xracing?: boolean
+  bgBlur?: boolean
+  faceBlur?: boolean
   agents: Record<string, boolean>
 }
 

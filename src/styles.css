@@ -843,6 +843,8 @@ h1, h2, h3 { font-weight: 600; }
 .tr-line .mono { font-size: 7.5px; color: var(--text-3); flex: none; }
 .tr-line em { font-style: normal; font-size: 10.5px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cf-transcript .fine { font-size: 9px; }
+.cf-transcript .input { font-size: 10px; padding: 6px 8px; }
+.cf-transcript .kicker + .kicker { margin-top: 4px; }
 
 .agent-list { padding: 4px 18px 6px; }
 .agent-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.045); }

@@ -28,6 +28,7 @@ import { INVIDIOUS_URL, INVIDIOUS_URLS, cobaltResolve, hasCobalt, hasYtdlpApi, h
 
 const PYTHON = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const PYHOST_DIR = path.join(APP_ROOT, '.pyhost')
 const FFMPEG_LOCAL_BIN = path.join(APP_ROOT, '.bin', 'ffmpeg')
 const FFPROBE_LOCAL_BIN = path.join(APP_ROOT, '.bin', 'ffprobe')
 const FFMPEG_BIN = process.env.FFMPEG_BIN || (fs.existsSync(FFMPEG_LOCAL_BIN) ? FFMPEG_LOCAL_BIN : 'ffmpeg')
@@ -644,6 +645,60 @@ async function detectCamBoxMulti(video, times) {
   }
 }
 
+/**
+ * Blur de rosto é detector + ffmpeg: o ffmpeg sozinho só blurá uma região fixa.
+ * O detector roda em Python (OpenCV, grátis) antes do ffmpeg e é liberado da
+ * memória antes da codificação — importante no Render free.
+ */
+async function detectFaceBoxes(video, start, duration, cam) {
+  const script = path.join(APP_ROOT, 'downloader', 'face_boxes.py')
+  if (!fs.existsSync(script)) return []
+  try {
+    const pyPath = [PYHOST_DIR, process.env.PYTHONPATH || ''].filter(Boolean).join(path.delimiter)
+    const { stdout } = await run(PYTHON, [
+      script, video, String(Math.max(0, start)), String(Math.max(1, duration)),
+      cam ? JSON.stringify(cam) : '',
+    ], {
+      env: { ...process.env, PYTHONPATH: pyPath },
+      timeout: 120000,
+    })
+    const list = JSON.parse(stdout.trim() || '[]')
+    if (!Array.isArray(list)) return []
+    return list.slice(0, 6).map((b) => {
+      // yuv420p exige coordenadas e dimensões pares no crop/overlay.
+      const x = Math.max(0, Math.floor(Number(b.x) || 0) / 2) * 2
+      const y = Math.max(0, Math.floor(Number(b.y) || 0) / 2) * 2
+      const w = Math.max(8, Math.floor(Number(b.w) || 0) / 2) * 2
+      const h = Math.max(8, Math.floor(Number(b.h) || 0) / 2) * 2
+      const s = Math.max(0, Number(b.start) || 0)
+      const e = Math.max(s + 0.2, Number(b.end) || s + 1)
+      return { x, y, w, h, start: +s.toFixed(2), end: +e.toFixed(2) }
+    })
+  } catch (err) {
+    console.warn('[face-detect]', String(err?.message || err).slice(-300))
+    return []
+  }
+}
+
+/** Monta a cadeia que blurá só as regiões detectadas, antes do split/9:16. */
+function faceBlurFilter(regions) {
+  if (!regions.length) return null
+  const parts = []
+  const srcLabels = regions.map((_, i) => `[fsrc${i}]`)
+  parts.push(`[0:v]split=${regions.length + 1}[fbase]${srcLabels.join('')}`)
+  regions.forEach((r, i) => {
+    const radius = Math.max(6, Math.min(18, Math.round(Math.min(r.w, r.h) * 0.34)))
+    parts.push(`[fsrc${i}]crop=${r.w}:${r.h}:${r.x}:${r.y},boxblur=${radius}:2,format=yuv420p[fb${i}]`)
+  })
+  let current = 'fbase'
+  regions.forEach((r, i) => {
+    const out = i === regions.length - 1 ? 'fblurred' : `fover${i}`
+    parts.push(`[${current}][fb${i}]overlay=${r.x}:${r.y}:enable='between(t,${r.start},${r.end})'[${out}]`)
+    current = out
+  })
+  return parts.join(';') + ';'
+}
+
 /** Detecta a webcam analisando o vídeo real do corte em três momentos. */
 export async function detectCamBoxForClip(clipId) {
   try {
@@ -879,6 +934,7 @@ async function ytApiMeta(videoId) {
       id: item.id,
       title: item.snippet.title,
       channel: item.snippet.channelTitle,
+      description: item.snippet.description || '',
       thumbnail: item.snippet.thumbnails?.maxres?.url || item.snippet.thumbnails?.high?.url || item.snippet.thumbnails?.medium?.url,
       duration: item.contentDetails.duration ? parseISO8601Duration(item.contentDetails.duration) : 0,
       is_live: isLive,
@@ -1198,6 +1254,7 @@ export async function runIngest(sourceId, url, opts = {}) {
       try { info = await probe(localFile) } catch { throw new Error(UPLOAD_INVALID) }
       source.title = String(meta.title || source.title || 'Vídeo enviado').slice(0, 140)
       source.channel = String(meta.uploader || source.channel || 'Upload local').slice(0, 90)
+      if (meta.description) source.description = String(meta.description).slice(0, 4000)
       source.duration = Math.round(info.duration || 0)
       source.url = ''
       source.mode = 'vod'
@@ -1259,6 +1316,9 @@ export async function runIngest(sourceId, url, opts = {}) {
       if (meta.is_upcoming) throw new Error(FRIENDLY[6])
       const youtubeId = meta.id
       source.title = meta.title || source.title
+      // A descrição dos compilados (ex.: XRacing) traz a frase que descreve
+      // cada ocorrência. Guardamos para virar legenda contextual, sem AI paga.
+      if (meta.description) source.description = String(meta.description).slice(0, 4000)
       source.channel = meta.channel || meta.uploader || source.channel || 'Fonte conectada'
       source.duration = Math.round(meta.duration || 0)
       source.url = url
@@ -1541,7 +1601,54 @@ function splitCaptionWords(text) {
   return String(text || '').replace(/\s+/g, ' ').trim().split(/\s+/).filter(Boolean)
 }
 
-function buildCaptionChunks(clip, duration, gta = false) {
+function cleanContextText(raw) {
+  return String(raw || '')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, ' ')
+    .replace(/[@#]\w+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+// Os compilados estilo XRacing já descrevem a ocorrência na descrição:
+// "04:55 Cavalcante - DESVIO SUSPEITO NA OPERAÇÃO...". A frase após o nome
+// do canal é exatamente a legenda contextual que queremos queimar no corte.
+function parseCreditCaption(description, start) {
+  const text = String(description || '')
+  if (!text) return ''
+  let best = { t: -1, text: '' }
+  let first = ''
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*(?:-|–|—)?\s*(.+)$/)
+    if (!m) continue
+    const pieces = m[2].split(/\s+(?:-|–|—)\s+/)
+    let phrase = cleanContextText(pieces.length > 1 ? pieces.slice(1).join(' ') : pieces[0])
+      .replace(/^(arquivo pessoal|previamente autorizado|envie seus vídeos)\b/i, '')
+      .replace(/^[-–—:•\s]+/, '')
+      .trim()
+    // Descrições de compilados costumam só creditar o autor ("Arquivo
+    // Pessoal" / link). Isso não é contexto; descartar para não virar legenda.
+    if (/^(aviso inicial|arquivo pessoal|previamente autorizado|envie seus|créditos|música|loja|contato)\b/i.test(phrase)) continue
+    if (splitCaptionWords(phrase).length < 2 || phrase.length < 8 || phrase.length > 130) continue
+    const [h, mi, s] = m[1].split(':').map(Number)
+    const t = h * 3600 + mi * 60 + (s || 0)
+    if (!first) first = phrase
+    if (t <= Number(start || 0) + 2 && t > best.t) best = { t, text: phrase }
+  }
+  return (best.text || first || '').slice(0, 110)
+}
+
+function contextChunks(text, duration) {
+  // Comentário escrito estilo XRacing: a frase completa fica visível durante
+  // todo o corte; só a palavra em amarelo muda. Não é legenda karaokê de fala.
+  const words = splitCaptionWords(text).slice(0, 16)
+  if (!words.length) return []
+  return [{ start: 0.25, end: Math.max(0.26, duration - 0.15), words }]
+}
+
+function buildCaptionChunks(clip, duration, gta = false, forcedText = '') {
+  const forced = cleanContextText(forcedText)
+  if (forced) return contextChunks(forced, duration)
   const lines = Array.isArray(clip?.captionLines) ? clip.captionLines : []
   const raw = lines
     .map((line) => ({ t: Number(line?.t), text: String(line?.text || '').replace(/\s+/g, ' ').trim() }))
@@ -1591,13 +1698,18 @@ function buildCaptionChunks(clip, duration, gta = false) {
   return chunks.filter((c) => c.words.length && c.end > c.start).slice(0, 160)
 }
 
-function buildCaptionAss(clip, duration, outW, outH, gta = false, watermark = false) {
-  const chunks = buildCaptionChunks(clip, duration, gta)
+function buildCaptionAss(clip, duration, outW, outH, gta = false, watermark = false, contextText = '') {
+  const contextual = Boolean(cleanContextText(contextText))
+  const chunks = buildCaptionChunks(clip, duration, gta, contextText)
   if (!chunks.length) return null
-  const fontSize = Math.max(42, Math.round(outH * (gta ? 0.062 : 0.055)))
-  const marginV = gta
-    ? Math.max(70, Math.round(outH * 0.5 - fontSize * 0.5))
-    : Math.max(70, Math.round(outH * 0.14))
+  const fontSize = contextual
+    ? Math.max(38, Math.round(outH * 0.045))
+    : Math.max(42, Math.round(outH * (gta ? 0.062 : 0.055)))
+  const marginV = contextual
+    ? Math.max(90, Math.round(outH * 0.22))
+    : gta
+      ? Math.max(70, Math.round(outH * 0.5 - fontSize * 0.5))
+      : Math.max(70, Math.round(outH * 0.14))
   const outline = Math.max(3, Math.round(fontSize * 0.12))
   const shadow = Math.max(1, Math.round(outline * 0.5))
   const playResX = outW
@@ -1612,6 +1724,8 @@ function buildCaptionAss(clip, duration, outW, outH, gta = false, watermark = fa
     '[V4+ Styles]',
     'Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding',
     `Style: Default,DejaVu Sans,${fontSize},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,${outline},${shadow},2,60,60,${marginV},1`,
+    // BorderStyle=3 desenha a caixa escura atrás do texto (comentário escrito).
+    `Style: Context,DejaVu Sans,${fontSize + (contextual ? 2 : 0)},&H00FFFFFF,&H000000FF,&H00000000,&H99000000,-1,0,0,0,100,100,0,0,3,${outline + 5},0,2,60,60,${marginV},1`,
     '',
     '[Events]',
     'Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text',
@@ -1632,7 +1746,7 @@ function buildCaptionAss(clip, duration, outW, outH, gta = false, watermark = fa
         if (idx === i) return `{\\c&H0000D4FF&\\3c&H00000000&\\bord${outline + 1}}${word}{\\r}`
         return `{\\c&H00FFFFFF&\\3c&H00000000&}${word}`
       }).join(' ')
-      events.push(`Dialogue: 0,${assTime(start)},${assTime(end)},Default,,0,0,0,,${text}`)
+      events.push(`Dialogue: 0,${assTime(start)},${assTime(end)},${contextual ? 'Context' : 'Default'},,0,0,0,,${text}`)
     }
   }
   if (gta && watermark) {
@@ -1667,6 +1781,7 @@ export async function runRender(clipId, opts = {}) {
   const src = liveLocal || await ensureLocalMedia(source?.mediaKey, sourceVideo(clip.sourceId), `${clip.sourceId}.mp4`)
   if (!src) throw new Error('Esta fonte ainda não tem vídeo. Conecte um link para renderizar de verdade.')
   const from = liveLocal ? 0 : clip.start
+  const duration = Math.max(1, Number(clip.end) - Number(clip.start) || 0)
   const job = createJob('render', { clipId, sourceId: clip.sourceId, ...(opts.jobId ? { id: opts.jobId } : {}) })
   try {
     updateJob(job, { progress: 8, step: 'Preparando o corte' })
@@ -1674,9 +1789,17 @@ export async function runRender(clipId, opts = {}) {
     const size = renderSize()
     const gta = clip.niche === 'gta' || getState().settings?.niche === 'gta'
     // Texto no vídeo só se o usuário ligar explicitamente nas configurações.
+    // O estilo XRacing liga a legenda contextual junto, mas continua desligado
+    // por padrão (settings.xracing = false).
     const renderSettings = getState().settings || {}
-    const wantCaptions = renderSettings.captions === true
+    const xracing = renderSettings.xracing === true
+    const wantCaptions = renderSettings.captions === true || xracing
     const wantWatermark = renderSettings.watermark === true
+    const wantBgBlur = renderSettings.bgBlur === true || xracing
+    const wantFaceBlur = renderSettings.faceBlur === true
+    const contextText = xracing
+      ? (cleanContextText(clip.contextCaption) || parseCreditCaption(source?.description, from) || cleanContextText(clip.hook))
+      : ''
     updateJob(job, { progress: 22, step: 'Calculando o enquadramento' })
     let cam = clip.cam || source?.cam || null
     const wantsSplit = gta || clip.framing === 'cam' || clip.framing === 'auto' || !clip.framing
@@ -1691,6 +1814,8 @@ export async function runRender(clipId, opts = {}) {
     const split = wantsSplit && cam && cam.w >= 0.05 && cam.h >= 0.05
     if (split && clip.framing !== 'cam') clip.framing = 'cam'
     if (gta) clip.framing = 'cam'
+    // Sem webcam detectada, o estilo pede o fundo desfocado em vez do crop seco.
+    if (wantBgBlur && !split) clip.framing = 'preencher'
     let frac = 0.5
     if (!split) {
       if (clip.framing === 'auto') {
@@ -1705,6 +1830,12 @@ export async function runRender(clipId, opts = {}) {
     const { width: outW, height: outH } = size
     const bandH = Math.round(outH / 2)
     const blur = Math.max(8, Math.round(26 * outH / 1280))
+    const faceCam = cam
+      ? { x: Math.round(cam.x * width), y: Math.round(cam.y * height), w: Math.round(cam.w * width), h: Math.round(cam.h * height) }
+      : null
+    const faceRegions = wantFaceBlur
+      ? await detectFaceBoxes(src, from, duration, faceCam)
+      : []
     let vf = ''
     let filterComplex = null
     if (split) {
@@ -1729,12 +1860,18 @@ export async function runRender(clipId, opts = {}) {
     } else {
       vf = `scale=-2:${outH}:flags=lanczos,crop=${outW}:${outH}:(iw-${outW})/2:0,setsar=1`
     }
+    const faceFc = faceRegions.length ? faceBlurFilter(faceRegions) : ''
+    if (faceFc) {
+      // A cadeia de rosto roda antes do split/9:16, para o rosto continuar
+      // desfocado tanto na faixa da webcam como no quadro do jogo.
+      filterComplex = faceFc + (filterComplex ? filterComplex.replace(/\[0:v\]/g, '[fblurred]') : `[fblurred]${vf}[vout]`)
+      vf = ''
+    }
     updateJob(job, {
       progress: 34,
       step: gta ? `Split GTA · ${sizeLabel(size)}` : split ? `Split · ${sizeLabel(size)}` : `9:16 · ${sizeLabel(size)}`,
     })
-    const duration = Math.max(1, Number(clip.end) - Number(clip.start) || 0)
-    const ass = wantCaptions ? buildCaptionAss(clip, duration, outW, outH, gta, wantWatermark) : null
+    const ass = wantCaptions ? buildCaptionAss(clip, duration, outW, outH, gta, wantWatermark, contextText) : null
     const assFile = ass ? path.join(EXPORTS, `${clip.id}.captions.ass`) : null
     if (assFile) fs.writeFileSync(assFile, ass, 'utf8')
 

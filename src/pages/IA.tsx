@@ -352,6 +352,30 @@ export function IAPage() {
                 onChange={(v) => { void api('/api/settings', { method: 'POST', body: JSON.stringify({ watermark: v }) }) }}
               />
             </div>
+            <div className="option-row">
+              <div><b>Estilo XRacing</b><em>Legenda com o que aconteceu, pela descrição do vídeo</em></div>
+              <Switch
+                checked={Boolean(settings?.xracing)}
+                label="Estilo XRacing"
+                onChange={(v) => { void api('/api/settings', { method: 'POST', body: JSON.stringify({ xracing: v }) }) }}
+              />
+            </div>
+            <div className="option-row">
+              <div><b>Blur no fundo do 9:16</b><em>Desfoque atrás do vídeo quando não há split</em></div>
+              <Switch
+                checked={Boolean(settings?.bgBlur)}
+                label="Blur no fundo do 9:16"
+                onChange={(v) => { void api('/api/settings', { method: 'POST', body: JSON.stringify({ bgBlur: v }) }) }}
+              />
+            </div>
+            <div className="option-row">
+              <div><b>Blur no rosto</b><em>Desfoca rostos detectados (render mais lento)</em></div>
+              <Switch
+                checked={Boolean(settings?.faceBlur)}
+                label="Blur no rosto"
+                onChange={(v) => { void api('/api/settings', { method: 'POST', body: JSON.stringify({ faceBlur: v }) }) }}
+              />
+            </div>
 
             <div className="range-field">
               <div className="rf-head"><span>Duração mínima</span><b className="mono">{draft.clipMin}s</b></div>
