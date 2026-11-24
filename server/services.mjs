@@ -80,9 +80,9 @@ export const hasCobalt = () => Boolean(COBALT_URL)
 export const hasYtdlpApi = () => Boolean(YDL_API_URL)
 export const hasInvidious = () => INVIDIOUS_URLS.length + PIPED_URLS.length > 0
 
-function cobaltHeaders() {
+function cobaltHeaders(scheme = 'Api-Key') {
   const headers = { Accept: 'application/json', 'Content-Type': 'application/json' }
-  if (COBALT_KEY) headers.Authorization = `Api-Key ${COBALT_KEY}`
+  if (COBALT_KEY) headers.Authorization = `${scheme} ${COBALT_KEY}`
   return headers
 }
 
@@ -111,23 +111,32 @@ function statusError(res, json, label) {
 /** Resolve um vídeo no Cobalt. */
 export async function cobaltResolve(url, opts = {}) {
   if (!COBALT_URL) throw new Error('cobalt-disabled')
-  const res = await fetch(COBALT_URL, {
+  const body = JSON.stringify({
+    url,
+    videoQuality: opts.quality || '720',
+    downloadMode: 'auto',
+    youtubeVideoCodec: 'h264',
+    youtubeVideoContainer: 'mp4',
+    // Render sai de IP de datacenter e o YouTube devolve "bot" para o Cobalt.
+    // O proxy do próprio Cobalt resolve isso (testado com o mesmo vídeo).
+    alwaysProxy: true,
+    disableMetadata: true,
+  })
+  const post = (scheme) => fetch(COBALT_URL, {
     method: 'POST',
-    headers: cobaltHeaders(),
-    body: JSON.stringify({
-      url,
-      videoQuality: opts.quality || '720',
-      downloadMode: 'auto',
-      youtubeVideoCodec: 'h264',
-      youtubeVideoContainer: 'mp4',
-      // Render sai de IP de datacenter e o YouTube devolve "bot" para o Cobalt.
-      // O proxy do próprio Cobalt resolve isso (testado com o mesmo vídeo).
-      alwaysProxy: true,
-      disableMetadata: true,
-    }),
+    headers: cobaltHeaders(scheme),
+    body,
     signal: AbortSignal.timeout(TIMEOUT),
   })
-  const json = await bodyOrNull(res)
+  let res = await post('Api-Key')
+  let json = await bodyOrNull(res)
+  const authError = (value) => /api\.auth\.jwt\.missing/i.test(String(value?.error?.code || ''))
+  // Algumas instâncias exigem Bearer (JWT) em IPs de datacenter. A chave do
+  // Render pode ser esse JWT; tentar os dois esquemas evita "jwt.missing".
+  if (authError(json) && COBALT_KEY) {
+    res = await post('Bearer')
+    json = await bodyOrNull(res)
+  }
 
   if (json?.status === 'error') {
     const code = String(json.error?.code || 'unknown')
