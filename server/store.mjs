@@ -43,7 +43,7 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 // Reconcilia o estado sem trocar as referências que rotinas longas guardaram
 // (state, source, clip, comp). Arrays com itens id preservam a identidade de
 // cada item pelo id e mantêm a ordem recebida.
-function assignInPlace(target, source) {
+export function assignInPlace(target, source) {
   // A reconciliação pode receber o próprio objeto (mergeChanges devolve `ours`
   // quando `theirs` é igual à base). Copiar um array nele mesmo esvaziaria a
   // lista, então nunca compartilhamos a referência de origem/destino.
@@ -83,7 +83,7 @@ function assignInPlace(target, source) {
   return target
 }
 
-function mergeChanges(base, ours, theirs) {
+export function mergeChanges(base, ours, theirs) {
   if (isDeepStrictEqual(ours, base)) return theirs
   if (isDeepStrictEqual(theirs, base)) return ours
 
@@ -120,8 +120,11 @@ function mergeChanges(base, ours, theirs) {
       const baseItem = baseById.get(id)
       const oursItem = oursById.get(id)
       const theirsItem = theirsById.get(id)
+      // Item novo criado por outro contexto não existe na base: preserve-o.
+      // Exigir baseItem aqui era o que fazia clipes, fontes e compilações
+      // recém-criados desaparecerem quando uma tarefa antiga gravava depois.
       if (!oursItem) {
-        if (theirsItem && baseItem && !isDeepStrictEqual(theirsItem, baseItem)) merged.push(theirsItem)
+        if (theirsItem && (!baseItem || !isDeepStrictEqual(theirsItem, baseItem))) merged.push(theirsItem)
         continue
       }
       if (!theirsItem) {
