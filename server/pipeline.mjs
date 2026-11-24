@@ -261,7 +261,7 @@ const INVIDIOUS_INSTANCE = process.env.INVIDIOUS_INSTANCE
 // O cliente ANDROID devolve o progressivo itag 18 mesmo em IP de datacenter,
 // onde WEB/TV caem no "Sign in to confirm you're not a bot". Vem primeiro para
 // o yt-dlp não desistir antes de tentar a única rota que funciona no Render.
-const PLAYER_CLIENTS = (process.env.YTDLP_PLAYER_CLIENTS || 'android,mweb,tv,web_safari,web_embedded,android_vr').trim()
+const PLAYER_CLIENTS = (process.env.YTDLP_PLAYER_CLIENTS || 'tv_samsung,visionos,android,mweb,tv,web_safari,web_embedded,android_vr').trim()
 const IMPERSONATE = (process.env.YTDLP_IMPERSONATE ?? 'chrome').trim()
 const VERBOSE = /^(1|true|yes)$/i.test(process.env.YTDLP_VERBOSE || '')
 const POT_URL = String(process.env.BGUTIL_POT_URL || process.env.YT_POT_URL || 'http://127.0.0.1:4416').trim()
@@ -1188,7 +1188,7 @@ async function downloadViaInvidious(url, destPath) {
 }
 
 const YT_PLAYER_KEY = (process.env.YT_PLAYER_KEY || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8').trim()
-const YT_PLAYER_VERSION = (process.env.YT_PLAYER_CLIENT_VERSION || '21.26.364').trim()
+const YT_PLAYER_VERSION = (process.env.YT_PLAYER_CLIENT_VERSION || '21.46.528').trim()
 const YT_PLAYER_UA = `com.google.android.youtube/${YT_PLAYER_VERSION} (Linux; U; Android 11) gzip`
 
 /**
@@ -1242,7 +1242,9 @@ async function downloadViaPlayer(url, destPath) {
   ].filter((f) => f?.url && !f.signatureCipher && /^video\//.test(String(f.mimeType || '')))
   if (!formats.length) throw new Error('player-sem-url')
   const height = (f) => Number(f.height || String(f.qualityLabel || '').match(/(\d+)p/)?.[1] || 0)
-  const hasAudio = (f) => /audio/.test(String(f.mimeType || ''))
+  // O itag 18 é progressivo, mas o mimeType traz "mp4a.40.2" em vez da
+  // palavra "audio"; sem isso ele era tratado como vídeo mudo.
+  const hasAudio = (f) => /audio|mp4a/.test(String(f.mimeType || ''))
   const progressive = formats.filter(hasAudio).sort((a, b) => height(b) - height(a))[0]
   if (progressive) {
     await downloadHttp(progressive.url, destPath)
