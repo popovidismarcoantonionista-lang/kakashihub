@@ -22,7 +22,7 @@ import { blobStorageEnabled, deleteBlobMedia, getPrivateBlob, storeLocalFile } f
 import {
   OUTPUT_SIZES, clipFrame, detectCamBoxForClip, detectCamBoxForLive, fetchChannelVideos,
   getLiveHlsUrl, isLiveRunning, liveCapabilities, liveCaptureConfig, liveErrorText, liveFrame,
-  liveMediaFile, queueBrowserLiveWindow, stopLive, uniqueClips,
+  liveMediaFile, queueBrowserLiveWindow, searchYoutubeVideos, stopLive, uniqueClips,
 } from './pipeline.mjs'
 import { startLiveWorkflow, startProcessJob, startUploadWorkflow } from './jobs.mjs'
 import {
@@ -284,6 +284,19 @@ app.post('/api/channels', async (req, res) => {
   } catch (err) {
     console.error('[channels]', err?.message || err)
     fail(res, 422, 'Não encontrei vídeos neste canal. Confira o link e tente de novo.')
+  }
+})
+
+// Achador de vídeos gravados (enquadros, flagrantes, etc.). Nunca devolve lives.
+app.get('/api/videos/search', async (req, res) => {
+  const q = String(req.query?.q || '').trim()
+  if (q.length < 2) return fail(res, 400, 'Digite ao menos 2 caracteres para buscar vídeos.')
+  try {
+    const items = await searchYoutubeVideos(q)
+    ok(res, { ok: true, items })
+  } catch (err) {
+    console.error('[video search]', err?.message || err)
+    fail(res, 422, 'Não foi possível buscar vídeos agora. Tente outro termo.')
   }
 })
 

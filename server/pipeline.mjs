@@ -908,6 +908,56 @@ async function ytApiGet(endpoint, params) {
   }
 }
 
+const SEARCH_CACHE = new Map()
+const SEARCH_TTL = 5 * 60 * 1000
+
+/** Busca vídeos gravados no YouTube para o achador de temas. Nunca retorna lives. */
+export async function searchYoutubeVideos(query, limit = 12) {
+  const q = String(query || '').trim().slice(0, 100)
+  if (q.length < 2) return []
+  const cacheKey = q.toLocaleLowerCase('pt-BR')
+  const cached = SEARCH_CACHE.get(cacheKey)
+  if (cached && Date.now() - cached.at < SEARCH_TTL) return cached.items
+
+  const maxResults = String(Math.min(16, Math.max(4, limit)))
+  const search = await ytApiGet('search', {
+    part: 'snippet', type: 'video', maxResults, q, order: 'relevance', videoEmbeddable: 'true',
+  })
+  const found = (search?.items || []).filter((item) => {
+    const broadcast = item?.snippet?.liveBroadcastContent
+    return Boolean(item?.id?.videoId) && broadcast !== 'live' && broadcast !== 'upcoming'
+  })
+  if (!found.length) return []
+
+  const ids = [...new Set(found.map((item) => item.id.videoId))]
+  const details = await ytApiGet('videos', {
+    part: 'contentDetails,statistics', id: ids.join(','),
+  })
+  const byId = new Map((details?.items || []).map((video) => [video.id, video]))
+  const items = found.map((item) => {
+    const id = item.id.videoId
+    const snippet = item.snippet || {}
+    const detail = byId.get(id)
+    return {
+      id,
+      title: String(snippet.title || 'Vídeo sem título'),
+      channel: String(snippet.channelTitle || ''),
+      thumb: snippet.thumbnails?.medium?.url || snippet.thumbnails?.high?.url || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+      duration: detail?.contentDetails?.duration ? parseISO8601Duration(detail.contentDetails.duration) : 0,
+      views: Number(detail?.statistics?.viewCount) || 0,
+      published: snippet.publishedAt || null,
+      url: `https://www.youtube.com/watch?v=${id}`,
+    }
+  })
+
+  SEARCH_CACHE.set(cacheKey, { at: Date.now(), items })
+  if (SEARCH_CACHE.size > 40) {
+    const oldest = [...SEARCH_CACHE.entries()].sort((a, b) => a[1].at - b[1].at)[0]
+    if (oldest) SEARCH_CACHE.delete(oldest[0])
+  }
+  return items
+}
+
 async function youtubeChannelId(url) {
   const ref = youtubeChannelRef(url)
   if (!ref) return ''

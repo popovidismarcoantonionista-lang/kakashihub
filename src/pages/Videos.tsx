@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle, Clapperboard, Crop,
-  Play, Plus, Radio, RefreshCw, Square, Trash2, UploadCloud, Youtube,
+  Play, Plus, Radio, RefreshCw, Search, Square, Trash2, UploadCloud, Youtube,
 } from 'lucide-react'
 import { useApp } from '../store'
 import { CamBoxCanvas } from '../CamBoxCanvas'
@@ -25,6 +25,23 @@ type RadarItem = {
 }
 
 type RadarData = { ok: boolean; kickOk?: boolean; items: RadarItem[]; liveCount: number }
+
+type FoundVideo = {
+  id: string
+  title: string
+  channel: string
+  thumb: string
+  duration: number
+  views: number
+  url: string
+}
+
+const FIND_PRESETS = [
+  { label: 'Enquadros', query: 'enquadro flagrante engraçado' },
+  { label: 'Flagrantes', query: 'flagrante viral engraçado' },
+  { label: 'Tiago da Titan 160', query: 'Tiago da Titan 160 enquadro' },
+  { label: 'Titan 160', query: 'Titan 160 flagrantes enquadros' },
+]
 
 function jobLabel(kind?: string) {
   if (kind === 'live') return 'Acompanhando a transmissão'
@@ -180,6 +197,11 @@ export function VideosPage() {
   const [removing, setRemoving] = useState(false)
   const [camEditFor, setCamEditFor] = useState('')
   const [radar, setRadar] = useState<RadarData | null>(null)
+  const [findQuery, setFindQuery] = useState('')
+  const [found, setFound] = useState<FoundVideo[] | null>(null)
+  const [findBusy, setFindBusy] = useState(false)
+  const [findError, setFindError] = useState('')
+  const [addingVideo, setAddingVideo] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -244,6 +266,39 @@ export function VideosPage() {
     } catch (e: any) {
     } finally {
       setLiveActing('')
+    }
+  }
+
+  const searchVideos = async (term: string) => {
+    const q = term.trim()
+    if (q.length < 2) {
+      setFindError('Digite um tema ou nome para buscar.')
+      return
+    }
+    setFindQuery(q)
+    setFindBusy(true)
+    setFindError('')
+    try {
+      const res = await fetch(`/api/videos/search?q=${encodeURIComponent(q)}`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || 'Busca indisponível.')
+      setFound(Array.isArray(data.items) ? data.items : [])
+    } catch (e: any) {
+      setFound([])
+      setFindError(e?.message || 'Não foi possível buscar vídeos agora.')
+    } finally {
+      setFindBusy(false)
+    }
+  }
+
+  const analyzeFound = async (item: FoundVideo) => {
+    setAddingVideo(item.id)
+    try {
+      await api('/api/sources', { method: 'POST', body: JSON.stringify({ url: item.url }) })
+    } catch (e: any) {
+      window.alert(e?.message || 'Não foi possível adicionar este vídeo.')
+    } finally {
+      setAddingVideo('')
     }
   }
 
@@ -313,6 +368,71 @@ export function VideosPage() {
             </button>
           </div>
         </div>
+      </section>
+
+      <section className="panel finder-panel">
+        <div className="finder-head">
+          <div>
+            <b>Achar vídeos</b>
+            <em>Enquadros, flagrantes e temas virais. Escolha um vídeo para o estúdio analisar.</em>
+          </div>
+          <span className="stage-pill">YouTube · gravados</span>
+        </div>
+        <form className="finder-form" onSubmit={(e) => { e.preventDefault(); void searchVideos(findQuery) }}>
+          <Search size={15} />
+          <input
+            value={findQuery}
+            onChange={(e) => setFindQuery(e.target.value)}
+            placeholder="Ex.: Tiago da Titan 160, enquadros, flagrantes…"
+            spellCheck={false}
+          />
+          <button className="btn btn-primary btn-sm" type="submit" disabled={findBusy}>
+            {findBusy ? <Logo size={13} className="btn-spin" /> : <Search size={14} />}
+            {findBusy ? 'Buscando…' : 'Buscar'}
+          </button>
+        </form>
+        <div className="finder-presets">
+          {FIND_PRESETS.map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              className={`finder-chip ${findQuery === preset.query ? 'active' : ''}`}
+              disabled={findBusy}
+              onClick={() => { void searchVideos(preset.query) }}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+        {findError && <p className="finder-error">{findError}</p>}
+        {found && found.length === 0 && !findError && (
+          <p className="finder-empty">Nenhum vídeo gravado encontrado para esse termo.</p>
+        )}
+        {found && found.length > 0 && (
+          <div className="finder-results">
+            {found.map((item) => (
+              <article className="finder-item" key={item.id}>
+                <img className="finder-thumb" src={item.thumb} alt="" loading="lazy" />
+                <div className="finder-meta">
+                  <b title={item.title}>{item.title}</b>
+                  <em>
+                    {item.channel}
+                    {item.duration ? ` · ${fmtTime(item.duration)}` : ''}
+                    {item.views ? ` · ${fmtViews(item.views)} visualizações` : ''}
+                  </em>
+                </div>
+                <button
+                  className="btn btn-soft btn-sm finder-add"
+                  disabled={addingVideo === item.id}
+                  onClick={() => { void analyzeFound(item) }}
+                >
+                  {addingVideo === item.id ? <Logo size={13} className="btn-spin" /> : <Plus size={14} />}
+                  {addingVideo === item.id ? 'Adicionando…' : 'Analisar'}
+                </button>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
 
       {running.length > 0 && (

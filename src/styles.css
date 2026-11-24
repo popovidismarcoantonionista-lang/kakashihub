@@ -557,6 +557,46 @@ h1, h2, h3 { font-weight: 600; }
 .btn-live:hover:not(:disabled) { background: rgba(255, 77, 94, 0.24); border-color: rgba(255, 77, 94, 0.7); }
 .btn-live:disabled { opacity: 0.6; cursor: default; }
 
+/* Achador de vídeos: enquadros, flagrantes e temas virais. */
+.finder-panel { padding: 16px 20px; margin-bottom: 16px; }
+.finder-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.finder-head > div { display: flex; flex-direction: column; gap: 3px; }
+.finder-head b { font-size: 13px; font-weight: 600; }
+.finder-head em { font-size: 10px; font-style: normal; color: var(--text-3); }
+.finder-form {
+  display: flex; align-items: center; gap: 9px; padding: 5px 5px 5px 12px;
+  border: 1px solid var(--line-strong); border-radius: 10px;
+  background: rgba(8, 5, 15, 0.55); color: var(--text-3); transition: 0.2s;
+}
+.finder-form:focus-within { border-color: rgba(255, 106, 106, 0.5); box-shadow: 0 0 0 3px rgba(224, 49, 49, 0.1); }
+.finder-form input { flex: 1; min-width: 0; height: 32px; background: none; border: 0; outline: none; color: var(--text); font-size: 12px; }
+.finder-form input::placeholder { color: var(--text-3); }
+.finder-presets { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+.finder-chip {
+  font-size: 10px; padding: 5px 9px; border-radius: 999px;
+  border: 1px solid var(--line); background: rgba(255, 255, 255, 0.03);
+  color: var(--text-2); transition: 0.2s;
+}
+.finder-chip:hover:not(:disabled), .finder-chip.active {
+  color: #ffd9d9; border-color: rgba(255, 77, 94, 0.45); background: rgba(255, 77, 94, 0.12);
+}
+.finder-chip:disabled { opacity: 0.55; cursor: default; }
+.finder-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin-top: 14px; }
+.finder-item {
+  display: flex; align-items: center; gap: 10px; min-width: 0; padding: 7px;
+  border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, 0.02);
+}
+.finder-thumb { width: 76px; height: 48px; flex: none; object-fit: cover; border-radius: 6px; background: #0b0d14; }
+.finder-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.finder-meta b { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.finder-meta em {
+  font-family: var(--font-mono); font-style: normal; font-size: 8.5px; color: var(--text-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.finder-add { flex: none; }
+.finder-error, .finder-empty { margin: 12px 0 0; font-size: 10.5px; color: var(--text-3); }
+.finder-error { color: #ffb3bb; }
+
 .running-panel { padding: 14px 18px; margin-bottom: 16px; }
 .running-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .running-head .mono { font-size: 8.5px; color: var(--text-3); }
@@ -1446,6 +1486,13 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius
   .hero-tips { gap: 8px 12px; }
   .hero-live { flex-wrap: wrap; align-items: flex-start; }
   .hero-live .btn-live { width: 100%; margin-left: 0; justify-content: center; }
+
+  .finder-panel { padding: 14px; }
+  .finder-form { flex-wrap: wrap; gap: 8px; padding: 8px; }
+  .finder-form > svg { display: none; }
+  .finder-form input { flex: 1 1 100%; height: 38px; font-size: 16px; }
+  .finder-form .btn { width: 100%; height: 40px; justify-content: center; }
+  .finder-results { grid-template-columns: 1fr; }
 
   .running-panel { padding: 12px 14px; }
   .running-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 10px; padding: 9px 0; }
