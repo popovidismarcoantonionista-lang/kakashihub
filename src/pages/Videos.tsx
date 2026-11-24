@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { upload } from '@vercel/blob/client'
 import {
   AlertTriangle, Clapperboard, Crop, Download,
   Play, Plus, Radio, RefreshCw, Search, Square, Trash2, UploadCloud, Youtube,
@@ -34,6 +35,44 @@ type FoundVideo = {
   duration: number
   views: number
   url: string
+}
+
+// O Render sai de IP de datacenter e o Cobalt exige JWT/Cloudflare para esses
+// IPs. O navegador do usuário resolve e baixa o vídeo, depois envia o arquivo
+// para o estúdio pelo fluxo de upload (que já existe).
+const COBALT_BROWSER = 'https://rue-cobalt.xenon.zone/'
+
+async function downloadInBrowser(url: string): Promise<File> {
+  const res = await fetch(COBALT_BROWSER, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      url,
+      videoQuality: '720',
+      downloadMode: 'auto',
+      youtubeVideoCodec: 'h264',
+      youtubeVideoContainer: 'mp4',
+      alwaysProxy: false,
+      disableMetadata: true,
+    }),
+  })
+  if (!res.ok) throw new Error('Não foi possível preparar o download.')
+  const json = await res.json()
+  if (json?.status === 'error') throw new Error('Este vídeo não está disponível para download.')
+
+  let mediaUrl = ''
+  if (json?.status === 'tunnel' || json?.status === 'redirect') mediaUrl = json.url || ''
+  else if (json?.status === 'local-processing' && Array.isArray(json.tunnel)) mediaUrl = json.tunnel[0] || ''
+  else if (json?.status === 'picker' && Array.isArray(json.picker)) {
+    mediaUrl = json.picker.find((item: any) => item?.type === 'video' && item?.url)?.url || ''
+  }
+  if (!/^https?:\/\//i.test(mediaUrl)) throw new Error('Este vídeo não está disponível para download.')
+
+  const fileRes = await fetch(mediaUrl)
+  if (!fileRes.ok) throw new Error('Não foi possível baixar o vídeo.')
+  const blob = await fileRes.blob()
+  if (blob.size < 1024) throw new Error('O arquivo baixado veio vazio.')
+  return new File([blob], 'video.mp4', { type: blob.type || 'video/mp4' })
 }
 
 const FIND_PRESETS = [
@@ -198,7 +237,7 @@ function LiveCamEditor({ source }: { source: Source }) {
 }
 
 export function VideosPage() {
-  const { state, api, setIngestOpen, setIngestTab } = useApp()
+  const { state, api, refresh, setIngestOpen, setIngestTab } = useApp()
   const [url, setUrl] = useState('')
   const [liveBusy, setLiveBusy] = useState(false)
   const [liveActing, setLiveActing] = useState('')
@@ -305,7 +344,30 @@ export function VideosPage() {
   const analyzeFound = async (item: FoundVideo) => {
     setAddingVideo(item.id)
     try {
-      await api('/api/sources', { method: 'POST', body: JSON.stringify({ url: item.url }) })
+      let file: File | null = null
+      try {
+        file = await downloadInBrowser(item.url)
+      } catch {
+        file = null
+      }
+      if (file) {
+        const clean = `${item.channel || 'YouTube'} - ${item.title}`.replace(/[\\/:*?"<>|]/g, '').slice(0, 140)
+        const { source } = await api('/api/sources/upload', {
+          method: 'POST',
+          body: JSON.stringify({ name: `${clean}.mp4`, size: file.size, type: 'video/mp4' }),
+        })
+        await upload(`media/src/${source.id}.mp4`, file, {
+          access: 'private',
+          handleUploadUrl: '/api/sources/upload-token',
+          clientPayload: JSON.stringify({ sourceId: source.id }),
+          contentType: 'video/mp4',
+          multipart: file.size >= 100 * 1024 * 1024,
+        })
+      } else {
+        // Se o navegador não conseguir, mantém o fluxo antigo no servidor.
+        await api('/api/sources', { method: 'POST', body: JSON.stringify({ url: item.url }) })
+      }
+      await refresh()
     } catch (e: any) {
       window.alert(e?.message || 'Não foi possível adicionar este vídeo.')
     } finally {
