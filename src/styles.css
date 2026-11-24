@@ -667,6 +667,7 @@ h1, h2, h3 { font-weight: 600; }
 .src-progress { position: absolute; left: 12px; right: 12px; bottom: 11px; background: rgba(8, 5, 15, 0.72); backdrop-filter: blur(8px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 8px 10px; }
 .sp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
 .sp-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sp-title .badge-spin { animation: spin 1.3s linear infinite; filter: drop-shadow(0 0 4px rgba(224, 49, 49, 0.75)); }
 .sp-head .mono { font-size: 8px; color: #ffe2b8; letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .src-body { padding: 14px 16px 14px; display: flex; flex-direction: column; gap: 7px; flex: 1; }
 .src-channel { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }

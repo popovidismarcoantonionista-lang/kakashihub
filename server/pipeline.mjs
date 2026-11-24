@@ -16,6 +16,7 @@ import {
   findClip,
   findSource,
   finishJob,
+  flushStore,
   getState,
   save,
   sourceVideo,
@@ -1453,6 +1454,7 @@ export async function runIngest(sourceId, url, opts = {}) {
     source.analyzedAt = new Date().toISOString()
     addActivity('agent', `${created.length} cortes encontrados em "${source.title}"`)
     save()
+    await flushStore()
     updateJob(job, { progress: 99, step: 'Cortes prontos para revisão' })
     finishJob(job)
     return created
@@ -1863,6 +1865,7 @@ export async function runRender(clipId, opts = {}) {
     clip.framingBias = frac
     addActivity('render', `Corte "${clip.hook}" renderizado em 9:16 · ${sizeLabel(size)}`)
     save()
+    await flushStore()
     updateJob(job, { progress: 99, step: 'Corte finalizado' })
     finishJob(job)
     return clip
@@ -1947,6 +1950,7 @@ export async function runTrim(clipId, startInput, endInput, opts = {}) {
     ]) { try { fs.unlinkSync(file) } catch {} }
     addActivity('agent', `Corte "${clip.hook}" reduzido para ${Math.round(length)}s`)
     save()
+    await flushStore()
     updateJob(job, { progress: 45, step: 'Recorte aplicado' })
     finishJob(job)
     return clip
@@ -2097,6 +2101,7 @@ export async function runCompilation(compilationId, opts = {}) {
     comp.finishedAt = new Date().toISOString()
     addActivity('render', `Vídeo longo "${comp.title}" pronto com ${clips.length} cortes`)
     save()
+    await flushStore()
     updateJob(job, { progress: 99, step: 'Vídeo longo finalizado' })
     finishJob(job)
     fs.rmSync(work, { recursive: true, force: true })

@@ -310,13 +310,15 @@ async function persistState(context) {
 
     context.baseState = clone(mergedState)
     context.revision = current.revision + 1
-    if (isDeepStrictEqual(context.state, snapshot)) {
-      context.state = mergedState
-      context.stateDirty = false
-    } else {
-      context.state = mergeChanges(snapshot, context.state, mergedState)
-      context.stateDirty = true
-    }
+    // Não trocar a identidade de context.state: ingest/compilação/live guardam
+    // referências a state/source/comp durante execuções longas. Se trocarmos o
+    // objeto aqui, essas referências continuam apontando para o estado antigo e
+    // as alterações finais (clips, status, progresso) nunca chegam ao banco.
+    const unchanged = isDeepStrictEqual(context.state, snapshot)
+    const nextState = unchanged ? mergedState : mergeChanges(snapshot, context.state, mergedState)
+    for (const key of Object.keys(context.state)) delete context.state[key]
+    Object.assign(context.state, nextState)
+    context.stateDirty = !unchanged
   })
 }
 
