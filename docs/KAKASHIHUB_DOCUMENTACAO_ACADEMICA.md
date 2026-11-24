@@ -1,397 +1,321 @@
 # KakashiHub
-## Plataforma full-stack para captura, edição e publicação de clipes de lives
+## Plataforma web para captura, edição e publicação de clipes de transmissões ao vivo
 
 **Documentação técnica para apresentação acadêmica**  
 **Curso:** Engenharia de Software  
-**Projeto:** KakashiHub  
-**Versão documentada:** 24 de novembro de 2026  
-**Repositório:** `popovidismarcoantonionista-lang/kakashihub`
+**Versão pública para apresentação:** novembro de 2026
 
-> Este documento apresenta um sistema real, em produção e com público, como estudo de caso de Engenharia de Software. Os nomes de variáveis, endpoints e arquivos citados correspondem à implementação do projeto, mas credenciais, tokens, cookies e dados pessoais foram omitidos.
+> Este documento apresenta um estudo de caso baseado em um produto real com usuários. Informações internas de infraestrutura, autenticação, repositório, configurações privadas, identificadores de implantação e dados operacionais foram deliberadamente omitidas.
 
 ---
 
 ## 1. Resumo
 
-O KakashiHub é uma plataforma web para transformar transmissões ao vivo e vídeos em clipes verticais prontos para publicação. O sistema permite cadastrar fontes de conteúdo, acompanhar lives, capturar janelas de áudio e vídeo, processar mídia com FFmpeg, selecionar trechos, aplicar enquadramento e gerar arquivos de saída para distribuição em redes sociais.
+O KakashiHub é uma plataforma web para transformar transmissões ao vivo e vídeos em clipes verticais prontos para publicação. O sistema permite acompanhar fontes de conteúdo, capturar janelas de áudio e vídeo, processar mídia, selecionar trechos relevantes, aplicar enquadramento e gerar arquivos adequados para redes sociais.
 
-O projeto foi construído a partir de uma necessidade real: reduzir o trabalho manual de acompanhar transmissões, localizar momentos relevantes, recortar o material e preparar publicações. Além do processamento de vídeos comuns, a plataforma precisa lidar com um problema de engenharia mais difícil: lives são fluxos contínuos, com playlists HLS atualizadas constantemente, segmentos que expiram e diferenças de disponibilidade entre provedores.
+O projeto nasceu de uma necessidade real: reduzir o trabalho manual de acompanhar transmissões longas, localizar momentos interessantes, recortar o material e preparar publicações. Além do processamento de vídeos comuns, a plataforma precisa lidar com a complexidade de transmissões ao vivo, formadas por pequenos segmentos HLS que são atualizados continuamente.
 
-Este estudo de caso é especialmente útil para Engenharia de Software porque envolve requisitos funcionais e não funcionais, integração com serviços externos, processamento assíncrono, persistência, observabilidade, limitações de infraestrutura, segurança de APIs, deploy contínuo e manutenção de um sistema que atende usuários reais.
+Este estudo de caso envolve requisitos funcionais e não funcionais, integração com serviços externos, processamento assíncrono, persistência, limites de infraestrutura, observabilidade, segurança e manutenção evolutiva de um sistema que atende público real.
 
 ### Palavras-chave
 
-`full-stack`, `React`, `Node.js`, `Express`, `FFmpeg`, `HLS`, `live streaming`, `processamento assíncrono`, `Render`, `Netlify`, `PostgreSQL`, `Vercel Blob`, `observabilidade`.
+`full-stack`, `React`, `Node.js`, `Express`, `FFmpeg`, `HLS`, `live streaming`, `processamento assíncrono`, `persistência`, `observabilidade`.
 
 ---
 
 ## 2. Motivação e problema de negócio
 
-Criadores e operadores de canais precisam acompanhar transmissões longas e transformar momentos relevantes em vídeos curtos. Fazer isso manualmente exige:
+Criadores e operadores de canais precisam acompanhar transmissões longas e transformar momentos relevantes em vídeos curtos. Fazer isso manualmente exige permanecer atento à transmissão, identificar o momento certo, encontrar o intervalo correto, recortar áudio e vídeo, adaptar o enquadramento e gerar uma saída de qualidade.
 
-1. permanecer acompanhando a transmissão;
-2. identificar o momento interessante;
-3. encontrar o intervalo correto na gravação;
-4. recortar áudio e vídeo sem perder sincronização;
-5. adaptar o enquadramento para o formato vertical;
-6. gerar uma saída com qualidade adequada;
-7. armazenar o arquivo e, eventualmente, publicá-lo.
-
-Esse processo é repetitivo, demorado e sujeito a erros. Um pequeno deslocamento entre áudio e vídeo já compromete a qualidade percebida pelo público. O KakashiHub busca centralizar esse fluxo em um estúdio web, com automação suficiente para acelerar a produção sem retirar do operador o controle editorial.
+Esse processo é repetitivo, demorado e sujeito a erros. Um pequeno deslocamento entre áudio e vídeo já compromete a qualidade percebida pelo público. O KakashiHub busca centralizar esse fluxo em um estúdio web, automatizando tarefas repetitivas sem retirar do operador o controle editorial.
 
 ### Objetivo geral
 
-Desenvolver uma plataforma web que capture, processe e organize clipes de vídeos e transmissões ao vivo, oferecendo uma experiência de estúdio para operação por navegador.
+Desenvolver uma plataforma web capaz de capturar, processar e organizar clipes de vídeos e transmissões ao vivo.
 
 ### Objetivos específicos
 
-- cadastrar fontes de conteúdo de diferentes plataformas;
-- detectar metadados e status de transmissões;
+- cadastrar fontes de conteúdo;
+- acompanhar o status de transmissões;
 - capturar segmentos de uma live usando HLS;
-- preservar a relação entre áudio e vídeo durante o mux;
+- preservar a relação entre áudio e vídeo;
 - processar vídeos com FFmpeg;
 - gerar vídeos verticais em resoluções configuráveis;
-- organizar clipes, fontes, jobs e atividades;
-- manter o sistema observável e recuperável em produção;
-- permitir evolução incremental sem interromper o fluxo principal da live.
+- organizar clipes, tarefas e atividades;
+- manter o sistema observável e recuperável;
+- permitir evolução incremental sem interromper a captura.
 
 ---
 
 ## 3. Escopo funcional
 
-O sistema é dividido em módulos que cooperam entre si.
-
 | Módulo | Responsabilidade |
 |---|---|
-| Estúdio | Interface principal para acompanhar fontes, lives e jobs |
-| Fontes | Cadastro e gerenciamento de canais, URLs e plataformas |
-| Captura | Download de janelas de mídia de lives e ingestão de vídeos |
-| Pipeline | Execução de FFmpeg, cortes, enquadramento e composição |
-| IA/regras | Apoio à identificação de momentos e geração de metadados |
-| Cortes | Organização e revisão dos clipes produzidos |
-| Uploads | Entrada de arquivos locais para processamento |
-| Publicação | Integrações com contas e redes sociais, quando configuradas |
-| Radar | Consulta de itens e eventos relevantes para monitoramento |
-| Saúde | Verificação do backend, banco, armazenamento e capacidades de live |
+| Estúdio | Interface para acompanhar fontes, lives e tarefas |
+| Fontes | Cadastro e gerenciamento de canais e plataformas |
+| Captura | Recepção de vídeos e janelas de mídia de lives |
+| Processamento | Cortes, escala, composição vertical e exportação |
+| Seleção | Organização e revisão dos clipes produzidos |
+| Uploads | Entrada de arquivos para processamento |
+| Publicação | Preparação de conteúdo para distribuição |
+| Monitoramento | Exibição de status, saúde e atividades |
 
-O sistema não promete que uma API externa forneça diretamente cada um dos streams. Em especial, a captura de lives do YouTube precisa considerar bloqueios de IP de datacenter e a natureza temporária das URLs HLS.
+O projeto não depende da ideia de que uma única API externa resolverá o fluxo completo. Cada provedor possui limitações próprias, e a arquitetura precisa tratar indisponibilidade, URLs temporárias, diferenças de autenticação e bloqueios de rede.
 
 ---
 
 ## 4. Arquitetura geral
 
-O KakashiHub adota uma arquitetura web full-stack com um backend Express e uma interface React. A implantação atual mantém dois serviços associados ao mesmo repositório:
-
-- **Backend `kakashi-hub`:** Express, API, persistência, jobs e pipeline FFmpeg.
-- **Frontend `kakashii-hub`:** versão mais recente do estúdio baseada em TanStack Start, em diretório separado.
-
-A aplicação principal Express também consegue servir os arquivos estáticos compilados do frontend tradicional. Assim, o projeto suporta uma evolução gradual da interface sem exigir a reescrita imediata de o conjunto do backend.
+O KakashiHub utiliza uma arquitetura web full-stack com uma interface de estúdio e um backend responsável por API, persistência, tarefas e processamento de mídia.
 
 ![Arquitetura e fluxo de dados do KakashiHub](KAKASHIHUB_ARQUITETURA.png)
 
-### Componentes principais
+### Visão simplificada
 
 ```text
 Usuário no navegador
         |
         v
-Frontend React / TanStack Start
+Interface web do estúdio
         |
-        | HTTP/JSON + upload de janelas HLS
+        | requisições HTTP e janelas de mídia
         v
-Backend Node.js + Express
+Backend da aplicação
    |        |          |
-   |        |          +--> PostgreSQL / store de estado
-   |        +-------------> Vercel Blob / mídia
-   +----------------------> Jobs e pipeline FFmpeg
+   |        |          +--> banco de dados e estado
+   |        +-------------> armazenamento de mídia
+   +----------------------> tarefas e processamento FFmpeg
         |
-        +--> YouTube Data API (metadados)
-        +--> Espelhos Invidious (HLS de live)
-        +--> yt-dlp / Cobalt (vídeos comuns, conforme configuração)
+        +--> serviços de metadados
+        +--> provedores ou espelhos de transmissão
 ```
 
-### Princípios arquiteturais observados
+### Princípios arquiteturais
 
-- **Separação de responsabilidades:** rotas HTTP ficam em `server/index.mjs`; processamento de mídia fica em `server/pipeline.mjs`; persistência e estado ficam em `server/store.mjs`.
-- **Processamento assíncrono:** tarefas longas são representadas como jobs e não devem bloquear a requisição web até o fim do processamento.
-- **Defesa contra dependências externas:** o sistema possui múltiplas fontes ou caminhos de resolução para determinados recursos e registra erros técnicos para diagnóstico.
-- **Configuração por ambiente:** chaves e URLs são fornecidas por variáveis de ambiente, sem serem embutidas no código.
-- **Evolução incremental:** o frontend novo pode ser implantado como serviço separado sem abandonar o backend existente.
+- **Separação de responsabilidades:** interface, API, persistência e processamento possuem papéis distintos.
+- **Processamento assíncrono:** tarefas longas não devem bloquear a requisição do navegador.
+- **Tolerância a falhas externas:** serviços de terceiros podem falhar ou mudar de comportamento.
+- **Configuração por ambiente:** credenciais e parâmetros privados não ficam no código-fonte.
+- **Evolução incremental:** componentes podem ser atualizados sem reescrever o sistema inteiro.
+- **Observabilidade:** o operador precisa saber se a aplicação, o armazenamento e a captura estão funcionando.
 
 ---
 
-## 5. Fluxo de uma live
+## 5. Fluxo de uma transmissão ao vivo
 
-A captura de uma live não é igual ao download de um vídeo já finalizado. A transmissão é formada por uma playlist HLS que aponta para segmentos pequenos e recentes.
+Capturar uma live é diferente de baixar um vídeo já finalizado. A transmissão é formada por uma playlist HLS que aponta para segmentos pequenos e recentes.
 
-### 5.1 Detecção da live
+### 5.1 Detecção
 
-A YouTube Data API v3 é utilizada para confirmar se a transmissão está no ar e recuperar metadados como título, canal e thumbnail. Ela não fornece o stream HLS diretamente.
+Um serviço de metadados confirma se a transmissão está no ar e fornece informações como título, canal e imagem. Esse serviço não precisa ser o mesmo que fornece os segmentos de áudio e vídeo.
 
-Quando a fonte é identificada como live, o sistema escolhe o modo de captura adequado:
+A aplicação seleciona um modo de captura conforme a origem:
 
-- **YouTube:** captura no navegador (`captureMode = 'browser'`), porque o IP do serviço em datacenter pode ser bloqueado pelo provedor.
-- **Twitch e Kick:** captura no servidor (`captureMode = 'server'`), conforme a integração disponível.
+- **Captura pelo navegador:** útil quando a origem funciona melhor na rede do operador do que em um servidor de datacenter.
+- **Captura pelo servidor:** útil quando o backend consegue acessar a transmissão diretamente.
 
 ### 5.2 Resolução do HLS
 
-O frontend consulta `GET /api/live/capture-config` e recebe a configuração da captura, incluindo espelho, duração da janela e limite de segmentos. Depois, consulta o espelho configurado para obter uma URL HLS temporária.
+A aplicação obtém uma configuração de captura e consulta a origem para receber uma URL HLS temporária. A URL aponta para playlists de vídeo e áudio e pode expirar, portanto não deve ser tratada como um endereço permanente.
 
-A URL HLS pode expirar. Por isso, ela não deve ser tratada como um endereço permanente. O projeto utiliza `local=true` quando necessário para que o espelho devolva playlists e segmentos em uma origem acessível ao navegador e sem depender de cookies.
+### 5.3 Captura por janelas
 
-### 5.3 Captura no navegador
+Em vez de manter um arquivo infinito, o sistema trabalha com janelas recentes:
 
-O módulo `src/lib/liveCapture.ts` executa o seguinte fluxo:
+1. localizar a playlist atual;
+2. identificar as trilhas de vídeo e áudio;
+3. selecionar segmentos recentes;
+4. baixar os segmentos;
+5. montar uma janela de cada trilha;
+6. enviar a janela ao backend;
+7. repetir enquanto a transmissão estiver sendo monitorada.
 
-1. consulta ou recupera do cache a playlist da live;
-2. identifica as trilhas de vídeo e áudio;
-3. lê os segmentos recentes da playlist;
-4. baixa os segmentos de áudio e vídeo;
-5. concatena os bytes de cada trilha;
-6. envia uma janela binária para `POST /api/live/:id/window`;
-7. repete o processo enquanto a aba do estúdio permanecer aberta.
+Essa estratégia limita o volume de dados em memória e permite detectar quando o monitoramento deixou de receber conteúdo.
 
-A captura por janela reduz a necessidade de manter um arquivo único e infinito. Também permite que o backend processe partes recentes da live e que o sistema detecte quando a sessão deixou de enviar dados.
+### 5.4 Mux e processamento
 
-### 5.4 Processamento da janela
+O backend recebe as trilhas e utiliza FFmpeg para combiná-las. O processamento deve preservar os streams e suas marcações temporais, evitando transformações desnecessárias.
 
-O backend recebe a janela, valida o formato e utiliza FFmpeg para muxar áudio e vídeo. A captura reaproveita o caminho de processamento usado pelos demais clipes, incluindo as funções de criação de clipe e análise de volume quando aplicável.
-
-O objetivo do mux é preservar os streams e suas marcações temporais, evitando reprocessamento desnecessário. Qualquer alteração futura de sincronização deve ser isolada, testada e autorizada separadamente, pois a captura é uma parte sensível do sistema.
+O cuidado com timestamps é importante: uma mudança aparentemente pequena na seleção de segmentos pode afetar a sincronização ou interromper o fluxo da live. Por isso, melhorias de sincronização devem ser isoladas, testadas e avaliadas separadamente.
 
 ### 5.5 Encerramento
 
-A live é encerrada quando o operador para o monitoramento ou quando o sistema não recebe janelas suficientes dentro do limite esperado. O estado da fonte registra a condição e `liveLastError` armazena uma mensagem técnica sanitizada para diagnóstico.
+A captura termina quando o operador interrompe o monitoramento ou quando a aplicação não recebe janelas suficientes dentro do intervalo esperado. O sistema registra uma condição compreensível para que o operador consiga decidir se deve tentar novamente.
 
 ---
 
 ## 6. Pipeline de mídia
 
-O pipeline central está em `server/pipeline.mjs`. Ele combina lógica de negócio, execução de processos externos e regras de compatibilidade com o ambiente de produção.
+O pipeline de mídia combina regras de negócio, execução de processos externos e tratamento de arquivos temporários.
 
 ### Etapas típicas
 
-1. **Entrada:** URL, arquivo enviado ou janela de live.
-2. **Resolução:** obtenção de mídia, metadados e trilhas.
-3. **Preparação:** criação de arquivos temporários e validação.
-4. **Análise:** duração, áudio, frames, enquadramento e metadados.
-5. **Processamento:** corte, escala, composição vertical, legenda ou marca d’água, quando configurados.
+1. **Entrada:** URL, arquivo ou janela de transmissão.
+2. **Resolução:** obtenção da mídia e de seus metadados.
+3. **Preparação:** validação e criação de arquivos temporários.
+4. **Análise:** duração, áudio, frames e enquadramento.
+5. **Processamento:** corte, escala e composição vertical.
 6. **Saída:** arquivo final e registro do clipe.
-7. **Persistência:** armazenamento local temporário, Vercel Blob e estado do projeto.
-8. **Acompanhamento:** atualização do job e do histórico de atividades.
+7. **Persistência:** armazenamento do arquivo e do estado.
+8. **Acompanhamento:** atualização da tarefa e do histórico.
 
-### Resoluções
+### Resoluções e recursos
 
-O sistema possui perfis de `720p`, `1080p` e `4K` para a saída vertical. Em ambientes com pouca memória, como o plano gratuito do Render, o pipeline pode adotar um perfil leve limitado a 720p para reduzir o risco de o processo ser encerrado por consumo de RAM.
+O produto pode trabalhar com diferentes perfis de saída vertical. Em ambientes com pouca memória, o sistema pode adotar um perfil mais leve para reduzir o risco de interrupção do processo.
 
-Essa decisão ilustra um trade-off clássico: qualidade máxima não é sempre a melhor escolha operacional. A plataforma precisa produzir uma saída suficientemente boa sem comprometer disponibilidade e estabilidade.
+Essa decisão apresenta um trade-off clássico: qualidade máxima não é sempre a melhor escolha operacional. A plataforma precisa produzir uma saída adequada sem comprometer a disponibilidade.
 
 ### Áudio e vídeo
 
-O áudio é tratado como parte inseparável do clipe. O pipeline deve evitar que uma transformação de vídeo descarte ou desloque a trilha de áudio. Na manutenção documentada neste caso, uma tentativa de alterar a seleção temporal de segmentos e reancorar timestamps foi revertida porque interferia no funcionamento da live. A solução publicada posteriormente foi defensiva e localizada: inicializar e acessar com segurança a coleção de clipes antes de aplicar filtros.
+O áudio deve ser tratado como parte inseparável do clipe. Uma transformação de vídeo não pode descartar ou deslocar a trilha de áudio por acidente.
+
+Durante a manutenção do projeto, uma tentativa de alterar a seleção temporal de segmentos foi revertida porque interferiu no funcionamento da live. A solução posterior foi localizada em uma camada de consistência do estado, sem alterar a lógica de captura. Esse episódio reforçou a importância de separar mudanças de sincronização de mudanças de estabilidade.
 
 ---
 
-## 7. Persistência e modelo de estado
+## 7. Persistência e estado
 
-O projeto trabalha com um estado de aplicação que reúne, entre outros elementos:
+A aplicação mantém informações sobre fontes, clipes, tarefas, configurações, projeto e histórico de atividades. Os arquivos de mídia são tratados separadamente do estado textual, usando armazenamento apropriado para objetos grandes.
 
-- `sources`: fontes cadastradas e seu status;
-- `clips`: clipes gerados e suas relações com fontes;
-- `jobs`: tarefas em execução ou concluídas;
-- `settings`: configurações de nicho, resolução e agentes;
-- `project`: identidade do projeto, canal e logo;
-- histórico de atividades e referências de mídia.
+### Estado compatível com versões anteriores
 
-A persistência usa banco PostgreSQL quando configurado e armazenamento de objetos para mídia. O endpoint de saúde expõe somente informações operacionais, como a disponibilidade do banco e do armazenamento, sem retornar credenciais.
-
-### Lição de consistência de estado
-
-Em sistemas que evoluem por migrações e reconciliação, não se pode pressupor que uma chave exista em cada um dos estados históricos. A expressão abaixo é segura:
+Em um sistema em evolução, não se pode presumir que qualquer estado persistido no passado possua todas as propriedades da versão atual. Uma coleção ausente deve ser interpretada de maneira segura:
 
 ```js
-const clips = Array.isArray(getState().clips) ? getState().clips : []
+const clips = Array.isArray(state.clips) ? state.clips : []
 const previous = clips.filter((clip) => clip.sourceId === sourceId)
 ```
 
-Já uma chamada direta a `getState().clips.filter(...)` pode quebrar quando uma versão antiga ou incompleta do estado não possui `clips`.
+Esse cuidado evita que a aplicação falhe ao carregar estados antigos ou incompletos.
 
-A correção publicada no commit `9521704` protegeu os acessos do pipeline e eliminou o erro:
+### Estratégia de recuperação
 
-```text
-Cannot read properties of undefined (reading 'filter')
-```
+A aplicação deve:
 
-Essa falha é um exemplo de como uma alteração aparentemente simples pode revelar uma incompatibilidade entre o código atual e estados persistidos anteriormente.
+- inicializar coleções ausentes com valores seguros;
+- validar dados antes de aplicar filtros ou transformações;
+- registrar falhas sem expor credenciais;
+- manter tarefas e fontes em estados compreensíveis;
+- permitir uma nova tentativa sem corromper o estado anterior.
 
 ---
 
-## 8. API e endpoints relevantes
+## 8. Interface entre componentes
 
-| Endpoint | Verbo HTTP | Finalidade |
-|---|---:|---|
-| `/api/health` | GET | Verificar saúde do backend e capacidades configuradas |
-| `/api/state` | GET | Consultar estado da aplicação e jobs autorizados |
-| `/api/live/capture-config` | GET | Obter configuração da captura de live |
-| `/api/live/:id/window` | POST | Enviar uma janela de áudio e vídeo capturada no navegador |
-| `/api/live/:id/capture-error` | POST | Registrar falha de captura da live |
-| `/api/live/:id/...` | POST/GET | Operar e consultar o ciclo de vida da live |
-| `/api/settings` | POST | Atualizar configurações do projeto |
-| `/api/project` | POST | Atualizar metadados do projeto |
-| `/api/radar` | GET | Consultar itens de monitoramento |
-| `/media/*` | GET | Servir ou recuperar arquivos de mídia autorizados |
-| `/covers/*` | GET | Servir capas e imagens do projeto |
+A comunicação ocorre por uma API HTTP. A interface consulta estado, solicita configurações, envia arquivos ou janelas de mídia e acompanha tarefas.
 
-### Health check
+As principais categorias de operações são:
 
-O endpoint `/api/health` é usado pelo Render e também serve para diagnóstico. Ele informa:
+| Categoria | Finalidade |
+|---|---|
+| Saúde | Verificar disponibilidade da aplicação e dependências |
+| Estado | Consultar fontes, clipes, tarefas e atividades |
+| Captura | Obter configuração e enviar janelas da live |
+| Projeto | Atualizar configurações e identidade visual |
+| Mídia | Enviar, processar e recuperar arquivos autorizados |
+| Monitoramento | Consultar status e eventos relevantes |
 
-- `ok`: se a API respondeu;
-- `commit`: SHA implantado;
-- `storage.database` e `dbProbe`: configuração e teste do banco;
-- `storage.blob`: disponibilidade do armazenamento de objetos;
-- `live`: capacidades de metadados, espelhos e serviços auxiliares.
-
-Em uma operação real, o SHA do commit é importante porque conecta o comportamento observado em produção ao código exato implantado.
+A API de saúde é especialmente importante em produção porque permite diferenciar uma falha de código de uma indisponibilidade de banco, armazenamento ou provedor externo.
 
 ---
 
 ## 9. Segurança e proteção operacional
 
-O sistema adota algumas medidas importantes:
+Informações de autenticação, chaves de API, cookies e configurações privadas devem permanecer fora da documentação pública e do código-fonte. No projeto, esses valores são tratados como configuração de ambiente.
 
-- chaves de API e URLs sensíveis são configuradas por variáveis de ambiente;
-- o health check é mantido acessível para o provedor de deploy;
-- o backend pode bloquear acesso direto e aceitar requisições autenticadas pelo proxy configurado;
-- mensagens de erro são sanitizadas para não vazar chaves ou URLs de conexão;
-- mídia privada pode ser recuperada por armazenamento de objetos com cabeçalhos apropriados;
-- uploads possuem limite de tamanho e extensões permitidas;
-- cookies de provedores não são necessários para o caminho principal de captura de live no navegador.
+Outras medidas importantes incluem:
 
-Segurança não é apenas autenticação. Neste projeto, também envolve evitar vazamento de segredos em logs, limitar arquivos recebidos, controlar processos externos e manter o sistema funcionando quando um provedor de conteúdo fica indisponível.
+- limitar tamanho e tipos de arquivos recebidos;
+- sanitizar mensagens de erro;
+- evitar credenciais em logs;
+- controlar processos externos;
+- validar URLs e parâmetros;
+- proteger arquivos de mídia privados;
+- diferenciar endpoints de saúde de operações administrativas;
+- registrar apenas informações necessárias para diagnóstico.
 
----
-
-## 10. Deploy e infraestrutura
-
-O backend é implantado no Render por Docker, com deploy automático a partir da branch `main`. O frontend mais recente é configurado como outro serviço no mesmo arquivo `render.yaml`.
-
-### Backend
-
-- runtime: Docker;
-- comando de inicialização: `node server/start.mjs`;
-- health check: `/api/health`;
-- branch: `main`;
-- processamento de mídia: Node.js, Python e FFmpeg;
-- armazenamento: PostgreSQL e Vercel Blob, quando configurados.
-
-### Frontend
-
-- diretório: `kakashii-hub/`;
-- build: `npm install --no-audit --no-fund && npm run build`;
-- runtime: Node.js/TanStack Start;
-- deploy automático independente do backend.
-
-### Desenvolvimento local
-
-```bash
-npm install
-npm run dev
-```
-
-A aplicação fica disponível em `http://localhost:4780` conforme o README do projeto.
-
-### Produção local ou build
-
-```bash
-npm run build
-npm start
-```
-
-O projeto requer Node.js 20 ou superior, Python 3 e FFmpeg para os fluxos de processamento.
+Segurança não é apenas autenticação. Também envolve disponibilidade, controle de recursos, proteção de dados e capacidade de recuperar o sistema após uma falha.
 
 ---
 
-## 11. Incidente técnico estudado: áudio, live e estado inconsistente
+## 10. Implantação e operação
 
-O problema inicial percebido pelo usuário era áudio atrasado ou adiantado. A investigação mostrou que uma correção inicial tentou modificar o recorte de segmentos HLS e reancorar timestamps. Como a live deixou de funcionar após essa mudança, a alteração foi revertida imediatamente para preservar o fluxo de captura.
+O sistema é implantado em serviços de nuvem com build automatizado e verificação de saúde. A interface e o backend podem evoluir de forma independente, desde que seus contratos de comunicação sejam preservados.
 
-### Linha do tempo resumida
+A aplicação precisa de um ambiente capaz de executar JavaScript no servidor, processamento de vídeo e armazenamento persistente ou externo. O uso de containers ajuda a padronizar dependências como Node.js, Python e FFmpeg.
 
-| Commit | Evento |
-|---|---|
-| `cb25854` | Tentativa inicial de correção de sincronização HLS |
-| `9d1e9f5` | Reversão da alteração para restaurar o fluxo da live |
-| `9521704` | Correção defensiva para estado sem `clips` |
+### Práticas operacionais
 
-### Causa concreta do erro da live
+- verificar a saúde após cada implantação;
+- associar o comportamento observado à versão publicada;
+- testar uma nova transmissão depois de mudanças na captura;
+- monitorar consumo de memória e duração das tarefas;
+- manter credenciais somente no ambiente de execução;
+- separar alterações de infraestrutura de alterações de sincronização.
 
-O erro registrado em produção foi:
+---
 
-```text
-Cannot read properties of undefined (reading 'filter')
-```
+## 11. Incidente técnico estudado
 
-A causa não era uma nova regra de sincronização em execução, e sim o acesso direto a `getState().clips.filter(...)` em um estado carregado que não possuía a propriedade `clips`.
+O problema inicial percebido era áudio atrasado ou adiantado em determinados clipes. A investigação levou a uma tentativa de modificar a seleção de segmentos HLS e a ancoragem temporal. Como a transmissão deixou de funcionar após essa mudança, a alteração foi revertida para preservar o caminho crítico da live.
+
+A análise posterior encontrou uma falha diferente e concreta: o pipeline assumia que uma coleção de clipes sempre existiria no estado carregado. Em uma situação com estado antigo ou incompleto, o código tentava filtrar uma coleção inexistente.
 
 ### Correção aplicada
 
-A correção foi deliberadamente pequena:
+A correção adotou uma abordagem defensiva:
 
+- tratar a coleção ausente como vazia;
 - proteger o processamento da janela ao vivo;
-- proteger a inicialização e contagem de clipes anteriores;
-- não alterar a seleção HLS;
-- não alterar timestamps de áudio ou vídeo;
-- validar sintaxe com `node --check server/pipeline.mjs`;
-- validar whitespace com `git diff --check`;
-- publicar no `main` e confirmar o SHA pelo health check.
+- proteger a inicialização e a contagem de clipes anteriores;
+- não modificar a seleção HLS;
+- não modificar timestamps de áudio ou vídeo;
+- validar sintaxe e diferenças antes da implantação;
+- iniciar uma nova live após a publicação para confirmar o comportamento.
 
-### Aprendizados de engenharia
+### Aprendizados
 
-1. **Preservar o fluxo crítico:** em uma live com público, o primeiro objetivo é restaurar disponibilidade.
-2. **Isolar mudanças de alto risco:** sincronização temporal deve ser alterada somente em uma mudança separada, com testes específicos.
-3. **Investigar o erro observado:** o erro salvo no estado foi mais útil que uma hipótese sobre o áudio.
-4. **Tratar dados persistidos como não confiáveis:** estados antigos podem não possuir todas as chaves atuais.
-5. **Usar o commit implantado como evidência:** o health check confirmou que o backend público estava rodando exatamente `9521704`.
+1. **Preservar o caminho crítico:** em uma live com público, disponibilidade vem antes de uma melhoria experimental.
+2. **Isolar mudanças de alto risco:** sincronização temporal deve ter mudança e testes próprios.
+3. **Investigar o erro observado:** a mensagem registrada orientou a busca pela causa real.
+4. **Tratar dados persistidos como não confiáveis:** versões antigas podem não possuir todas as chaves atuais.
+5. **Validar em produção com segurança:** uma nova execução deve ser observada após a implantação.
 
 ---
 
-## 12. Estratégia de testes e validação
+## 12. Estratégia de testes
 
-### Testes estáticos e de integração
+### Validações técnicas
 
-- checagem de sintaxe com `node --check`;
-- verificação de alterações com `git diff --check`;
-- build do frontend com `npm run build`;
-- inicialização do servidor com configuração de teste;
-- verificação do endpoint `/api/health`;
-- validação do SHA de produção;
-- teste de uma nova live após o deploy;
-- conferência de que `liveLastError` não recebe o erro antigo durante uma nova execução.
+- checagem de sintaxe;
+- verificação de alterações no código;
+- build da interface;
+- inicialização do servidor em ambiente de teste;
+- verificação do endpoint de saúde;
+- teste de uma nova live após a implantação;
+- confirmação de que uma falha antiga não reaparece.
 
-### Cenários de teste recomendados
+### Cenários recomendados
 
 | Cenário | Resultado esperado |
 |---|---|
-| Fonte sem `clips` no estado | Pipeline inicializa coleção vazia e continua |
-| Live do YouTube disponível | Frontend resolve HLS e envia janelas |
-| Espelho indisponível | Sistema tenta alternativa ou registra erro compreensível |
-| Playlist sem áudio | Janela é rejeitada sem corromper o estado |
-| Aba fechada durante captura | Monitoramento encerra após timeout controlado |
-| Render com pouca memória | Perfil leve evita processamento excessivo |
-| Banco indisponível | `/api/health` informa falha sem ocultar o diagnóstico |
-| Upload acima do limite | Requisição é rejeitada antes do processamento |
-| Nova versão implantada | SHA do health check corresponde ao commit esperado |
+| Estado sem coleção de clipes | A aplicação inicializa uma coleção vazia |
+| Live disponível | O navegador envia janelas e o backend processa |
+| Origem indisponível | O sistema registra uma mensagem compreensível |
+| Playlist sem áudio | A janela é rejeitada sem corromper o estado |
+| Navegador fechado | O monitoramento encerra com controle |
+| Pouca memória | O perfil leve evita processamento excessivo |
+| Armazenamento indisponível | A saúde informa a dependência com problema |
+| Arquivo acima do limite | A requisição é rejeitada antes do processamento |
 
-### O que ainda merece evolução
+### Evoluções de teste
 
-- testes automatizados de contrato para os endpoints de live;
-- testes com playlists HLS sintéticas, incluindo descontinuidade e mudança de segmento;
-- métricas de atraso entre captura, mux e disponibilidade do clipe;
-- testes de sincronização usando arquivos com marcadores de áudio conhecidos;
-- filas persistentes para jobs longos;
-- testes de carga para múltiplas lives simultâneas;
-- rastreamento distribuído entre frontend, backend e FFmpeg.
+- testes de contrato da API;
+- playlists HLS sintéticas;
+- arquivos com marcadores de áudio conhecidos;
+- métricas de atraso entre captura e clipe disponível;
+- testes de carga para várias lives;
+- testes de recuperação de tarefas interrompidas.
 
 ---
 
@@ -399,105 +323,89 @@ A correção foi deliberadamente pequena:
 
 | Requisito | Aplicação no projeto |
 |---|---|
-| Disponibilidade | Health check, deploy automático e caminhos alternativos de captura |
-| Desempenho | Captura por janelas, processamento assíncrono e perfil leve no Render |
-| Confiabilidade | Jobs, estado persistido, mensagens de erro e validações defensivas |
-| Manutenibilidade | Separação entre API, pipeline, store e frontend |
-| Segurança | Segredos por ambiente, limites de upload e sanitização de erros |
-| Escalabilidade | Serviços separados, armazenamento externo e possibilidade de workers |
-| Observabilidade | `/api/health`, `liveLastError`, atividades e SHA do deploy |
-| Portabilidade | Docker, Node.js, Python e FFmpeg |
+| Disponibilidade | Health check, retry e caminhos alternativos |
+| Desempenho | Janelas de captura e processamento assíncrono |
+| Confiabilidade | Estado persistido e validações defensivas |
+| Manutenibilidade | Separação entre interface, API e pipeline |
+| Segurança | Segredos por ambiente e limites de upload |
+| Escalabilidade | Serviços separados e armazenamento externo |
+| Observabilidade | Status, tarefas, atividades e logs sanitizados |
+| Portabilidade | Container e dependências reproduzíveis |
 
 ---
 
-## 14. Decisões, trade-offs e limitações
+## 14. Decisões e trade-offs
 
 ### Captura no navegador versus servidor
 
-A captura no navegador foi escolhida para YouTube porque o provedor trata IPs de datacenter de maneira diferente. O navegador também pode acessar uma origem HLS liberada pelo espelho, enquanto o servidor Render pode receber bloqueios.
+A captura no navegador pode funcionar melhor quando a origem trata redes de datacenter de maneira diferente. O servidor, por outro lado, oferece maior controle operacional.
 
-**Benefício:** maior chance de obter o stream.  
-**Custo:** a aba precisa permanecer aberta e o processamento depende do dispositivo do operador.
+**Benefício do navegador:** acesso a uma rede e a uma origem que podem ser mais favoráveis.  
+**Custo:** a aba precisa permanecer aberta e depende do dispositivo do operador.
 
 ### FFmpeg local versus serviço externo
 
 O FFmpeg local oferece controle sobre codecs, cortes e composição.
 
 **Benefício:** flexibilidade e menor dependência de uma API de vídeo.  
-**Custo:** consumo de CPU/memória, necessidade de binários e tratamento de falhas de processo.
+**Custo:** consumo de CPU e memória e necessidade de tratar processos externos.
 
-### Render gratuito versus qualidade máxima
+### Ambiente econômico versus qualidade máxima
 
-O ambiente gratuito reduz custos, mas possui recursos limitados.
+Um ambiente de baixo custo ajuda a validar o produto real, mas exige perfis de processamento compatíveis com os recursos disponíveis.
 
-**Benefício:** custo operacional baixo para validar o produto real.  
-**Custo:** necessidade de perfil leve e maior cuidado com jobs concorrentes.
+**Benefício:** custo operacional menor.  
+**Custo:** limitação de concorrência e necessidade de otimização.
 
 ### Estado simples versus fila especializada
 
-O estado e os jobs atuais são adequados para uma operação inicial e pequena.
-
-**Benefício:** menos infraestrutura e implementação rápida.  
-**Custo:** uma futura escala exigirá fila dedicada, locks distribuídos e workers independentes.
+Um estado com tarefas é adequado para uma primeira escala. Volumes maiores exigirão uma fila persistente, workers independentes, retry e controle de concorrência.
 
 ---
 
-## 15. Roadmap técnico sugerido
+## 15. Roadmap técnico
 
 ### Curto prazo
 
-- ampliar testes automatizados do ciclo de vida da live;
+- ampliar testes do ciclo de vida da live;
 - adicionar métricas de captura e processamento;
-- registrar duração e tamanho de cada janela;
+- registrar duração e tamanho das janelas;
 - criar uma tela de diagnóstico para operadores;
-- documentar contratos JSON dos endpoints.
+- documentar contratos de integração.
 
 ### Médio prazo
 
-- mover jobs longos para workers dedicados;
+- mover tarefas longas para workers dedicados;
 - adicionar fila persistente com retry e backoff;
-- criar testes de sincronização com fixtures HLS;
-- separar mais claramente domínio, infraestrutura e adaptadores externos;
+- criar fixtures HLS para testes de sincronização;
+- separar ainda mais domínio, infraestrutura e adaptadores externos;
 - adicionar controle de concorrência por fonte.
 
 ### Longo prazo
 
 - suportar múltiplas regiões e provedores de armazenamento;
-- adotar observabilidade com logs estruturados, métricas e traces;
-- desenvolver um mecanismo de seleção de momentos baseado em sinais de áudio, chat e eventos;
+- adotar logs estruturados, métricas e traces;
+- selecionar momentos usando sinais de áudio, chat e eventos;
 - oferecer publicação agendada com confirmação e auditoria;
-- evoluir para uma arquitetura orientada a eventos caso o volume justifique.
+- evoluir para arquitetura orientada a eventos quando o volume justificar.
 
 ---
 
 ## 16. Conclusão
 
-O KakashiHub demonstra como conceitos de Engenharia de Software aparecem em um produto real: levantamento de requisitos, modularização, integração com APIs, processamento assíncrono, tolerância a falhas, segurança, deploy contínuo, observabilidade e manutenção evolutiva.
+O KakashiHub demonstra como conceitos de Engenharia de Software aparecem em um produto real: levantamento de requisitos, modularização, integração com APIs, processamento assíncrono, tolerância a falhas, segurança, implantação contínua, observabilidade e manutenção evolutiva.
 
-O maior aprendizado do caso não é apenas como capturar um stream HLS. É como fazer uma mudança em um sistema vivo sem comprometer seu caminho crítico. Ao identificar que a primeira alteração de sincronização afetava a operação, ela foi revertida. Em seguida, a investigação baseada no erro real encontrou a causa concreta: um estado sem a coleção `clips`. A correção final foi pequena, defensiva, testada e confirmada em produção.
+O principal aprendizado não é apenas capturar um stream HLS. É realizar mudanças em um sistema vivo sem comprometer o caminho crítico. Ao perceber que uma primeira alteração de sincronização afetava a operação, ela foi revertida. Em seguida, a investigação encontrou uma falha de consistência do estado, que foi corrigida de forma localizada e defensiva.
 
-Esse ciclo — observar, formular hipótese, isolar a mudança, validar, publicar e medir — é uma prática central de engenharia de software aplicada a sistemas que precisam continuar funcionando para usuários reais.
-
----
-
-## 17. Referências internas do projeto
-
-- `README.md` — visão geral, requisitos, desenvolvimento e captura de lives.
-- `render.yaml` — definição dos serviços e variáveis de ambiente do Render.
-- `server/index.mjs` — API Express e health check.
-- `server/pipeline.mjs` — pipeline FFmpeg, captura e processamento de mídia.
-- `server/store.mjs` — estado e persistência da aplicação.
-- `src/lib/liveCapture.ts` — captura de playlists e segmentos HLS no navegador.
-- `docs/INTEGRACOES.md` — integrações externas do projeto.
-- Commits `cb25854`, `9d1e9f5` e `9521704` — histórico do incidente e da correção defensiva.
+Esse ciclo — observar, formular hipótese, isolar a mudança, validar, publicar e medir — é uma prática central de Engenharia de Software aplicada a sistemas que precisam continuar funcionando para usuários reais.
 
 ---
 
 ## Perguntas para discussão em sala
 
-1. Em que momento a captura no navegador deixa de ser uma solução adequada e passa a exigir um worker especializado?
+1. Em que momento a captura no navegador deixa de ser adequada e passa a exigir um worker especializado?
 2. Como testar sincronização de áudio e vídeo de forma automatizada?
 3. Quais propriedades deveriam ser garantidas por um schema de estado versionado?
-4. Que métricas indicariam que o sistema precisa sair do plano gratuito?
+4. Que métricas indicariam a necessidade de uma infraestrutura maior?
 5. Como transformar o processamento atual em uma arquitetura orientada a eventos?
-6. Quais são os riscos de depender de espelhos e APIs externas para um produto de público real?
+6. Quais riscos existem ao depender de provedores externos em um produto com público real?
