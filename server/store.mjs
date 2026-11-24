@@ -537,6 +537,8 @@ export function getJobs() {
     progress: job.progress,
     step: job.step,
     error: job.error,
+    // Diagnóstico interno: não é exibido no front, mas fica disponível em /api/state.
+    debug: job.debug,
     log: (job.log || []).slice(-14),
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,

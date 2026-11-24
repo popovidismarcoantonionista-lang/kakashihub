@@ -474,7 +474,11 @@ function detectFromCues(cues, min, max, cfg = NICHES.fuga) {
 async function detectFromAudio(video, job) {
   updateJob(job, { step: 'Lendo o áudio em busca de movimento' })
   try {
-    const { stderr } = await run(FFMPEG_BIN, ['-hide_banner', '-i', video, '-af', 'silencedetect=noise=-32dB:d=1.4', '-f', 'null', '-'], { timeout: 1000 * 60 * 8 })
+    const { stderr } = await run(FFMPEG_BIN, [
+      '-hide_banner',
+      ...(LIGHT_RENDER ? ['-threads', '1'] : []),
+      '-i', video, '-af', 'silencedetect=noise=-32dB:d=1.4', '-f', 'null', '-',
+    ], { timeout: 1000 * 60 * 8 })
     const starts = [...stderr.matchAll(/silence_start: ([\d.]+)/g)].map((m) => Number(m[1]))
     const ends = [...stderr.matchAll(/silence_end: ([\d.]+)/g)].map((m) => Number(m[1]))
     const { duration } = await probe(video)
@@ -527,6 +531,7 @@ function spreadWindows(duration, min, max) {
 async function extractCover(video, time, outFile, width = 432) {
   await run(FFMPEG_BIN, [
     '-y', '-hide_banner', '-loglevel', 'error',
+    ...(LIGHT_RENDER ? ['-threads', '1', '-filter_threads', '1'] : []),
     '-ss', time.toFixed(2), '-i', video, '-frames:v', '1',
     '-vf', `crop=ih*9/16:ih,scale=${width}:-2`, '-q:v', '3', outFile,
   ], { timeout: 1000 * 60 })
@@ -535,6 +540,7 @@ async function extractCover(video, time, outFile, width = 432) {
 async function extractWide(video, time, outFile) {
   await run(FFMPEG_BIN, [
     '-y', '-hide_banner', '-loglevel', 'error',
+    ...(LIGHT_RENDER ? ['-threads', '1', '-filter_threads', '1'] : []),
     '-ss', time.toFixed(2), '-i', video, '-frames:v', '1',
     '-vf', 'scale=960:-2', '-q:v', '3', outFile,
   ], { timeout: 1000 * 60 })
@@ -1459,8 +1465,11 @@ export async function runIngest(sourceId, url, opts = {}) {
     finishJob(job)
     return created
   } catch (err) {
-    // O usuário vê só a mensagem curta; o motivo real fica no log do Render.
-    console.error('[ingest-error]', sourceId, String(err?.stderr || err?.stack || err?.message || err).slice(-1800))
+    // O usuário vê só a mensagem curta; o motivo real fica no log do Render
+    // e em job.debug (diagnóstico interno, não mostrado na interface).
+    const detail = String(err?.stderr || err?.stack || err?.message || err).slice(-1200)
+    console.error('[ingest-error]', sourceId, detail)
+    updateJob(job, { debug: detail })
     source.status = 'erro'
     source.error = friendlyError(err)
     source.progress = 0
@@ -2108,6 +2117,9 @@ export async function runCompilation(compilationId, opts = {}) {
     fs.rmSync(work, { recursive: true, force: true })
     return comp
   } catch (err) {
+    const detail = String(err?.stderr || err?.stack || err?.message || err).slice(-1200)
+    console.error('[compilation-error]', compilationId, detail)
+    updateJob(job, { debug: detail })
     comp.status = 'erro'
     comp.error = 'Não foi possível montar este vídeo longo agora.'
     comp.progress = 0

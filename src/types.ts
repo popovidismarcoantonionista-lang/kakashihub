@@ -144,6 +144,7 @@ export interface Job {
   progress: number
   step: string
   error?: string
+  debug?: string
   log: { at: string; text: string }[]
   startedAt: string
   finishedAt?: string | null
