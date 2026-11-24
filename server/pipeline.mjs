@@ -1818,12 +1818,14 @@ export async function runTrim(clipId, startInput, endInput, opts = {}) {
       const tmp = path.join(LIVE_DIR, `${clip.id}-cut-${Date.now()}.mp4`)
       await run(FFMPEG_BIN, [
         '-y', '-hide_banner', '-loglevel', 'error',
+        ...(LIGHT_RENDER ? ['-threads', '1', '-filter_threads', '1'] : []),
         '-ss', String(start), '-t', String(length), '-i', liveSrc,
-        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
+        '-c:v', 'libx264', '-preset', LIGHT_RENDER ? 'ultrafast' : 'veryfast',
+        '-crf', LIGHT_RENDER ? '26' : '20', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', LIGHT_RENDER ? '96k' : '160k', '-ar', '48000', '-ac', '2',
         '-movflags', '+faststart', '-avoid_negative_ts', 'make_zero',
         tmp,
-      ], { timeout: 1000 * 60 * 20 })
+      ], { timeout: 1000 * 60 * (LIGHT_RENDER ? 5 : 20) })
       let measured = length
       try { measured = (await probe(tmp)).duration || length } catch {}
       fs.copyFileSync(tmp, liveSrc)
