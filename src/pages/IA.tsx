@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import {
-  AudioLines, Check, CheckCircle2, Clapperboard, Crop, ImagePlus, Lightbulb,
-  RefreshCw, Scissors, Sparkles, Trash2, UploadCloud, Youtube,
+  AudioLines, Check, CheckCircle2, Clapperboard, Crop, Download, ImagePlus, Lightbulb,
+  Scissors, Sparkles, Trash2, UploadCloud, Youtube,
 } from 'lucide-react'
 import { useApp } from '../store'
 import { navigate } from '../router'
-import { PageHead, ProgressBar, Select, Switch } from '../ui'
+import { PageHead, ProgressBar, Switch } from '../ui'
 import { relTime } from '../lib/format'
 import { NICHE_OPTIONS } from '../types'
 import type { Niche } from '../types'
@@ -426,28 +426,11 @@ export function IAPage() {
           </div>
 
           <div className="panel reanalyze">
-            <div className="re-head"><RefreshCw size={14} /><b>Analisar uma fonte de novo</b></div>
-            <p>Revise um vídeo com o estilo atual do estúdio.</p>
-            <Select
-              value={state.sources[0]?.id || ''}
-              align="left"
-              onChange={async (id) => {
-                if (!id) return
-                try {
-                  await api(`/api/sources/${id}/analyze`, { method: 'POST' })
-                } catch (e: any) {
-                }
-              }}
-              options={[
-                ...state.sources.map((s) => ({ value: s.id, label: s.title, hint: s.channel })),
-                ...(state.sources.length ? [] : [{ value: '', label: 'Nenhuma fonte ainda', hint: 'envie um vídeo ou cole um link' }]),
-              ]}
-            />
-            {!state.sources.length && (
-              <button className="btn btn-soft btn-sm w-full" onClick={() => navigate('videos')}>
-                <Clapperboard size={13} /> Conectar fonte
-              </button>
-            )}
+            <div className="re-head"><Download size={14} /><b>Baixar vídeos</b></div>
+            <p>Escolha os vídeos na aba Vídeos, baixe e envie o arquivo para o estúdio.</p>
+            <button className="btn btn-soft btn-sm w-full" onClick={() => navigate('videos')}>
+              <Download size={13} /> Abrir Vídeos
+            </button>
           </div>
 
           <div className="side-tip">

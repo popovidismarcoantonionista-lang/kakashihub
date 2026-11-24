@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle, Clapperboard, Crop, Download,
-  Play, Plus, Radio, RefreshCw, Search, Square, Trash2, UploadCloud, Youtube,
+  Play, Plus, Radio, Search, Square, Trash2, UploadCloud, Youtube,
 } from 'lucide-react'
 import { useApp } from '../store'
 import { CamBoxCanvas } from '../CamBoxCanvas'
@@ -384,13 +384,6 @@ export function VideosPage() {
     navigate('estudio', { clip: first.id })
   }
 
-  const reanalyze = async (source: Source) => {
-    try {
-      await api(`/api/sources/${source.id}/analyze`, { method: 'POST' })
-    } catch (e: any) {
-    }
-  }
-
   const remove = async () => {
     if (!confirm) return
     setRemoving(true)
@@ -530,7 +523,7 @@ export function VideosPage() {
                 </article>
               ))}
             </div>
-            <p className="finder-empty">Os arquivos baixam no seu navegador. Depois use “Enviar vídeo” para o estúdio analisar.</p>
+            <p className="finder-empty">Os arquivos baixam no seu navegador. Depois use “Enviar vídeo” para o estúdio cortar.</p>
           </>
         )}
       </section>
@@ -713,7 +706,7 @@ export function VideosPage() {
                         <Crop size={12} /> {camEditFor === source.id ? 'Fechar caixa' : 'Ajustar webcam'}
                       </button>
                     )}
-                    {isLive ? (
+                    {isLive && (
                       liveOn ? (
                         <button className="btn btn-ghost btn-sm" onClick={() => stopMonitoring(source)} disabled={liveActing === source.id}>
                           {liveActing === source.id ? <span className="spinner" /> : <Square size={12} />} Parar
@@ -723,10 +716,6 @@ export function VideosPage() {
                           {liveActing === source.id ? <span className="spinner" /> : <Radio size={12} />} Monitorar de novo
                         </button>
                       )
-                    ) : (
-                      <button className="btn btn-ghost btn-sm" onClick={() => reanalyze(source)} disabled={processing}>
-                        <RefreshCw size={13} /> Analisar de novo
-                      </button>
                     )}
                     {isLive && embed && (
                       <button className="btn btn-ghost btn-sm" onClick={() => setLiveWatching(source)}>
