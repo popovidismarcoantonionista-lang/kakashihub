@@ -2649,6 +2649,37 @@ export function takeBrowserLiveWindow(sourceId) {
 }
 
 /** Processa uma janela já gravada (servidor ou navegador) e atualiza a fonte. */
+/**
+ * A captura da live costuma começar com o mesmo quadro repetido por ~1-2s
+ * (o relay still não tem mídia nova). Isso virava "vídeo travado com áudio
+ * andando" no início de todo corte. Medimos esse pre-roll em baixa resolução
+ * e descartamos antes de recortar o clipe.
+ */
+async function liveLeadingFreeze(file) {
+  try {
+    const w = 160
+    const h = 90
+    const { stdout } = await run(FFMPEG_BIN, [
+      '-v', 'error', '-t', '5', '-i', file,
+      '-vf', `scale=${w}:${h},fps=10,setsar=1`,
+      '-pix_fmt', 'gray', '-f', 'rawvideo', '-',
+    ], { timeout: 1000 * 30, encoding: 'buffer' })
+    const buf = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout || '')
+    const frameSize = w * h
+    const frames = Math.floor(buf.length / frameSize)
+    if (frames < 4) return 0
+    const first = buf.subarray(0, frameSize)
+    for (let i = 1; i < frames; i += 1) {
+      if (!buf.subarray(i * frameSize, (i + 1) * frameSize).equals(first)) {
+        return Math.max(0, (i - 1) / 10)
+      }
+    }
+    return 0
+  } catch {
+    return 0
+  }
+}
+
 async function processLiveWindowFile(sourceId, win, job) {
   // Navegador entrega { file, captions }; captura no servidor entrega o caminho.
   const winFile = typeof win === 'string' ? win : win?.file
@@ -2690,10 +2721,14 @@ async function processLiveWindowFile(sourceId, win, job) {
   const settings = getState().settings || {}
   const min = Number(settings.clipMin) || 18
   const max = Number(settings.clipMax) || 38
-  const maxSpan = Math.max(6, Math.min(max, duration - 1))
+  // Descarta o quadro parado do começo da gravação para o corte não abrir
+  // com imagem congelada enquanto o áudio já está andando.
+  const lead = await liveLeadingFreeze(winFile)
+  const usable = Math.max(0, duration - lead)
+  const maxSpan = Math.max(6, Math.min(max, usable - 0.5))
   const minSpan = Math.max(6, Math.min(min, maxSpan))
-  const spanLen = Math.min(maxSpan, Math.max(minSpan, Math.min(20, duration - 1)))
-  const spanStart = Math.max(0, Math.min(duration - spanLen, 0.5))
+  const spanLen = Math.min(maxSpan, Math.max(minSpan, Math.min(20, usable - 0.5)))
+  const spanStart = Math.max(0, Math.min(duration - spanLen, Math.max(lead + 0.1, 0.5)))
   const span = duration >= 6 ? { start: spanStart, end: Math.min(duration, spanStart + spanLen) } : null
   const lastEnd = Number(source.liveLastEnd) || -999
   if (span && session + span.start >= lastEnd + 6) {
