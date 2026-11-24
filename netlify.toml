@@ -2,9 +2,34 @@
   command = "npm run build"
   publish = "dist"
 
-[functions]
-  directory = ".netlify/v1/functions"
-  node_bundler = "esbuild"
-
 [build.environment]
-  NODE_VERSION = "22"
+  NODE_VERSION = "20"
+
+# Proxy API/media/covers para o backend no Render.
+# Defina PROXY_SECRET no Netlify e no Render com o mesmo valor.
+[[redirects]]
+  from = "/api/*"
+  to = "https://kakashicortehub.onrender.com/api/:splat"
+  status = 200
+  force = true
+  signed = "PROXY_SECRET"
+
+[[redirects]]
+  from = "/media/*"
+  to = "https://kakashicortehub.onrender.com/media/:splat"
+  status = 200
+  force = true
+  signed = "PROXY_SECRET"
+
+[[redirects]]
+  from = "/covers/*"
+  to = "https://kakashicortehub.onrender.com/covers/:splat"
+  status = 200
+  force = true
+  signed = "PROXY_SECRET"
+
+# SPA fallback
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

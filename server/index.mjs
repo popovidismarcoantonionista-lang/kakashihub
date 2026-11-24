@@ -3,6 +3,7 @@ import { handleUpload } from '@vercel/blob/client'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
+import crypto from 'node:crypto'
 import {
   COVERS,
   EXPORTS,
@@ -33,6 +34,38 @@ import { getRadar } from './radar.mjs'
 
 const app = express()
 app.use(express.json({ limit: '2mb' }))
+
+function verifyNetlifySigned(sig, secret) {
+  try {
+    const parts = String(sig || '').split('.')
+    if (parts.length !== 3) return false
+    const [h, p, s] = parts
+    const header = JSON.parse(Buffer.from(h, 'base64url').toString('utf8'))
+    if (header?.alg !== 'HS256') return false
+    const expected = crypto.createHmac('sha256', secret).update(`${h}.${p}`).digest('base64url')
+    const a = Buffer.from(s)
+    const b = Buffer.from(expected)
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false
+    const payload = JSON.parse(Buffer.from(p, 'base64url').toString('utf8'))
+    if (payload?.iss !== 'netlify') return false
+    if (payload?.exp && Date.now() / 1000 > Number(payload.exp) + 30) return false
+    return true
+  } catch {
+    return false
+  }
+}
+
+app.use((req, res, next) => {
+  const secret = String(process.env.PROXY_SECRET || '').trim()
+  if (!secret) return next()
+  if (req.path === '/api/health') return next()
+  const plain = String(req.get('x-fuga-proxy-secret') || '').trim()
+  if (plain && plain === secret) return next()
+  const signed = String(req.get('x-nf-sign') || '').trim()
+  if (signed && verifyNetlifySigned(signed, secret)) return next()
+  return res.status(403).json({ error: 'Acesso direto bloqueado.' })
+})
+
 app.use('/api', storeMiddleware)
 
 const UPLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024
@@ -151,6 +184,20 @@ app.post('/api/project', (req, res) => {
   const body = req.body || {}
   for (const key of ['name', 'channel']) {
     if (typeof body[key] === 'string') state.project[key] = body[key].trim().slice(0, 48)
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'logo')) {
+    const logo = body.logo
+    if (logo && typeof logo === 'object' && typeof logo.url === 'string' && logo.url) {
+      state.project.logo = {
+        url: String(logo.url).slice(0, 500),
+        x: Math.max(0, Math.min(1, Number(logo.x) || 0.5)),
+        y: Math.max(0, Math.min(1, Number(logo.y) || 0.88)),
+        w: Math.max(0.05, Math.min(0.8, Number(logo.w) || 0.28)),
+        opacity: Math.max(0.1, Math.min(1, Number(logo.opacity) || 1)),
+      }
+    } else {
+      state.project.logo = null
+    }
   }
   save()
   ok(res, { project: state.project })
