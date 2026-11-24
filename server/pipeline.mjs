@@ -1388,8 +1388,16 @@ export async function runIngest(sourceId, url, opts = {}) {
     })
 
     updateJob(job, { progress: 80, step: 'Encontrando os melhores momentos' })
-    const settings = state.settings
-    const niche = NICHES[settings?.niche] ? settings.niche : 'fuga'
+    // Nunca confiar em state.settings cru: estados antigos no banco podem vir
+    // sem autoApprove/clipMin/clipMax e derrubar o ingest no meio do corte.
+    const settings = {
+      clipMin: 18,
+      clipMax: 38,
+      niche: 'fuga',
+      autoApprove: false,
+      ...(getState().settings || {}),
+    }
+    const niche = NICHES[settings.niche] ? settings.niche : 'fuga'
     const cfg = nicheConfig(state)
     let windows = cues.length > 4 ? detectFromCues(cues, settings.clipMin, settings.clipMax, cfg) : []
     if (!windows.length) windows = await detectFromAudio(videoPath, job)

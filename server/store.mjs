@@ -133,9 +133,18 @@ function mergeChanges(base, ours, theirs) {
 function normalizeState(value) {
   const state = isObject(value) ? value : seedState()
   state.project ||= {}
-  state.settings ||= {}
-  state.settings.niche ||= 'fuga'
-  state.settings.resolution ||= '4k'
+  // Um estado antigo no banco pode vir sem settings ou com apenas alguns
+  // campos. Sempre complete com os defaults, senão rotinas longas (ingest,
+  // render) quebram ao ler clipMin/autoApprove/captions/watermark.
+  const defaultSettings = seedState().settings
+  state.settings = {
+    ...defaultSettings,
+    ...(isObject(state.settings) ? state.settings : {}),
+    agents: {
+      ...defaultSettings.agents,
+      ...(isObject(state.settings?.agents) ? state.settings.agents : {}),
+    },
+  }
   state.project.channel = typeof state.project.channel === 'string' ? state.project.channel : ''
   const logo = state.project.logo
   if (logo && typeof logo === 'object' && typeof logo.url === 'string' && logo.url) {

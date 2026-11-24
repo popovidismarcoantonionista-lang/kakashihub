@@ -190,10 +190,11 @@ app.post('/api/settings', (req, res) => {
   const body = req.body || {}
   if (body.niche !== undefined && !NICHE_LABELS[body.niche]) delete body.niche
   if (body.resolution !== undefined && !OUTPUT_SIZES[body.resolution]) delete body.resolution
+  const current = state.settings || {}
   state.settings = {
-    ...state.settings,
+    ...current,
     ...body,
-    agents: { ...state.settings.agents, ...(body.agents || {}) },
+    agents: { ...(current.agents || {}), ...(body.agents || {}) },
   }
   state.project.niche = NICHE_LABELS[state.settings.niche] || state.project.niche
   save()
