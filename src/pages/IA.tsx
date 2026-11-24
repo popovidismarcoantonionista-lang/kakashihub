@@ -246,8 +246,8 @@ export function IAPage() {
               </div>
               <p className="fine" style={{ marginBottom: 10 }}>PNG transparente. Aparece nos cortes finais.</p>
 
-              <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                <div style={{ width: 132, aspectRatio: '9 / 16', background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.1)', borderRadius: 10, position: 'relative', overflow: 'hidden', flex: '0 0 auto' }}>
+              <div className="logo-editor">
+                <div className="logo-preview">
                   {state.project?.logo?.url ? (
                     <img
                       src={state.project.logo.url}
@@ -268,27 +268,30 @@ export function IAPage() {
                   )}
                 </div>
 
-                <div style={{ flex: 1, minWidth: 180 }}>
-                  <label className="btn btn-soft btn-sm" style={{ display: 'inline-flex', cursor: logoBusy ? 'wait' : 'pointer', marginBottom: 8 }}>
-                    {logoBusy ? <span className="spinner" /> : <UploadCloud size={13} />}
-                    {state.project?.logo?.url ? 'Trocar logo' : 'Enviar logo'}
-                    <input
-                      type="file"
-                      accept="image/png,image/webp,image/gif"
-                      style={{ display: 'none' }}
-                      onChange={(e) => {
-                        const f = e.target.files?.[0] || null
-                        e.currentTarget.value = ''
-                        void uploadLogo(f)
-                      }}
-                    />
-                  </label>
-                  {state.project?.logo?.url && (
-                    <>
-                      <button className="btn btn-soft btn-sm" style={{ marginLeft: 8, marginBottom: 8 }} onClick={() => void removeLogo()} disabled={logoBusy}>
+                <div className="logo-controls">
+                  <div className="logo-actions">
+                    <label className="btn btn-soft btn-sm" style={{ display: 'inline-flex', cursor: logoBusy ? 'wait' : 'pointer' }}>
+                      {logoBusy ? <span className="spinner" /> : <UploadCloud size={13} />}
+                      {state.project?.logo?.url ? 'Trocar logo' : 'Enviar logo'}
+                      <input
+                        type="file"
+                        accept="image/png,image/webp,image/gif"
+                        style={{ display: 'none' }}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0] || null
+                          e.currentTarget.value = ''
+                          void uploadLogo(f)
+                        }}
+                      />
+                    </label>
+                    {state.project?.logo?.url && (
+                      <button className="btn btn-soft btn-sm" onClick={() => void removeLogo()} disabled={logoBusy}>
                         <Trash2 size={13} /> Remover
                       </button>
-
+                    )}
+                  </div>
+                  {state.project?.logo?.url && (
+                    <>
                       <div className="range-field" style={{ marginTop: 6 }}>
                         <div className="rf-head"><span>Tamanho</span><b className="mono">{Math.round(logoDraft.w * 100)}%</b></div>
                         <input type="range" min={5} max={80} value={Math.round(logoDraft.w * 100)}
