@@ -39,7 +39,7 @@ function relayUrl(url: string, config?: CaptureConfig): string {
     const hosts = [config.mirror, ...(config.mirrors || [])]
       .map((mirror) => { try { return new URL(mirror).hostname } catch { return '' } })
       .filter(Boolean)
-    if (!hosts.includes(parsed.hostname) && !/^yt-comp\d+\.chocolatemoo53\.com$/i.test(parsed.hostname)) return url
+    if (!hosts.includes(parsed.hostname) && !/^(yt-comp\d+|yt)\.chocolatemoo53\.com$/i.test(parsed.hostname)) return url
     return `${config.relay}?url=${encodeURIComponent(parsed.toString())}`
   } catch {
     return url
@@ -87,17 +87,21 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs =
 
 async function fetchText(url: string, config?: CaptureConfig): Promise<string> {
   const target = relayUrl(url, config)
+  const relayTarget = config?.relay ? relayUrl(url, { ...config, useRelay: true }) : target
+  const targets = relayTarget !== target ? [target, relayTarget] : [target]
   let last = 'falha de rede'
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const res = await fetchWithTimeout(target, { cache: 'no-store' }, 15000)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const text = await res.text()
-      if (!text.trim()) throw new Error('resposta vazia')
-      return text
-    } catch (error) {
-      last = error instanceof Error ? error.message : String(error)
-      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300))
+  for (const t of targets) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetchWithTimeout(t, { cache: 'no-store' }, 15000)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const text = await res.text()
+        if (!text.trim()) throw new Error('resposta vazia')
+        return text
+      } catch (error) {
+        last = error instanceof Error ? error.message : String(error)
+        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300))
+      }
     }
   }
   throw new Error(last)
@@ -285,15 +289,19 @@ function concat(chunks: Uint8Array[]): Uint8Array<ArrayBuffer> {
 
 async function fetchBytes(url: string, config?: CaptureConfig): Promise<Uint8Array<ArrayBuffer>> {
   const target = relayUrl(url, config)
+  const relayTarget = config?.relay ? relayUrl(url, { ...config, useRelay: true }) : target
+  const targets = relayTarget !== target ? [target, relayTarget] : [target]
   let last = 'falha de rede'
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const res = await fetchWithTimeout(target, { cache: 'no-store' }, 20000)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      return new Uint8Array(await res.arrayBuffer())
-    } catch (error) {
-      last = error instanceof Error ? error.message : String(error)
-      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300))
+  for (const t of targets) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetchWithTimeout(t, { cache: 'no-store' }, 20000)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return new Uint8Array(await res.arrayBuffer())
+      } catch (error) {
+        last = error instanceof Error ? error.message : String(error)
+        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300))
+      }
     }
   }
   throw new Error(last)
@@ -401,8 +409,13 @@ export async function captureLiveWindowWithFallback(
     if (await attempt(mirror, false)) return
   }
   if (config.relay) {
+    let relayDown = false
     for (const mirror of mirrors) {
-      if (await attempt(mirror, true)) return
+      if (relayDown) break
+      const ok = await attempt(mirror, true)
+      if (ok) return
+      const msg = last instanceof Error ? last.message : String(last || '')
+      if (/HTTP 502|HTTP 503|HTTP 504|Espelho indispon/i.test(msg)) relayDown = true
     }
   }
   throw last
@@ -488,12 +501,15 @@ export class LiveCaptureSession {
       await captureLiveWindowWithFallback(source, this.api, this.config)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error || 'falha na captura')
-      try {
-        await this.api(`/api/live/${source.id}/capture-error`, {
-          method: 'POST',
-          body: JSON.stringify({ error: message.slice(0, 280) }),
-        })
-      } catch {}
+      const body = JSON.stringify({ error: message.slice(0, 280) })
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await this.api(`/api/live/${source.id}/capture-error`, { method: 'POST', body })
+          break
+        } catch {
+          if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 800))
+        }
+      }
     } finally {
       this.busy = false
     }

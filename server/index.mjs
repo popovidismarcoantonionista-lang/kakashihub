@@ -544,18 +544,26 @@ app.get('/api/live/relay', async (req, res) => {
   try { target = new URL(raw) } catch { return fail(res, 400, 'URL inválida.') }
   if (target.protocol !== 'https:') return fail(res, 400, 'Só HTTPS é permitido.')
   const hosts = relayHosts()
-  if (!hosts.has(target.hostname) && !/^yt-comp\d+\.chocolatemoo53\.com$/i.test(target.hostname)) {
+  if (!hosts.has(target.hostname) && !/^(yt-comp\d+|yt)\.chocolatemoo53\.com$/i.test(target.hostname)) {
     return fail(res, 403, 'Host não permitido.')
   }
   const cached = relayCache.get(raw)
   if (cached && Date.now() - cached.at < RELAY_TTL) {
     res.set('Content-Type', cached.type)
     res.set('Cache-Control', 'no-store')
+    res.set('X-Relay-Cache', 'hit')
     return res.send(cached.buf)
   }
   try {
-    const upstream = await fetch(target, { signal: AbortSignal.timeout(45000), redirect: 'follow' })
-    if (!upstream.ok) return fail(res, 502, `espelho HTTP ${upstream.status}`)
+    const upstream = await fetch(target, {
+      signal: AbortSignal.timeout(45000),
+      redirect: 'follow',
+      headers: { 'user-agent': 'Mozilla/5.0', accept: '*/*' },
+    })
+    if (!upstream.ok) {
+      console.warn(`[relay] upstream ${upstream.status} ${target.hostname}${target.pathname.slice(0, 80)}`)
+      return fail(res, 502, `espelho HTTP ${upstream.status}`)
+    }
     const buf = Buffer.from(await upstream.arrayBuffer())
     if (buf.length > RELAY_MAX_BYTES) return fail(res, 413, 'Recurso grande demais.')
     const type = upstream.headers.get('content-type') || 'application/octet-stream'
@@ -563,9 +571,14 @@ app.get('/api/live/relay', async (req, res) => {
     if (relayCache.size > 40) relayCache.delete(relayCache.keys().next().value)
     res.set('Content-Type', type)
     res.set('Cache-Control', 'no-store')
+    res.set('X-Relay-Cache', 'miss')
     res.send(buf)
-  } catch {
-    fail(res, 502, 'Espelho indisponível.')
+  } catch (e) {
+    const msg = e?.name === 'TimeoutError' || /timeout|aborted/i.test(String(e?.message || e))
+      ? 'Espelho demorou para responder.'
+      : 'Espelho indisponível.'
+    console.warn(`[relay] ${target.hostname}${target.pathname.slice(0, 80)}: ${String(e?.message || e).slice(0, 160)}`)
+    fail(res, 502, msg)
   }
 })
 

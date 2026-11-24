@@ -2644,18 +2644,15 @@ export async function captureLiveWindow(sourceId) {
       const browserStale = last
         ? Date.now() - last > BROWSER_WINDOW_TIMEOUT
         : Date.now() - started > Math.max(90, LIVE_WINDOW + 30) * 1000
-      if (browserStale) {
-        // No Render, captura no servidor de YouTube é bloqueada por IP; mantém no navegador.
-        updateJob(job, { progress: 50, step: 'Monitorando a transmissão' })
-        source.liveCheckedAt = new Date().toISOString()
-        save()
-        return { continue: true }
-      } else {
-        updateJob(job, { progress: 50, step: 'Monitorando a transmissão' })
-        source.liveCheckedAt = new Date().toISOString()
-        save()
-        return { continue: true }
+      if (browserStale && !source.liveLastError) {
+        source.liveLastError = last
+          ? 'Aguardando captura do navegador. Mantenha a aba do Kakashi aberta.'
+          : 'Aguardando captura do navegador. Abra a aba do Kakashi e mantenha-a em primeiro plano.'
       }
+      updateJob(job, { progress: 50, step: 'Monitorando a transmissão' })
+      source.liveCheckedAt = new Date().toISOString()
+      save()
+      return { continue: true }
     }
 
     const apiConfirmed = () => Boolean(
