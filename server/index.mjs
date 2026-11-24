@@ -32,7 +32,7 @@ import {
   oauthFinish, oauthStart, saveAppCredentials,
 } from './social.mjs'
 import { getRadar } from './radar.mjs'
-import { db } from './db.mjs'
+import { db, connectionInfo } from './db.mjs'
 
 const app = express()
 app.use(express.json({ limit: '6mb' }))
@@ -152,6 +152,7 @@ app.get('/api/health', async (req, res) => {
       blob: blobStorageEnabled(),
       database: Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL),
       dbProbe,
+      connection: connectionInfo,
     },
     live: liveCapabilities(),
   })

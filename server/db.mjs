@@ -4,10 +4,21 @@ import * as schema from './schema.mjs'
 
 const { Pool } = pg
 
+export const connectionInfo = {
+  configured: false,
+  schemeOk: false,
+  normalized: false,
+}
+
 // Senhas do Supabase podem conter #, /, @, %, colchetes etc. Aceitar a URL
 // como foi colada (crua ou já codificada) evita "Invalid URL" no driver.
 export function normalizeConnectionString(raw) {
-  const value = String(raw || '').trim()
+  let value = String(raw || '').trim()
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    value = value.slice(1, -1).trim()
+  }
+  connectionInfo.configured = Boolean(value)
+  connectionInfo.schemeOk = /^postgres(?:ql)?:\/\//i.test(value)
   if (!value) return value
   const scheme = value.match(/^postgres(?:ql)?:\/\//i)
   if (!scheme) return value
@@ -22,7 +33,9 @@ export function normalizeConnectionString(raw) {
   let password = credentials.slice(colon + 1)
   if (password.startsWith('[') && password.endsWith(']')) password = password.slice(1, -1)
   try { password = decodeURIComponent(password) } catch {}
-  return `${scheme[0]}${user}:${encodeURIComponent(password)}@${host}`
+  const normalized = `${scheme[0]}${user}:${encodeURIComponent(password)}@${host}`
+  connectionInfo.normalized = normalized !== value
+  return normalized
 }
 
 const connectionString = normalizeConnectionString(process.env.DATABASE_URL || process.env.POSTGRES_URL)
