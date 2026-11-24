@@ -1,6 +1,6 @@
 ﻿const ALLOWED_HOSTS = new Set([
   'inv.nadeko.net','yewtu.be','invidious.nerdvpn.de','invidious.privacyredirect.com',
-  'invidious.fdn.fr','invidious.slipfox.xyz','invidious.privacydev.net','inv.zoomerville.com','yt.chocolatemoo53.com',
+  'invidious.fdn.fr','invidious.slipfox.xyz','invidious.privacydev.net','inv.zoomerville.com','invidious.tiekoetter.com','iv.melmac.space','invidious.protokolla.fi','yt.chocolatemoo53.com',
 ])
 function hostAllowed(hostname) {
   if (ALLOWED_HOSTS.has(hostname)) return true
@@ -45,4 +45,5 @@ export const handler = async (event) => {
 }
 
 export const config = { path: '/api/live/relay' }
+
 
