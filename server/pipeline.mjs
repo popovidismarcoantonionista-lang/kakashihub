@@ -1766,10 +1766,10 @@ function parseCreditCaption(description, start) {
 }
 
 function contextWindow(duration, wordCount) {
-  // Comentário escrito: 15s para frase curta; textos maiores ganham tempo
-  // para serem lidos, sem passar de 30s (e sem exceder o próprio corte).
-  const target = 12 + Math.max(1, wordCount) * 1.2
-  const wanted = Math.max(15, Math.min(30, target))
+  // A palavra amarela agora corre mais rápido pela frase: ~1s por palavra.
+  // A frase continua legível, mas a "queima" não arrasta mais 25–30s.
+  const target = 6 + Math.max(1, wordCount) * 0.7
+  const wanted = Math.max(8, Math.min(16, target))
   return Math.max(1, Math.min(duration - 0.3, wanted))
 }
 
@@ -1878,7 +1878,7 @@ function buildCaptionAss(clip, duration, outW, outH, gta = false, watermark = fa
       // Estilo máquina-cortes-gta: caixa alta, palavra falada em amarelo (#FFD400).
       const text = words.map((w, idx) => {
         const word = assEscape(String(w).toUpperCase())
-        if (idx === i) return `{\\c&H0000D4FF&\\3c&H00000000&\\bord${outline + 1}}${word}{\\r}`
+        if (idx === i) return `{\\c&H00FFFFFF&\\3c&H00000000&\\bord${outline + 1}\\t(0,100,\\c&H0000D4FF&)}${word}{\\r}`
         return `{\\c&H00FFFFFF&\\3c&H00000000&}${word}`
       }).join(' ')
       events.push(`Dialogue: 0,${assTime(start)},${assTime(end)},${contextual ? 'Context' : 'Default'},,0,0,0,,${text}`)
