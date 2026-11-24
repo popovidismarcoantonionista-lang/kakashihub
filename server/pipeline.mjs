@@ -1761,6 +1761,15 @@ export async function runRender(clipId, opts = {}) {
     // estouram a memória e derrubam o processo no meio do render.
     await waitForLiveRecording()
 
+    // Com -loglevel error o ffmpeg não reporta andamento: o job ficava preso
+    // em 34% no front durante toda a codificação (vários minutos no free).
+    // Este heartbeat só move o número; o passo real continua em 34% até terminar.
+    let tickProgress = 34
+    const progressTimer = setInterval(() => {
+      tickProgress = Math.min(80, tickProgress + 4)
+      updateJob(job, { progress: tickProgress })
+    }, 15000)
+
     try {
       const assName = assFile ? path.basename(assFile).replace(/'/g, "\\'") : null
       const logoInputArgs = logoFile ? ['-loop', '1', '-t', String(duration), '-i', logoFile] : []
@@ -1866,6 +1875,7 @@ export async function runRender(clipId, opts = {}) {
         }
       }
     } finally {
+      clearInterval(progressTimer)
       if (assFile) try { fs.unlinkSync(assFile) } catch {}
     }
     clip.renderedKey = await storeLocalFile(out, `media/exports/${clip.id}.mp4`, 'video/mp4')
