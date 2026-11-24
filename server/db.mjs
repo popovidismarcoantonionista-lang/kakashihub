@@ -40,6 +40,10 @@ export function normalizeConnectionString(raw) {
   if (/supabase\.com$/i.test(host) && !/pooler\.supabase\.com/i.test(host)) {
     host = 'aws-0-us-east-2.pooler.supabase.com:6543'
   }
+  if (!host.includes('/')) {
+    const [hostOnly, query] = host.split('?')
+    host = `${hostOnly}/postgres${query ? `?${query}` : ''}`
+  }
   const colon = credentials.indexOf(':')
   connectionInfo.credentialsColon = colon >= 0
   if (colon < 0) return value
