@@ -258,11 +258,15 @@ async function loadContext() {
       }
 
       const state = normalizeState(clone(rawState))
+      const baseState = clone(state)
       return {
         state,
-        baseState: rawState,
+        // A normalização não é alteração do usuário. Se o banco estiver com um
+        // estado antigo sem alguns campos, um GET não deve agendar uma escrita
+        // (e muito menos transformar falha de escrita em 503 no /api/state).
+        baseState,
         revision: row.revision,
-        stateDirty: !isDeepStrictEqual(rawState, state),
+        stateDirty: false,
         jobs: rows.reverse().map(jobFromRow),
         dirtyJobIds: new Set(),
         clearJobs: false,
