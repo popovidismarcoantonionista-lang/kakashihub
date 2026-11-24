@@ -1173,6 +1173,8 @@ async function probeMeta(url, job) {
 
 export async function runIngest(sourceId, url, opts = {}) {
   const state = getState()
+  if (!Array.isArray(state.clips)) state.clips = []
+  if (!Array.isArray(state.sources)) state.sources = []
   const source = findSource(sourceId)
   const job = createJob('ingest', { sourceId, ...(opts.jobId ? { id: opts.jobId } : {}) })
   const localFile = typeof opts.localFile === 'string'

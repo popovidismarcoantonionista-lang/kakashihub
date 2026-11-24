@@ -44,12 +44,17 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 // (state, source, clip, comp). Arrays com itens id preservam a identidade de
 // cada item pelo id e mantêm a ordem recebida.
 function assignInPlace(target, source) {
-  for (const key of Object.keys(target)) {
-    if (!(key in source) && key !== 'length') delete target[key]
-  }
+  // A reconciliação pode receber o próprio objeto (mergeChanges devolve `ours`
+  // quando `theirs` é igual à base). Copiar um array nele mesmo esvaziaria a
+  // lista, então nunca compartilhamos a referência de origem/destino.
+  if (target === source) return target
+  // Não apagar chaves ausentes: mergedState pode vir de um registro antigo do
+  // banco sem `clips`/`settings`, e apagar aqui derruba o ingest (state.clips
+  // undefined) e perde configurações.
   for (const key of Object.keys(source)) {
     const next = source[key]
     const current = target[key]
+    if (next === current) continue
     if (isObject(next) && isObject(current)) {
       assignInPlace(current, next)
     } else if (Array.isArray(next) && Array.isArray(current)) {
@@ -89,13 +94,14 @@ function mergeChanges(base, ours, theirs) {
       const baseHas = Object.hasOwn(base, key)
       const oursHas = Object.hasOwn(ours, key)
       const theirsHas = Object.hasOwn(theirs, key)
+      // Nunca omitir uma chave do resultado: um registro antigo do banco sem
+      // `clips`/`settings` deve ser completado, não replicado como buraco.
       if (!oursHas) {
-        if (theirsHas && !baseHas) result[key] = theirs[key]
-        else if (theirsHas && !isDeepStrictEqual(theirs[key], base[key])) result[key] = theirs[key]
+        if (theirsHas) result[key] = theirs[key]
         continue
       }
       if (!theirsHas) {
-        if (!baseHas || !isDeepStrictEqual(ours[key], base[key])) result[key] = ours[key]
+        result[key] = ours[key]
         continue
       }
       result[key] = mergeChanges(baseHas ? base[key] : undefined, ours[key], theirs[key])
