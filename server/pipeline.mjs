@@ -237,7 +237,10 @@ function prepareYouTubeCookies() {
 
 const YT_COOKIES = prepareYouTubeCookies()
 const INVIDIOUS_INSTANCE = process.env.INVIDIOUS_INSTANCE
-const PLAYER_CLIENTS = (process.env.YTDLP_PLAYER_CLIENTS || 'mweb,tv,web_safari,web_embedded,android_vr').trim()
+// O cliente ANDROID devolve o progressivo itag 18 mesmo em IP de datacenter,
+// onde WEB/TV caem no "Sign in to confirm you're not a bot". Vem primeiro para
+// o yt-dlp não desistir antes de tentar a única rota que funciona no Render.
+const PLAYER_CLIENTS = (process.env.YTDLP_PLAYER_CLIENTS || 'android,mweb,tv,web_safari,web_embedded,android_vr').trim()
 const IMPERSONATE = (process.env.YTDLP_IMPERSONATE ?? 'chrome').trim()
 const VERBOSE = /^(1|true|yes)$/i.test(process.env.YTDLP_VERBOSE || '')
 const POT_URL = String(process.env.BGUTIL_POT_URL || process.env.YT_POT_URL || 'http://127.0.0.1:4416').trim()
