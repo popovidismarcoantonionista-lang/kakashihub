@@ -598,7 +598,7 @@ function TimelineCanvas({
             onChange={(e) => setContextDraft(e.target.value)}
             onBlur={() => { if (contextDraft !== (clip?.contextCaption || '')) void patchClip({ contextCaption: contextDraft }) }}
           />
-          <span className="fine">Usada pelo estilo XRacing.</span>
+          <span className="fine">Fica 15–30s na tela; textos maiores ganham mais tempo.</span>
           <span className="kicker mono">LEGENDAS</span>
           {clip.captionLines?.length ? clip.captionLines.slice(-5).map((line, i) => (
             <div className="tr-line" key={`${line.t}-${i}`}>

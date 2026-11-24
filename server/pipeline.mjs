@@ -1638,12 +1638,20 @@ function parseCreditCaption(description, start) {
   return (best.text || first || '').slice(0, 110)
 }
 
+function contextWindow(duration, wordCount) {
+  // Comentário escrito: 15s para frase curta; textos maiores ganham tempo
+  // para serem lidos, sem passar de 30s (e sem exceder o próprio corte).
+  const target = 12 + Math.max(1, wordCount) * 1.2
+  const wanted = Math.max(15, Math.min(30, target))
+  return Math.max(1, Math.min(duration - 0.3, wanted))
+}
+
 function contextChunks(text, duration) {
-  // Comentário escrito estilo XRacing: a frase completa fica visível durante
-  // todo o corte; só a palavra em amarelo muda. Não é legenda karaokê de fala.
+  // A frase completa fica visível na janela; só a palavra amarela muda.
   const words = splitCaptionWords(text).slice(0, 16)
   if (!words.length) return []
-  return [{ start: 0.25, end: Math.max(0.26, duration - 0.15), words }]
+  const start = 0.3
+  return [{ start, end: Math.min(duration, start + contextWindow(duration, words.length)), words }]
 }
 
 function buildCaptionChunks(clip, duration, gta = false, forcedText = '') {

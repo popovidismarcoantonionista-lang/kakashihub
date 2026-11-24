@@ -353,7 +353,7 @@ export function IAPage() {
               />
             </div>
             <div className="option-row">
-              <div><b>Estilo XRacing</b><em>Legenda com o que aconteceu, pela descrição do vídeo</em></div>
+              <div><b>Estilo XRacing</b><em>Legenda do que aconteceu, visível 15–30s</em></div>
               <Switch
                 checked={Boolean(settings?.xracing)}
                 label="Estilo XRacing"
