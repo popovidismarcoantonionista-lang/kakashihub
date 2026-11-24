@@ -1388,6 +1388,8 @@ export async function runIngest(sourceId, url, opts = {}) {
       }
       if (viaService) {
         updateJob(job, { step: 'Baixando o vídeo' })
+        // Motivo de cada tentativa fica só em job.debug (não aparece no front).
+        const attempts = []
         try {
           let downloaded = false
           if (!downloaded && hasCobalt()) {
@@ -1395,7 +1397,9 @@ export async function runIngest(sourceId, url, opts = {}) {
               await downloadViaCobalt(url, videoPath)
               downloaded = true
             } catch (err) {
-              console.error('[download:cobalt]', String(err?.message || err).slice(0, 300))
+              const reason = String(err?.message || err).slice(0, 300)
+              attempts.push(`cobalt:${reason}`)
+              console.error('[download:cobalt]', reason)
             }
           }
           if (!downloaded && canUseService()) {
@@ -1403,7 +1407,9 @@ export async function runIngest(sourceId, url, opts = {}) {
               await downloadViaService(url, videoPath)
               downloaded = true
             } catch (err) {
-              console.error('[download:servico]', String(err?.message || err).slice(0, 300))
+              const reason = String(err?.message || err).slice(0, 300)
+              attempts.push(`servico:${reason}`)
+              console.error('[download:servico]', reason)
             }
           }
           if (!downloaded && hasInvidious()) {
@@ -1412,13 +1418,21 @@ export async function runIngest(sourceId, url, opts = {}) {
               viaInvidious = true
               downloaded = true
             } catch (err) {
-              console.error('[download:invidious]', String(err?.message || err).slice(0, 300))
+              const reason = String(err?.message || err).slice(0, 300)
+              attempts.push(`invidious:${reason}`)
+              console.error('[download:invidious]', reason)
             }
           }
-          if (!downloaded) throw new Error(FRIENDLY[5])
+          if (!downloaded) {
+            const error = new Error(FRIENDLY[5])
+            error.debug = attempts.join(' | ')
+            throw error
+          }
         } catch (err) {
           console.error('[download:servico]', String(err?.message || err).slice(0, 400))
-          throw new Error(FRIENDLY[5])
+          const error = new Error(FRIENDLY[5])
+          error.debug = err?.debug || attempts.join(' | ')
+          throw error
         }
       }
       const downloaded = fs.existsSync(videoPath) && fs.statSync(videoPath).size > 1024
@@ -1539,7 +1553,7 @@ export async function runIngest(sourceId, url, opts = {}) {
   } catch (err) {
     // O usuário vê só a mensagem curta; o motivo real fica no log do Render
     // e em job.debug (diagnóstico interno, não mostrado na interface).
-    const detail = String(err?.stderr || err?.stack || err?.message || err).slice(-1200)
+    const detail = String(err?.debug || err?.stderr || err?.stack || err?.message || err).slice(-1600)
     console.error('[ingest-error]', sourceId, detail)
     updateJob(job, { debug: detail })
     source.status = 'erro'
