@@ -1,4 +1,5 @@
 import express from 'express'
+import { sql } from 'drizzle-orm'
 import { handleUpload } from '@vercel/blob/client'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -31,6 +32,7 @@ import {
   oauthFinish, oauthStart, saveAppCredentials,
 } from './social.mjs'
 import { getRadar } from './radar.mjs'
+import { db } from './db.mjs'
 
 const app = express()
 app.use(express.json({ limit: '6mb' }))
@@ -130,6 +132,15 @@ app.get('/api/health', async (req, res) => {
       downloader = 'sem-resposta'
     }
   }
+  let dbProbe = 'sem-config'
+  if (process.env.DATABASE_URL || process.env.POSTGRES_URL) {
+    try {
+      await db.execute(sql`select 1`)
+      dbProbe = 'ok'
+    } catch (error) {
+      dbProbe = `erro:${error?.code || 'conexao'}`
+    }
+  }
   ok(res, {
     ok: true,
     commit: process.env.RENDER_GIT_COMMIT || null,
@@ -137,6 +148,7 @@ app.get('/api/health', async (req, res) => {
     storage: {
       blob: blobStorageEnabled(),
       database: Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL),
+      dbProbe,
     },
     live: liveCapabilities(),
   })
