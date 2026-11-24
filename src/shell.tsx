@@ -213,12 +213,17 @@ function IngestModal() {
         body: JSON.stringify({ name: file.name, size: file.size, type: file.type }),
       })
       await upload(`media/src/${source.id}.mp4`, file, {
-        access: 'private',
+        // O store do Blob é público; access 'private' é recusado pelo Vercel.
+        access: 'public',
         handleUploadUrl: '/api/sources/upload-token',
         clientPayload: JSON.stringify({ sourceId: source.id }),
         contentType: file.type || 'video/mp4',
         multipart: file.size >= 100 * 1024 * 1024,
         onUploadProgress: ({ percentage }) => setUploadProgress(percentage),
+      })
+      await api('/api/sources/upload-complete', {
+        method: 'POST',
+        body: JSON.stringify({ sourceId: source.id }),
       })
       await refresh()
       setIngestOpen(false)

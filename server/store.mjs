@@ -649,7 +649,8 @@ export function closeOrphanWork() {
     } else if (source.status === 'processando') {
       source.status = 'erro'
       source.error = 'Não foi possível concluir. Tente novamente.'
-      source.liveStopRequested = true
+      if (source.mode === 'live') source.liveStopRequested = true
+      if (source.uploading) source.uploading = false
     }
     if (source.hasMedia && !source.mediaKey
       && !mediaFileExists(`media/src/${source.id}.mp4`)

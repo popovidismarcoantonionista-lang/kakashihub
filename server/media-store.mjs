@@ -1,4 +1,4 @@
-import { del, get, put } from '@vercel/blob'
+import { del, get, head, put } from '@vercel/blob'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -95,6 +95,16 @@ export async function getPrivateBlob(pathname, requestHeaders = {}) {
     headers: range ? { Range: String(range) } : undefined,
   })
   return result
+}
+
+export async function blobMediaExists(pathname) {
+  const safePath = cleanPathname(pathname)
+  if (!safePath || !USE_BLOB) return false
+  try {
+    return Boolean(await head(safePath, { access: BLOB_ACCESS }))
+  } catch {
+    return false
+  }
 }
 
 export async function deleteBlobMedia(pathnames) {

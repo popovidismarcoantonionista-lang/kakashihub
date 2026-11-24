@@ -18,7 +18,7 @@ import {
   save,
   storeMiddleware,
 } from './store.mjs'
-import { blobStorageEnabled, deleteBlobMedia, getPrivateBlob, storeLocalFile } from './media-store.mjs'
+import { blobMediaExists, blobStorageEnabled, deleteBlobMedia, getPrivateBlob, storeLocalFile } from './media-store.mjs'
 import {
   OUTPUT_SIZES, clipFrame, detectCamBoxForClip, detectCamBoxForLive, fetchChannelVideos,
   getLiveHlsUrl, isLiveRunning, liveCapabilities, liveCaptureConfig, liveErrorText, liveFrame,
@@ -341,6 +341,33 @@ app.post('/api/sources', async (req, res) => {
   res.status(202).json({ sources: created })
 })
 
+// O Blob fica fora do Vercel, então o callback automático de upload não é
+// configurado. O navegador avisa que o arquivo chegou; estas funções são
+// idempotentes para não iniciar dois jobs se o callback também acontecer.
+function finishSourceUpload(source, mediaKey) {
+  if (source.uploaded) return false
+  source.mediaKey = mediaKey
+  source.uploaded = true
+  source.uploading = false
+  source.hasMedia = true
+  source.status = 'processando'
+  source.progress = 4
+  source.error = null
+  save()
+  return true
+}
+
+async function startSourceIngest(source) {
+  if (source.workflowRunId) return
+  const { runId } = await startProcessJob('ingest', {
+    sourceId: source.id,
+    url: '',
+    options: { metaHint: { title: source.title, uploader: 'Upload local', description: '' } },
+  }, { sourceId: source.id })
+  source.workflowRunId = runId
+  save()
+}
+
 app.post('/api/sources/upload', (req, res) => {
   const name = path.basename(String(req.body?.name || '')).slice(0, 160)
   const type = String(req.body?.type || '').trim().toLowerCase()
@@ -404,25 +431,26 @@ app.post('/api/sources/upload-token', async (req, res) => {
         if (!source?.uploading || blob.pathname !== `media/src/${source.id}.mp4`) {
           throw new Error('O arquivo enviado não corresponde à fonte ativa.')
         }
-        source.mediaKey = blob.pathname
-        source.uploaded = true
-        source.uploading = false
-        source.hasMedia = true
-        source.status = 'processando'
-        source.progress = 4
-        save()
-        const { runId } = await startProcessJob('ingest', {
-          sourceId: source.id,
-          url: '',
-          options: { metaHint: { title: source.title, uploader: 'Upload local', description: '' } },
-        }, { sourceId: source.id })
-        source.workflowRunId = runId
-        save()
+        if (finishSourceUpload(source, blob.pathname)) await startSourceIngest(source)
       },
     })
     ok(res, result)
   } catch (error) {
     console.error('[blob:upload]', String(error?.message || error).slice(0, 300))
+    fail(res, 400, error?.message || 'Não foi possível concluir o upload.')
+  }
+})
+
+app.post('/api/sources/upload-complete', async (req, res) => {
+  try {
+    const source = findSource(String(req.body?.sourceId || ''))
+    if (!source || !source.uploading) return fail(res, 400, 'Este upload não está mais ativo.')
+    const mediaKey = `media/src/${source.id}.mp4`
+    if (!(await blobMediaExists(mediaKey))) return fail(res, 400, 'O arquivo ainda não chegou. Tente reenviar.')
+    if (finishSourceUpload(source, mediaKey)) await startSourceIngest(source)
+    ok(res, { ok: true })
+  } catch (error) {
+    console.error('[blob:complete]', String(error?.message || error).slice(0, 300))
     fail(res, 400, error?.message || 'Não foi possível concluir o upload.')
   }
 })
