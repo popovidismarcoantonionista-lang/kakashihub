@@ -8,6 +8,11 @@ export const connectionInfo = {
   configured: false,
   schemeOk: false,
   normalized: false,
+  urlOk: false,
+  urlError: '',
+  hostOk: false,
+  portOk: false,
+  controlChars: [],
 }
 
 // Senhas do Supabase podem conter #, /, @, %, colchetes etc. Aceitar a URL
@@ -26,7 +31,7 @@ export function normalizeConnectionString(raw) {
   const at = body.lastIndexOf('@')
   if (at < 0) return value
   const credentials = body.slice(0, at)
-  const host = body.slice(at + 1)
+  const host = body.slice(at + 1).replace(/[\s\x00-\x1F\x7F]/g, '')
   const colon = credentials.indexOf(':')
   if (colon < 0) return value
   const user = credentials.slice(0, colon)
@@ -39,6 +44,22 @@ export function normalizeConnectionString(raw) {
 }
 
 const connectionString = normalizeConnectionString(process.env.DATABASE_URL || process.env.POSTGRES_URL)
+
+// Diagnóstico sem expor a senha: só códigos de caracteres suspeitos e validade
+// estrutural da URL que o driver vai receber.
+connectionInfo.controlChars = [...new Set(
+  Array.from(connectionString || '')
+    .filter((c) => /[\x00-\x1F\x7F]/.test(c))
+    .map((c) => c.charCodeAt(0)),
+)]
+try {
+  const parsed = new URL(connectionString)
+  connectionInfo.urlOk = true
+  connectionInfo.hostOk = /^[a-z0-9.-]+$/i.test(parsed.hostname)
+  connectionInfo.portOk = !parsed.port || /^\d+$/.test(parsed.port)
+} catch (error) {
+  connectionInfo.urlError = String(error?.message || error).slice(0, 120)
+}
 
 export const pool = new Pool({
   ...(connectionString ? { connectionString } : {}),
