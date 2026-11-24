@@ -2,7 +2,7 @@ export type ClipType =
   | 'fuga' | 'enquadro' | 'perseguicao' | 'abordagem'
   | 'jogada' | 'clutch' | 'reacao' | 'treta'
   | 'momento'
-export type Niche = 'fuga' | 'games' | 'geral'
+export type Niche = 'fuga' | 'games' | 'geral' | 'gta'
 export type Page = 'cortes' | 'videos' | 'estudio' | 'uploads' | 'ia'
 
 export interface CamBox {
@@ -189,5 +189,6 @@ export const CLIP_TYPES: { key: ClipType; label: string; niche: Niche | 'both' }
 export const NICHE_OPTIONS: { key: Niche; label: string; hint: string }[] = [
   { key: 'fuga', label: 'Perseguições', hint: 'fuga, enquadro e abordagem' },
   { key: 'games', label: 'Games', hint: 'jogadas, clutch e reações de live' },
+  { key: 'gta', label: 'GTA 6', hint: 'streamer em cima, jogo embaixo, legenda na divisa' },
   { key: 'geral', label: 'Geral', hint: 'melhores momentos de qualquer vídeo' },
 ]

@@ -377,7 +377,11 @@ export function IAPage() {
 
             <div className="style-note">
               <Sparkles size={13} />
-              <span>As mudanças valem para os próximos cortes analisados.</span>
+              <span>
+                {settings.niche === 'gta'
+                  ? 'Modo GTA: streamer em cima, jogo embaixo, legenda amarela na divisa e logo no topo.'
+                  : 'As mudanças valem para os próximos cortes analisados.'}
+              </span>
             </div>
           </div>
 

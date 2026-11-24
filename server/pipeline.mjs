@@ -131,6 +131,29 @@ const NICHES = {
       momento: ['O momento que o chat explodiu', 'Isso não estava no script', 'Ao vivo, sem corte'],
     },
   },
+  gta: {
+    typeWords: {
+      jogada: ['mapa', 'cidade', 'mundo', ' Vice City', 'estado', 'ilha', 'rua', 'open world'],
+      clutch: ['212 gb', 'pre download', 'pré-download', 'armazenamento', 'console', 'ps5', 'xbox', 'espaço'],
+      reacao: ['lançamento', 'data', 'meia-noite', 'trailer', 'rockstar', '2026', 'anúncio', 'revelação'],
+      treta: ['polícia', 'policia', 'carro', 'lembra', 'cadeia', 'prisão', 'milícia', 'procurado'],
+      momento: ['gta', 'gta 6', 'grand theft auto', 'jogo', 'gameplay', 'personagem', ' protagonista'],
+    },
+    hashtags: {
+      jogada: ['#gta6', '#gta', '#mapa', '#rockstar'],
+      clutch: ['#gta6', '#predownload', '#console', '#gamer'],
+      reacao: ['#gta6', '#lançamento', '#trailer', '#rockstar'],
+      treta: ['#gta6', '#policia', '#gameplay', '#gamer'],
+      momento: ['#gta6', '#gta', '#gameplay', '#shorts'],
+    },
+    hooks: {
+      jogada: ['O detalhe do mapa que ninguém viu', 'Essa cidade é maior do que parece', 'O mundo do GTA 6 começou aqui'],
+      clutch: ['Seu console vai precisar de 212 GB livres', 'O pré-download já está dando o que falar', 'Esse é o tamanho real do GTA 6'],
+      reacao: ['A data de lançamento pode ter mudado', 'O trailer escondeu esse detalhe', 'A Rockstar confirmou sem avisar'],
+      treta: ['A polícia agora lembra do seu carro', 'Esse sistema muda a perseguição', 'Ser procurado ficou diferente'],
+      momento: ['O momento do GTA 6 que explodiu a internet', 'Isso estava escondido no trailer', 'Você não viu esse detalhe'],
+    },
+  },
 }
 
 function nicheConfig(state) {
@@ -1306,11 +1329,11 @@ export async function runIngest(sourceId, url, opts = {}) {
 
     updateJob(job, { progress: 80, step: 'Encontrando os melhores momentos' })
     const settings = state.settings
-    const niche = settings?.niche === 'games' ? 'games' : 'fuga'
+    const niche = NICHES[settings?.niche] ? settings.niche : 'fuga'
     const cfg = nicheConfig(state)
     let windows = cues.length > 4 ? detectFromCues(cues, settings.clipMin, settings.clipMax, cfg) : []
     if (!windows.length) windows = await detectFromAudio(videoPath, job)
-    if (niche === 'games' && windows.length < 3 && source.duration > 120) {
+    if ((niche === 'games' || niche === 'gta') && windows.length < 3 && source.duration > 120) {
       updateJob(job, { step: 'Sem transcrição. Marcando blocos para revisão' })
       windows = spreadWindows(source.duration, settings.clipMin, settings.clipMax)
     }
@@ -1441,7 +1464,7 @@ function splitCaptionWords(text) {
   return String(text || '').replace(/\s+/g, ' ').trim().split(/\s+/).filter(Boolean)
 }
 
-function buildCaptionChunks(clip, duration) {
+function buildCaptionChunks(clip, duration, gta = false) {
   const lines = Array.isArray(clip?.captionLines) ? clip.captionLines : []
   const raw = lines
     .map((line) => ({ t: Number(line?.t), text: String(line?.text || '').replace(/\s+/g, ' ').trim() }))
@@ -1477,7 +1500,7 @@ function buildCaptionChunks(clip, duration) {
   for (const cue of cues) {
     const words = splitCaptionWords(cue.text)
     if (!words.length) continue
-    const maxWords = 4
+    const maxWords = gta ? 3 : 4
     const total = Math.max(0.6, cue.end - cue.start)
     const parts = []
     for (let i = 0; i < words.length; i += maxWords) parts.push(words.slice(i, i + maxWords))
@@ -1491,11 +1514,14 @@ function buildCaptionChunks(clip, duration) {
   return chunks.filter((c) => c.words.length && c.end > c.start).slice(0, 160)
 }
 
-function buildCaptionAss(clip, duration, outW, outH) {
-  const chunks = buildCaptionChunks(clip, duration)
+function buildCaptionAss(clip, duration, outW, outH, gta = false) {
+  const chunks = buildCaptionChunks(clip, duration, gta)
   if (!chunks.length) return null
-  const fontSize = Math.max(42, Math.round(outH * 0.055))
-  const marginV = Math.max(70, Math.round(outH * 0.14))
+  const fontSize = Math.max(42, Math.round(outH * (gta ? 0.062 : 0.055)))
+  // No estilo GTA a legenda fica em cima da divisão entre streamer e jogo.
+  const marginV = gta
+    ? Math.max(70, Math.round(outH * 0.5 - fontSize * 0.5))
+    : Math.max(70, Math.round(outH * 0.14))
   const outline = Math.max(3, Math.round(fontSize * 0.12))
   const shadow = Math.max(1, Math.round(outline * 0.5))
   const playResX = outW
@@ -1558,9 +1584,10 @@ export async function runRender(clipId, opts = {}) {
     updateJob(job, { progress: 8, step: 'Preparando o corte' })
     const out = path.join(EXPORTS, `${clip.id}.mp4`)
     const size = renderSize()
+    const gta = clip.niche === 'gta' || getState().settings?.niche === 'gta'
     updateJob(job, { progress: 22, step: 'Calculando o enquadramento' })
     let cam = clip.cam || source?.cam || null
-    const wantsSplit = clip.framing === 'cam' || clip.framing === 'auto' || !clip.framing
+    const wantsSplit = gta || clip.framing === 'cam' || clip.framing === 'auto' || !clip.framing
     if (!cam && wantsSplit) {
       updateJob(job, { progress: 26, step: 'Localizando a webcam' })
       const spanSec = Math.max(1, clip.end - clip.start)
@@ -1571,6 +1598,7 @@ export async function runRender(clipId, opts = {}) {
     }
     const split = wantsSplit && cam && cam.w >= 0.05 && cam.h >= 0.05
     if (split && clip.framing !== 'cam') clip.framing = 'cam'
+    if (gta) clip.framing = 'cam'
     let frac = 0.5
     if (!split) {
       if (clip.framing === 'auto') {
@@ -1609,13 +1637,20 @@ export async function runRender(clipId, opts = {}) {
     } else {
       vf = `scale=-2:${outH}:flags=lanczos,crop=${outW}:${outH}:(iw-${outW})/2:0,setsar=1`
     }
-    updateJob(job, { progress: 34, step: split ? `Split · ${sizeLabel(size)}` : `9:16 · ${sizeLabel(size)}` })
+    updateJob(job, {
+      progress: 34,
+      step: gta ? `Split GTA · ${sizeLabel(size)}` : split ? `Split · ${sizeLabel(size)}` : `9:16 · ${sizeLabel(size)}`,
+    })
     const duration = Math.max(1, Number(clip.end) - Number(clip.start) || 0)
-    const ass = buildCaptionAss(clip, duration, outW, outH)
+    const ass = buildCaptionAss(clip, duration, outW, outH, gta)
     const assFile = ass ? path.join(EXPORTS, `${clip.id}.captions.ass`) : null
     if (assFile) fs.writeFileSync(assFile, ass, 'utf8')
 
-    const projectLogo = getState().project?.logo
+    const savedLogo = getState().project?.logo
+    // No modo GTA, se a logo ainda está na posição padrão, vai para o topo à direita.
+    const projectLogo = gta && savedLogo?.url && savedLogo.x === 0.5 && savedLogo.y === 0.88
+      ? { ...savedLogo, x: 0.86, y: 0.08 }
+      : savedLogo
     let logoFile = null
     if (projectLogo?.url) {
       try {

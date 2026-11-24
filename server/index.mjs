@@ -177,6 +177,7 @@ app.get('/api/state', (req, res) => {
 const NICHE_LABELS = {
   fuga: 'Fuga · Enquadro · Perseguição',
   games: 'Games',
+  gta: 'GTA 6 · Streamer + jogo',
   geral: 'Geral · Melhores momentos',
 }
 
