@@ -16,6 +16,9 @@ const TIMEOUT = Number(process.env.SERVICE_TIMEOUT_MS || 120000)
 
 export const COBALT_URL = urlOf(process.env.COBALT_API_URL || process.env.FUGA_COBALT_URL)
 export const COBALT_KEY = keyOf(process.env.COBALT_API_KEY || process.env.FUGA_COBALT_KEY)
+// Fallback para o IP do Netlify quando a instância Cobalt exige JWT do Render.
+export const COBALT_RELAY_URL = urlOf(process.env.COBALT_RELAY_URL || 'https://kakashiclipes.netlify.app/api/cobalt/relay')
+const COBALT_RELAY_KEY = keyOf(process.env.COBALT_RELAY_KEY || 'kakashi-relay-2026')
 export const YDL_API_URL = urlOf(process.env.YTDLP_API_URL || process.env.FUGA_YTDLP_API_URL)
 export const YDL_API_KEY = keyOf(process.env.YTDLP_API_KEY || process.env.FUGA_YTDLP_API_KEY)
 // Espelhos de leitura públicos (Invidious). Usados como gambiarra quando o
@@ -122,57 +125,82 @@ export async function cobaltResolve(url, opts = {}) {
     alwaysProxy: true,
     disableMetadata: true,
   })
-  const post = (scheme) => fetch(COBALT_URL, {
-    method: 'POST',
-    headers: cobaltHeaders(scheme),
-    body,
-    signal: AbortSignal.timeout(TIMEOUT),
-  })
-  let res = await post('Api-Key')
-  let json = await bodyOrNull(res)
-  const authError = (value) => /api\.auth\.jwt\.missing/i.test(String(value?.error?.code || ''))
-  // Algumas instâncias exigem Bearer (JWT) em IPs de datacenter. A chave do
-  // Render pode ser esse JWT; tentar os dois esquemas evita "jwt.missing".
-  if (authError(json) && COBALT_KEY) {
-    res = await post('Bearer')
-    json = await bodyOrNull(res)
-  }
-
-  if (json?.status === 'error') {
-    const code = String(json.error?.code || 'unknown')
-    if (/bot|sign.?in|captcha|login|age|auth/i.test(code)) throw new Error(`cobalt-blocked-${code}`.slice(0, 180))
-    throw new Error(`cobalt-error-${code}`.slice(0, 180))
-  }
-  if (!res.ok || !json) throw statusError(res, json, 'cobalt')
-
-  if (json.status === 'tunnel' || json.status === 'redirect') {
-    if (typeof json.url !== 'string' || !json.url) throw new Error('cobalt-no-url')
-    return { kind: json.isHLS ? 'hls' : 'single', url: json.url, filename: json.filename || null }
-  }
-
-  if (json.status === 'local-processing') {
-    const tunnels = Array.isArray(json.tunnel)
-      ? json.tunnel.filter((u) => typeof u === 'string' && /^https?:\/\//i.test(u))
-      : []
-    if (!tunnels.length) throw new Error('cobalt-no-tunnel')
-    const type = String(json.type || '').toLowerCase()
-    if (json.isHLS) return { kind: 'hls', url: tunnels[0], filename: json.output?.filename || null }
-    // No Cobalt, para YouTube, tunnel[0] é o vídeo e tunnel[1] é o áudio.
-    if (type === 'merge' && tunnels.length >= 2) {
-      return { kind: 'merge', video: tunnels[0], audio: tunnels[1], filename: json.output?.filename || null }
+  const authError = (json) => /api\.auth\.jwt\.missing/i.test(String(json?.error?.code || ''))
+  const parse = (res, json) => {
+    if (json?.status === 'error') {
+      const code = String(json.error?.code || 'unknown')
+      if (/bot|sign.?in|captcha|login|age|auth/i.test(code)) throw new Error(`cobalt-blocked-${code}`.slice(0, 180))
+      throw new Error(`cobalt-error-${code}`.slice(0, 180))
     }
-    if (type === 'audio') throw new Error('cobalt-audio-only')
-    return { kind: 'single', url: tunnels[0], filename: json.output?.filename || null }
+    if (!res.ok || !json) throw statusError(res, json, 'cobalt')
+
+    if (json.status === 'tunnel' || json.status === 'redirect') {
+      if (typeof json.url !== 'string' || !json.url) throw new Error('cobalt-no-url')
+      return { kind: json.isHLS ? 'hls' : 'single', url: json.url, filename: json.filename || null }
+    }
+    if (json.status === 'local-processing') {
+      const tunnels = Array.isArray(json.tunnel)
+        ? json.tunnel.filter((u) => typeof u === 'string' && /^https?:\/\//i.test(u))
+        : []
+      if (!tunnels.length) throw new Error('cobalt-no-tunnel')
+      const type = String(json.type || '').toLowerCase()
+      if (json.isHLS) return { kind: 'hls', url: tunnels[0], filename: json.output?.filename || null }
+      // No Cobalt, para YouTube, tunnel[0] é o vídeo e tunnel[1] é o áudio.
+      if (type === 'merge' && tunnels.length >= 2) {
+        return { kind: 'merge', video: tunnels[0], audio: tunnels[1], filename: json.output?.filename || null }
+      }
+      if (type === 'audio') throw new Error('cobalt-audio-only')
+      return { kind: 'single', url: tunnels[0], filename: json.output?.filename || null }
+    }
+    if (json.status === 'picker') {
+      const items = Array.isArray(json.picker) ? json.picker : []
+      const video = items.find((p) => p?.type === 'video' && typeof p.url === 'string')
+      if (!video) throw new Error('cobalt-no-video')
+      return { kind: 'single', url: video.url, filename: null }
+    }
+    throw new Error(`cobalt-status-${String(json.status || 'unknown').slice(0, 40)}`)
   }
 
-  if (json.status === 'picker') {
-    const items = Array.isArray(json.picker) ? json.picker : []
-    const video = items.find((p) => p?.type === 'video' && typeof p.url === 'string')
-    if (!video) throw new Error('cobalt-no-video')
-    return { kind: 'single', url: video.url, filename: null }
+  const endpoints = [{ url: COBALT_URL, headers: () => cobaltHeaders('Api-Key') }]
+  // Algumas instâncias exigem Bearer (JWT) em IPs de datacenter; a chave do
+  // Render pode ser esse JWT.
+  if (COBALT_KEY) endpoints.push({ url: COBALT_URL, headers: () => cobaltHeaders('Bearer') })
+  if (COBALT_RELAY_URL && COBALT_RELAY_URL !== COBALT_URL) {
+    endpoints.push({
+      url: COBALT_RELAY_URL,
+      headers: () => ({
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Relay-Key': COBALT_RELAY_KEY,
+      }),
+    })
   }
 
-  throw new Error(`cobalt-status-${String(json.status || 'unknown').slice(0, 40)}`)
+  let lastError = new Error('cobalt-unreachable')
+  for (const endpoint of endpoints) {
+    let res
+    let json
+    try {
+      res = await fetch(endpoint.url, {
+        method: 'POST',
+        headers: endpoint.headers(),
+        body,
+        signal: AbortSignal.timeout(TIMEOUT),
+      })
+      json = await bodyOrNull(res)
+    } catch (err) {
+      lastError = err
+      continue
+    }
+    // Só troca de endpoint em caso de autenticação ou falha de rede; erros
+    // reais da instância (vídeo indisponível etc.) devem chegar ao chamador.
+    if (authError(json) || res.status === 401) {
+      lastError = new Error(`cobalt-blocked-${String(json?.error?.code || res.status).slice(0, 120)}`)
+      continue
+    }
+    return parse(res, json)
+  }
+  throw lastError
 }
 
 /** Metadata de um vídeo via yt-dlp-api (fvadicamo). */
