@@ -66,7 +66,11 @@ app.use((req, res, next) => {
   return res.status(403).json({ error: 'Acesso direto bloqueado.' })
 })
 
-app.use('/api', storeMiddleware)
+app.use('/api', (req, res, next) => {
+  // Health precisa responder mesmo se o Postgres estiver indisponível.
+  if (req.path === '/health') return next()
+  return storeMiddleware(req, res, next)
+})
 
 const UPLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024
 const UPLOAD_EXTS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi'])

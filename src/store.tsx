@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { State } from './types'
 
@@ -18,18 +18,50 @@ interface Ctx {
 
 const AppCtx = createContext<Ctx>(null as unknown as Ctx)
 
+function isUsableState(data: unknown): data is State {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false
+  const candidate = data as Partial<State>
+  return Boolean(candidate.project && typeof candidate.project === 'object'
+    && candidate.settings && typeof candidate.settings === 'object'
+    && Array.isArray(candidate.sources)
+    && Array.isArray(candidate.clips)
+    && Array.isArray(candidate.uploads)
+    && Array.isArray(candidate.activity)
+    && Array.isArray(candidate.compilations)
+    && Array.isArray(candidate.jobs))
+}
+
+const hasContent = (value: State | null) => Boolean(
+  value && (value.sources?.length || value.clips?.length || value.uploads?.length || value.compilations?.length),
+)
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [ingestOpen, setIngestOpen] = useState(false)
   const [ingestTab, setIngestTab] = useState<IngestTab>('upload')
+  const emptyStreak = useRef(0)
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch('/api/state')
+      const res = await fetch('/api/state', { cache: 'no-store' })
       if (!res.ok) throw new Error('offline')
       const data = await res.json()
+      if (!isUsableState(data)) throw new Error('estado-invalido')
+
+      // Um wipe completo e isolado (ex.: fallback de DB após restart) não deve
+      // apagar a tela. Só aceitamos depois de algumas leituras consistentes.
+      if (hasContent(state) && !hasContent(data)) {
+        emptyStreak.current += 1
+        if (emptyStreak.current < 3) {
+          setError('O acervo está temporariamente indisponível. Tentando novamente…')
+          return
+        }
+      } else {
+        emptyStreak.current = 0
+      }
+
       setState(data)
       setError(null)
     } catch {
@@ -37,7 +69,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [state])
 
   useEffect(() => {
     refresh()

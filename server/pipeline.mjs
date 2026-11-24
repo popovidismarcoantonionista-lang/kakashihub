@@ -31,6 +31,12 @@ const FFPROBE_LOCAL_BIN = path.join(APP_ROOT, '.bin', 'ffprobe')
 const FFMPEG_BIN = process.env.FFMPEG_BIN || (fs.existsSync(FFMPEG_LOCAL_BIN) ? FFMPEG_LOCAL_BIN : 'ffmpeg')
 const FFPROBE_BIN = process.env.FFPROBE_BIN || (fs.existsSync(FFPROBE_LOCAL_BIN) ? FFPROBE_LOCAL_BIN : 'ffprobe')
 const YTDLP_BIN = process.env.YTDLP_BIN || path.join(APP_ROOT, '.bin', 'yt-dlp')
+// Render free tem ~512 MB de RAM. Renderizar 4K vertical com split + blur +
+// legendas estoura o processo e derruba o estado. Por padrão, limitamos a 720p
+// quando estamos no Render; use FUGA_LIGHT_RENDER=false para forçar o perfil cheio.
+const LIGHT_RENDER = process.env.FUGA_LIGHT_RENDER
+  ? !/^(0|false|no)$/i.test(String(process.env.FUGA_LIGHT_RENDER).trim())
+  : Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID)
 
 // Arquivos recebidos por ZIP podem perder o bit de execução. Corrija isso
 // antes do primeiro spawn para evitar que toda live falhe ainda na sondagem.
@@ -59,7 +65,8 @@ export const OUTPUT_SIZES = {
 
 function renderSize() {
   const key = String(getState().settings?.resolution || '4k')
-  return OUTPUT_SIZES[key] || OUTPUT_SIZES['4k']
+  const requested = OUTPUT_SIZES[key] || OUTPUT_SIZES['4k']
+  return LIGHT_RENDER ? { width: 720, height: 1280 } : requested
 }
 
 function sizeLabel(size) {
@@ -75,7 +82,8 @@ function downloadFormat(maxHeight) {
 
 function sourceMaxHeight() {
   const key = String(getState().settings?.resolution || '4k')
-  return key === '4k' ? 2160 : key === '1080p' ? 1080 : 720
+  const requested = key === '4k' ? 2160 : key === '1080p' ? 1080 : 720
+  return LIGHT_RENDER ? Math.min(requested, 720) : requested
 }
 
 const NICHES = {
@@ -1654,12 +1662,17 @@ export async function runRender(clipId, opts = {}) {
       const outArgs = ['-filter_complex', fc, '-map', `[${outLabel}]`, '-map', `${videoInputIdx}:a?`]
       const ffmpegArgs = (args, withLogo = Boolean(logoFile)) => [
         '-y', '-hide_banner', '-loglevel', 'error',
+        ...(LIGHT_RENDER ? ['-threads', '1', '-filter_threads', '1'] : []),
         '-ss', String(from), '-t', String(duration), '-i', src,
         ...(withLogo ? logoInputArgs : []),
         ...args,
-        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '160k', '-ar', '48000',
+        '-c:v', 'libx264',
+        '-preset', LIGHT_RENDER ? 'ultrafast' : 'veryfast',
+        '-crf', LIGHT_RENDER ? '26' : '20',
+        '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', LIGHT_RENDER ? '96k' : '160k', '-ar', '48000',
         '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
+        '-max_muxing_queue_size', '256',
         '-movflags', '+faststart', '-shortest',
         path.basename(out),
       ]

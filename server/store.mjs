@@ -182,71 +182,69 @@ function jobToRow(job) {
   }
 }
 
-async function loadContext() {
-  if (databaseUnavailable) {
-    return {
-      state: legacyState(),
-      baseState: legacyState(),
-      revision: 0,
-      stateDirty: false,
-      jobs: readJson(JOBS_FILE, []).slice(-40),
-      dirtyJobIds: new Set(),
-      clearJobs: false,
-      local: true,
-      pendingStateWrites: Promise.resolve(),
-      pendingJobWrites: Promise.resolve(),
-    }
-  }
-
-  try {
-  const inserted = await db.insert(fugaState)
-    .values({ id: 'primary', revision: 1, data: legacyState() })
-    .onConflictDoNothing()
-    .returning({ id: fugaState.id })
-
-  if (inserted.length) {
-    const legacyJobs = readJson(JOBS_FILE, [])
-    if (Array.isArray(legacyJobs) && legacyJobs.length) {
-      for (const job of legacyJobs.slice(-40)) {
-        if (job?.id && job.kind && job.status) {
-          await db.insert(fugaJobs).values(jobToRow(job)).onConflictDoNothing()
-        }
-      }
-    }
-  }
-
-  const [row] = await db.select().from(fugaState).where(eq(fugaState.id, 'primary')).limit(1)
-  if (!row) throw new Error('O registro de estado do Kakashi Hub não pôde ser inicializado.')
-  const rows = await db.select().from(fugaJobs).orderBy(desc(fugaJobs.startedAt)).limit(40)
-  const rawState = clone(row.data)
-  const state = normalizeState(clone(row.data))
+function localContext() {
   return {
-    state,
-    baseState: rawState,
-    revision: row.revision,
-    stateDirty: !isDeepStrictEqual(rawState, state),
-    jobs: rows.reverse().map(jobFromRow),
+    state: legacyState(),
+    baseState: legacyState(),
+    revision: 0,
+    stateDirty: false,
+    jobs: readJson(JOBS_FILE, []).slice(-40),
     dirtyJobIds: new Set(),
     clearJobs: false,
+    local: true,
     pendingStateWrites: Promise.resolve(),
     pendingJobWrites: Promise.resolve(),
   }
-  } catch (error) {
-    databaseUnavailable = true
-    console.warn('[store] PostgreSQL indisponível; usando JSON local:', error?.message || error)
-    return {
-      state: legacyState(),
-      baseState: legacyState(),
-      revision: 0,
-      stateDirty: false,
-      jobs: readJson(JOBS_FILE, []).slice(-40),
-      dirtyJobIds: new Set(),
-      clearJobs: false,
-      local: true,
-      pendingStateWrites: Promise.resolve(),
-      pendingJobWrites: Promise.resolve(),
+}
+
+async function loadContext() {
+  // Sem banco configurado (dev local) o JSON é a fonte de verdade. Quando há
+  // DATABASE_URL, uma falha transitória NÃO pode virar estado local vazio:
+  // isso sobrescreveria o acervo salvo no Postgres depois de um restart.
+  if (databaseUnavailable) return localContext()
+
+  let lastError = null
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const inserted = await db.insert(fugaState)
+        .values({ id: 'primary', revision: 1, data: legacyState() })
+        .onConflictDoNothing()
+        .returning({ id: fugaState.id })
+
+      if (inserted.length) {
+        const legacyJobs = readJson(JOBS_FILE, [])
+        if (Array.isArray(legacyJobs) && legacyJobs.length) {
+          for (const job of legacyJobs.slice(-40)) {
+            if (job?.id && job.kind && job.status) {
+              await db.insert(fugaJobs).values(jobToRow(job)).onConflictDoNothing()
+            }
+          }
+        }
+      }
+
+      const [row] = await db.select().from(fugaState).where(eq(fugaState.id, 'primary')).limit(1)
+      if (!row) throw new Error('O registro de estado do Kakashi Hub não pôde ser inicializado.')
+      const rows = await db.select().from(fugaJobs).orderBy(desc(fugaJobs.startedAt)).limit(40)
+      const rawState = clone(row.data)
+      const state = normalizeState(clone(row.data))
+      return {
+        state,
+        baseState: rawState,
+        revision: row.revision,
+        stateDirty: !isDeepStrictEqual(rawState, state),
+        jobs: rows.reverse().map(jobFromRow),
+        dirtyJobIds: new Set(),
+        clearJobs: false,
+        pendingStateWrites: Promise.resolve(),
+        pendingJobWrites: Promise.resolve(),
+      }
+    } catch (error) {
+      lastError = error
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)))
     }
   }
+  console.error('[store] PostgreSQL indisponível:', lastError?.message || lastError)
+  throw new Error('Banco de dados indisponível. Tente novamente em instantes.')
 }
 
 async function persistState(context) {
@@ -311,8 +309,12 @@ async function persistJobRow(job) {
 }
 
 function queueStateWrite(context) {
-  context.pendingStateWrites = context.pendingStateWrites.then(() => persistState(context))
-  context.pendingStateWrites.catch((error) => console.error('[store] falha ao persistir estado:', error?.message || error))
+  context.pendingStateWrites = context.pendingStateWrites
+    .then(() => persistState(context))
+    .catch((error) => {
+      context.writeError = context.writeError || error
+      console.error('[store] falha ao persistir estado:', error?.message || error)
+    })
 }
 
 function queueJobWrite(context, job) {
@@ -321,13 +323,20 @@ function queueJobWrite(context, job) {
   context.pendingJobWrites = context.pendingJobWrites.then(async () => {
     await persistJobRow(snapshot)
     context.dirtyJobIds.delete(job.id)
+  }).catch((error) => {
+    context.writeError = context.writeError || error
+    console.error('[store] falha ao persistir job:', error?.message || error)
   })
-  context.pendingJobWrites.catch((error) => console.error('[store] falha ao persistir job:', error?.message || error))
 }
 
 async function persistContext(context) {
   await context.pendingStateWrites
   await context.pendingJobWrites
+  if (context.writeError) {
+    const error = context.writeError
+    context.writeError = null
+    throw error
+  }
   if (context.clearJobs) {
     if (context.local) {
       writeJson(JOBS_FILE, [])
