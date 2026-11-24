@@ -415,6 +415,7 @@ type WakeLockNavigator = Navigator & {
 
 export class LiveCaptureSession {
   private timer: ReturnType<typeof setInterval> | null = null
+  private worker: Worker | null = null
   private busy = false
   private stopped = true
   private wakeLock: WakeLockSentinelLike | null = null
@@ -432,13 +433,23 @@ export class LiveCaptureSession {
     void this.requestWakeLock()
     document.addEventListener('visibilitychange', this.onVisibility)
     void this.tick()
-    this.timer = setInterval(() => { void this.tick() }, interval)
+    try {
+      const src = `setInterval(() => postMessage('tick'), ${interval});`
+      this.worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })))
+      this.worker.onmessage = () => { void this.tick() }
+    } catch {
+      this.timer = setInterval(() => { void this.tick() }, interval)
+    }
   }
 
   stop() {
     this.stopped = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    if (this.worker) {
+      try { this.worker.terminate() } catch {}
+      this.worker = null
+    }
     document.removeEventListener('visibilitychange', this.onVisibility)
     void this.releaseWakeLock()
   }
