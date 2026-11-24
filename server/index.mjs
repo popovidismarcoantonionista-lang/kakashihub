@@ -1115,8 +1115,10 @@ app.get('/api/jobs', (req, res) => ok(res, { jobs: getJobs() }))
 
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err)
-  console.error(err)
-  fail(res, 500, 'Algo deu errado. Tente novamente.')
+  console.error('[api:error]', req.method, req.originalUrl, err?.stack || err?.message || err)
+  fail(res, 500, 'Algo deu errado. Tente novamente.', {
+    detail: String(err?.message || err).slice(0, 300),
+  })
 })
 
 export default app
