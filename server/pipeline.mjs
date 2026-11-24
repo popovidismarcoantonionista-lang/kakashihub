@@ -2396,8 +2396,20 @@ function recordWindow(parts, file, seconds, stop) {
     // -t antes de -i limita a leitura do stream infinito do relay; como opção
     // de saída, o ffmpeg pode nunca encerrar quando a entrada não tem fim.
     for (const part of parts) args.push('-t', String(seconds), '-i', part)
-    if (parts.length > 1) args.push('-map', '0:v:0', '-map', '1:a:0?')
-    args.push('-c', 'copy', '-f', 'mpegts', file)
+    if (parts.length > 1) {
+      // Trilhas HLS separadas podem começar com PTS diferentes. Stream-copy
+      // preserva esse deslocamento e o áudio chega adiantado/atrasado; filtre
+      // ambas a partir de zero antes de gerar a janela muxada.
+      args.push(
+        '-filter_complex', '[0:v]setpts=PTS-STARTPTS[v];[1:a]asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0[a]',
+        '-map', '[v]', '-map', '[a]',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '96k', '-ar', '48000', '-ac', '2', '-shortest',
+      )
+    } else {
+      args.push('-c', 'copy')
+    }
+    args.push('-f', 'mpegts', file)
     let child
     try {
       child = spawn(FFMPEG_BIN, args, { windowsHide: true })
@@ -2597,7 +2609,12 @@ export async function queueBrowserLiveWindow(sourceId, video, audio, captions = 
     await run(FFMPEG_BIN, [
       '-hide_banner', '-loglevel', 'error', '-y',
       '-i', vFile, '-i', aFile,
-      '-map', '0:v:0', '-map', '1:a:0?', '-c', 'copy', '-f', 'mpegts', out,
+      // Cada playlist HLS mantém o seu próprio relógio. Reancorar vídeo e
+      // áudio em zero evita que a diferença de PTS vire drift audível.
+      '-filter_complex', '[0:v]setpts=PTS-STARTPTS[v];[1:a]asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0[a]',
+      '-map', '[v]', '-map', '[a]',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '96k', '-ar', '48000', '-ac', '2', '-shortest', '-f', 'mpegts', out,
     ], { timeout: 1000 * 90 })
     const size = fs.existsSync(out) ? fs.statSync(out).size : 0
     if (size < 1024 * 20) throw new Error('janela muxada vazia')

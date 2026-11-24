@@ -133,13 +133,54 @@ function parseMaster(text: string, masterUrl: string, mirror: string): Pick<Play
   return { video, audio }
 }
 
-function parseSegments(text: string, playlistUrl: string, mirror: string, max: number): string[] {
-  return text
-    .split(/\r?\n/)
-    .map((line) => clean(line))
-    .filter((line) => /^https?:\/\//i.test(line))
-    .slice(-max)
-    .map((line) => proxySegment(line, playlistUrl, mirror))
+interface SegmentRef { url: string; duration: number }
+
+function parseSegmentRefs(text: string, playlistUrl: string, mirror: string): SegmentRef[] {
+  let pendingDuration: number | null = null
+  const refs: SegmentRef[] = []
+  for (const raw of text.split(/\r?\n/)) {
+    const line = clean(raw)
+    const duration = line.match(/^#EXTINF:([\d.]+)/i)
+    if (duration) {
+      const value = Number(duration[1])
+      pendingDuration = Number.isFinite(value) ? value : null
+      continue
+    }
+    if (!/^https?:\/\//i.test(line)) continue
+    refs.push({
+      url: proxySegment(line, playlistUrl, mirror),
+      duration: pendingDuration ?? 0,
+    })
+    pendingDuration = null
+  }
+  return refs
+}
+
+/**
+ * Vídeo e áudio HLS não precisam ter a mesma quantidade de segmentos: uma
+ * trilha pode usar segmentos de 2s e a outra de 5s. Selecionamos pelo tempo
+ * acumulado a partir da borda mais recente, mantendo as duas janelas alinhadas.
+ */
+function selectWindowSegments(refs: SegmentRef[], targetSeconds: number, fallbackMax: number): string[] {
+  if (!refs.length) return []
+  const target = Math.max(1, Number(targetSeconds) || 0)
+  let total = 0
+  let start = refs.length
+  while (start > 0 && (total < target || start === refs.length)) {
+    start -= 1
+    total += Math.max(0, refs[start]?.duration || 0)
+    if (total >= target) break
+  }
+  if (start === refs.length) start = Math.max(0, refs.length - fallbackMax)
+  return refs.slice(start).map((ref) => ref.url)
+}
+
+function parseSegments(text: string, playlistUrl: string, mirror: string, max: number, targetSeconds?: number): string[] {
+  const refs = parseSegmentRefs(text, playlistUrl, mirror)
+  if (targetSeconds != null && refs.some((ref) => ref.duration > 0)) {
+    return selectWindowSegments(refs, targetSeconds, max)
+  }
+  return refs.slice(-max).map((ref) => ref.url)
 }
 
 function timeToSec(raw: string): number | null {
@@ -360,8 +401,11 @@ export async function captureLiveWindow(source: Source, api: Api, config: Captur
   } catch (error) {
     throw failure('playlist', error, config)
   }
-  const videoList = parseSegments(videoText, refs.video, config.mirror, config.maxSegments)
-  const audioList = parseSegments(audioText, refs.audio, config.mirror, config.maxSegments)
+  const videoRefs = parseSegmentRefs(videoText, refs.video, config.mirror)
+  const videoWindow = videoRefs.slice(-config.maxSegments)
+  const videoSeconds = videoWindow.reduce((sum, ref) => sum + (ref.duration || 0), 0) || config.windowSeconds
+  const videoList = parseSegments(videoText, refs.video, config.mirror, config.maxSegments, videoSeconds)
+  const audioList = parseSegments(audioText, refs.audio, config.mirror, config.maxSegments, videoSeconds)
   if (!videoList.length || !audioList.length) throw new Error('playlist: sem segmentos')
   let video: Uint8Array<ArrayBuffer>
   let audio: Uint8Array<ArrayBuffer>
