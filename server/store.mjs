@@ -580,6 +580,10 @@ export function closeOrphanWork() {
     if (source.status === 'ao-vivo') {
       source.status = 'pronto'
       source.liveStopRequested = true
+    } else if (source.status === 'processando') {
+      source.status = 'erro'
+      source.error = 'Não foi possível concluir. Tente novamente.'
+      source.liveStopRequested = true
     }
     if (source.hasMedia && !source.mediaKey
       && !mediaFileExists(`media/src/${source.id}.mp4`)
