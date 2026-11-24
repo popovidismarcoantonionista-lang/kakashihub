@@ -1518,7 +1518,6 @@ function buildCaptionAss(clip, duration, outW, outH, gta = false) {
   const chunks = buildCaptionChunks(clip, duration, gta)
   if (!chunks.length) return null
   const fontSize = Math.max(42, Math.round(outH * (gta ? 0.062 : 0.055)))
-  // No estilo GTA a legenda fica em cima da divisão entre streamer e jogo.
   const marginV = gta
     ? Math.max(70, Math.round(outH * 0.5 - fontSize * 0.5))
     : Math.max(70, Math.round(outH * 0.14))

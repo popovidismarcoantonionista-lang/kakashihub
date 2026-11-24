@@ -52,7 +52,7 @@ export function TypeBadge({ type, size = 'sm' }: { type: ClipType; size?: 'sm' |
 }
 
 export function StagePill({ stage }: { stage: string }) {
-  const map: Record<string, string> = { rascunho: 'Rascunho', aprovado: 'Aprovado', renderizado: 'Renderizado' }
+  const map: Record<string, string> = { rascunho: 'Rascunho', aprovado: 'Aprovado', renderizado: 'Finalizado' }
   return <span className={`stage-pill stage-${stage}`}>{map[stage] || stage}</span>
 }
 

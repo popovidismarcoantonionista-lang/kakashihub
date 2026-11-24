@@ -244,7 +244,7 @@ export function IAPage() {
                 <h3 style={{ fontSize: 13 }}>Logo do canal</h3>
                 <ImagePlus size={14} className="muted" />
               </div>
-              <p className="fine" style={{ marginBottom: 10 }}>PNG transparente. Aparece nos cortes renderizados.</p>
+              <p className="fine" style={{ marginBottom: 10 }}>PNG transparente. Aparece nos cortes finais.</p>
 
               <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                 <div style={{ width: 132, aspectRatio: '9 / 16', background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.1)', borderRadius: 10, position: 'relative', overflow: 'hidden', flex: '0 0 auto' }}>
@@ -377,11 +377,7 @@ export function IAPage() {
 
             <div className="style-note">
               <Sparkles size={13} />
-              <span>
-                {settings.niche === 'gta'
-                  ? 'Modo GTA: streamer em cima, jogo embaixo, legenda amarela na divisa e logo no topo.'
-                  : 'As mudanças valem para os próximos cortes analisados.'}
-              </span>
+              <span>As mudanças valem para os próximos cortes analisados.</span>
             </div>
           </div>
 

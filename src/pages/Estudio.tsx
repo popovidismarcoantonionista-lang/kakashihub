@@ -402,7 +402,7 @@ export function EstudioPage() {
               ) : (
                 <>
                   <button className="btn btn-ghost w-full" disabled>
-                    <Play size={14} /> Renderizar corte
+                    <Play size={14} /> Gerar corte
                   </button>
                   <span className="fine center">A fonte deste corte não está mais disponível. Conecte o link de novo.</span>
                   <button className="link-btn center" onClick={() => navigate('videos')}>Conectar fonte</button>

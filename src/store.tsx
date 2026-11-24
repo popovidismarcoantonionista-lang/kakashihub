@@ -35,6 +35,13 @@ const hasContent = (value: State | null) => Boolean(
   value && (value.sources?.length || value.clips?.length || value.uploads?.length || value.compilations?.length),
 )
 
+const TECHNICAL_ERROR = /banco|postgres|database|indisponível|proxy|render|ffmpeg|servidor|api|workflow|cobalt|yt-dlp|invidious|relay|store|job|502|503/i
+export function friendlyMessage(message: unknown) {
+  const text = String(message || '').trim()
+  if (!text || TECHNICAL_ERROR.test(text)) return 'Não foi possível concluir agora. Tente novamente.'
+  return text
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State | null>(null)
   const [loading, setLoading] = useState(true)
@@ -93,8 +100,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
-      const msg = data?.error || 'Algo deu errado. Tente novamente.'
-      throw new Error(msg)
+      throw new Error(friendlyMessage(data?.error))
     }
     refresh()
     return data

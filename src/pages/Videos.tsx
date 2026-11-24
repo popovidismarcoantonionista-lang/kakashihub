@@ -26,6 +26,13 @@ type RadarItem = {
 
 type RadarData = { ok: boolean; kickOk?: boolean; items: RadarItem[]; liveCount: number }
 
+function jobLabel(kind?: string) {
+  if (kind === 'live') return 'Acompanhando a transmissão'
+  if (kind === 'render') return 'Preparando o corte'
+  if (kind === 'compile') return 'Montando o vídeo'
+  return 'Preparando a fonte'
+}
+
 function normalizeLink(raw: string) {
   return raw.trim()
 }
@@ -411,7 +418,7 @@ export function VideosPage() {
                   {(processing || source.status === 'ao-vivo') && (
                     <div className="src-progress">
                       <div className="sp-head">
-                        <span className="mono">{job?.step || (source.status === 'ao-vivo' ? 'Ao vivo · acompanhando a transmissão' : 'Preparando a fonte')}</span>
+                        <span className="mono">{source.status === 'ao-vivo' ? 'Acompanhando a transmissão' : jobLabel(job?.kind)}</span>
                         {source.status !== 'ao-vivo' && <span className="mono">{source.progress}%</span>}
                       </div>
                       {source.status === 'ao-vivo'
