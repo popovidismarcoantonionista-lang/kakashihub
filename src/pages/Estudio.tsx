@@ -239,6 +239,11 @@ export function EstudioPage() {
             sourceClips={sourceClips}
             duration={duration}
             onSelect={(id) => navigate('estudio', { clip: id })}
+            contextCaption={contextDraft}
+            onContextCaptionChange={setContextDraft}
+            onContextCaptionCommit={() => {
+              if (contextDraft !== (clip.contextCaption || '')) void patchClip({ contextCaption: contextDraft })
+            }}
           />
         </div>
 
@@ -442,8 +447,16 @@ export function EstudioPage() {
 }
 
 function TimelineCanvas({
-  clip, sourceClips, duration, onSelect,
-}: { clip: Clip; sourceClips: Clip[]; duration: number; onSelect: (id: string) => void }) {
+  clip, sourceClips, duration, onSelect, contextCaption, onContextCaptionChange, onContextCaptionCommit,
+}: {
+  clip: Clip
+  sourceClips: Clip[]
+  duration: number
+  onSelect: (id: string) => void
+  contextCaption: string
+  onContextCaptionChange: (value: string) => void
+  onContextCaptionCommit: () => void
+}) {
   const canvasRef = useRef<HTMLDivElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
   const segRefs = useRef<Record<string, HTMLButtonElement | null>>({})
@@ -592,11 +605,11 @@ function TimelineCanvas({
           <span className="kicker mono">LEGENDA DA OCORRÊNCIA</span>
           <input
             className="input"
-            value={contextDraft}
+            value={contextCaption}
             maxLength={110}
             placeholder="Ex.: Deu pinote e não bancou a curva"
-            onChange={(e) => setContextDraft(e.target.value)}
-            onBlur={() => { if (contextDraft !== (clip?.contextCaption || '')) void patchClip({ contextCaption: contextDraft }) }}
+            onChange={(e) => onContextCaptionChange(e.target.value)}
+            onBlur={onContextCaptionCommit}
           />
           <span className="fine">Fica 15–30s na tela; textos maiores ganham mais tempo.</span>
           <span className="kicker mono">LEGENDAS</span>

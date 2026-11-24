@@ -120,7 +120,9 @@ export async function cobaltResolve(url, opts = {}) {
       downloadMode: 'auto',
       youtubeVideoCodec: 'h264',
       youtubeVideoContainer: 'mp4',
-      alwaysProxy: false,
+      // Render sai de IP de datacenter e o YouTube devolve "bot" para o Cobalt.
+      // O proxy do próprio Cobalt resolve isso (testado com o mesmo vídeo).
+      alwaysProxy: true,
       disableMetadata: true,
     }),
     signal: AbortSignal.timeout(TIMEOUT),
@@ -129,7 +131,7 @@ export async function cobaltResolve(url, opts = {}) {
 
   if (json?.status === 'error') {
     const code = String(json.error?.code || 'unknown')
-    if (/bot|sign.?in|captcha|login|age|auth/i.test(code)) throw new Error('cobalt-blocked')
+    if (/bot|sign.?in|captcha|login|age|auth/i.test(code)) throw new Error(`cobalt-blocked-${code}`.slice(0, 180))
     throw new Error(`cobalt-error-${code}`.slice(0, 180))
   }
   if (!res.ok || !json) throw statusError(res, json, 'cobalt')
