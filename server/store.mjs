@@ -121,6 +121,12 @@ function normalizeState(value) {
   return state
 }
 
+function stateHasContent(state) {
+  return Boolean(state && (
+    state.sources?.length || state.clips?.length || state.uploads?.length || state.compilations?.length
+  ))
+}
+
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch { return fallback }
 }
@@ -225,8 +231,33 @@ async function loadContext() {
       const [row] = await db.select().from(fugaState).where(eq(fugaState.id, 'primary')).limit(1)
       if (!row) throw new Error('O registro de estado do Kakashi Hub não pôde ser inicializado.')
       const rows = await db.select().from(fugaJobs).orderBy(desc(fugaJobs.startedAt)).limit(40)
-      const rawState = clone(row.data)
-      const state = normalizeState(clone(row.data))
+      let rawState = clone(row.data)
+
+      // Recuperação: se o banco foi semeado vazio enquanto o acervo real vivia
+      // no JSON local (modo antigo), importamos esse JSON uma única vez.
+      if (!stateHasContent(normalizeState(clone(rawState)))) {
+        const local = legacyState()
+        if (stateHasContent(local)) {
+          try {
+            await db.transaction(async (tx) => {
+              await tx.execute(sql`SELECT pg_advisory_xact_lock(742195910822::bigint)`)
+              const [current] = await tx.select().from(fugaState).where(eq(fugaState.id, 'primary')).limit(1)
+              if (!current || stateHasContent(normalizeState(clone(current.data)))) return
+              await tx.update(fugaState).set({
+                data: local,
+                revision: current.revision + 1,
+                updatedAt: new Date(),
+              }).where(eq(fugaState.id, 'primary'))
+              rawState = clone(local)
+              row.revision = current.revision + 1
+            })
+          } catch (error) {
+            console.warn('[store] não foi possível importar estado local:', error?.message || error)
+          }
+        }
+      }
+
+      const state = normalizeState(clone(rawState))
       return {
         state,
         baseState: rawState,
