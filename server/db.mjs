@@ -35,7 +35,8 @@ export function normalizeConnectionString(raw) {
   connectionInfo.atCount = (body.match(/@/g) || []).length
   if (at < 0) return value
   const credentials = body.slice(0, at)
-  const host = body.slice(at + 1).replace(/[\s\x00-\x1F\x7F]/g, '')
+  let host = body.slice(at + 1).replace(/[\s\x00-\x1F\x7F]/g, '')
+  host = host.replace(/^(?:(?:postgres(?:ql)?)?:\/\/)+/i, '')
   const colon = credentials.indexOf(':')
   connectionInfo.credentialsColon = colon >= 0
   if (colon < 0) return value
