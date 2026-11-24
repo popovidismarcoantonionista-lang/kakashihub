@@ -1606,21 +1606,56 @@ export async function runRender(clipId, opts = {}) {
     const ass = buildCaptionAss(clip, duration, outW, outH)
     const assFile = ass ? path.join(EXPORTS, `${clip.id}.captions.ass`) : null
     if (assFile) fs.writeFileSync(assFile, ass, 'utf8')
-    try {
-      let outArgs
-      const assName = assFile ? path.basename(assFile).replace(/'/g, "\\'") : null
-      if (filterComplex) {
-        const fc = assName
-          ? `${filterComplex.replace(/\[vout\]\s*$/, '[vpre]')};[vpre]subtitles='${assName}'[vout]`
-          : filterComplex
-        outArgs = ['-filter_complex', fc, '-map', '[vout]', '-map', '0:a?']
-      } else {
-        const vfWithSubs = assName ? `${vf},subtitles='${assName}'` : vf
-        outArgs = ['-vf', vfWithSubs]
+
+    const projectLogo = getState().project?.logo
+    let logoFile = null
+    if (projectLogo?.url) {
+      try {
+        const logoPathname = mediaPathFromUrl(projectLogo.url)
+        const localLogo = logoPathname
+          ? path.join(DATA, logoPathname)
+          : (projectLogo.url.startsWith('/covers/') ? path.join(COVERS, path.basename(projectLogo.url)) : null)
+        logoFile = await ensureLocalMedia(logoPathname, localLogo, path.basename(projectLogo.url || 'logo.png'))
+      } catch (error) {
+        console.warn('[render-logo]', error?.message || error)
+        logoFile = null
       }
-      const ffmpegArgs = (args) => [
+    }
+
+    try {
+      const assName = assFile ? path.basename(assFile).replace(/'/g, "\\'") : null
+      const logoInputArgs = logoFile ? ['-loop', '1', '-t', String(duration), '-i', logoFile] : []
+      const videoInputIdx = 0
+      const logoInputIdx = 1
+
+      let baseFc = filterComplex
+      if (!baseFc) baseFc = `[${videoInputIdx}:v]${vf}[vout]`
+
+      let outLabel = 'vout'
+      let fc = baseFc
+      if (logoFile) {
+        const lw = Math.max(24, Math.round(outW * Math.max(0.05, Math.min(0.8, Number(projectLogo.w) || 0.28))))
+        const opacity = Math.max(0.1, Math.min(1, Number(projectLogo.opacity) || 1))
+        const cx = Math.round(outW * Math.max(0, Math.min(1, Number(projectLogo.x) || 0.5)))
+        const cy = Math.round(outH * Math.max(0, Math.min(1, Number(projectLogo.y) || 0.88)))
+        const overlayX = `max(0,min(main_w-overlay_w,${cx}-overlay_w/2))`
+        const overlayY = `max(0,min(main_h-overlay_h,${cy}-overlay_h/2))`
+        fc = fc.replace(/\[vout\]\s*$/, '[vbase]')
+        fc += `;[${logoInputIdx}:v]format=rgba,scale=${lw}:-1,colorchannelmixer=aa=${opacity}[logo]`
+        fc += `;[vbase][logo]overlay=${overlayX}:${overlayY}[vlogo]`
+        outLabel = 'vlogo'
+      }
+      if (assName) {
+        fc = fc.replace(new RegExp(`\\[${outLabel}\\]\\s*$`), '[vpre]')
+        fc += `;[vpre]subtitles='${assName}'[vout]`
+        outLabel = 'vout'
+      }
+
+      const outArgs = ['-filter_complex', fc, '-map', `[${outLabel}]`, '-map', `${videoInputIdx}:a?`]
+      const ffmpegArgs = (args, withLogo = Boolean(logoFile)) => [
         '-y', '-hide_banner', '-loglevel', 'error',
         '-ss', String(from), '-t', String(duration), '-i', src,
+        ...(withLogo ? logoInputArgs : []),
         ...args,
         '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '160k', '-ar', '48000',
@@ -1630,17 +1665,50 @@ export async function runRender(clipId, opts = {}) {
       ]
       const ffmpegTimeout = 1000 * 60 * (size.height >= 2000 ? 40 : size.height >= 1000 ? 25 : 15)
       try {
-        await run(FFMPEG_BIN, ffmpegArgs(outArgs), { cwd: EXPORTS, timeout: ffmpegTimeout })
+        await run(FFMPEG_BIN, ffmpegArgs(outArgs, Boolean(logoFile)), { cwd: EXPORTS, timeout: ffmpegTimeout })
       } catch (err) {
-        if (!assName) throw err
+        if (!assName && !logoFile) throw err
         const msg = String(err?.stderr || err?.message || '').toLowerCase()
-        const captionFilterIssue = /subtitles|libass|ass filter|no such filter|invalid argument|error parsing|caption/.test(msg)
-        if (!captionFilterIssue) throw err
-        console.error('[render-captions-fallback]', msg.slice(0, 240))
-        const plainArgs = filterComplex
-          ? ['-filter_complex', filterComplex, '-map', '[vout]', '-map', '0:a?']
-          : ['-vf', vf]
-        await run(FFMPEG_BIN, ffmpegArgs(plainArgs), { cwd: EXPORTS, timeout: ffmpegTimeout })
+        const captionFilterIssue = assName && /subtitles|libass|ass filter|no such filter|invalid argument|error parsing|caption/.test(msg)
+        if (captionFilterIssue) {
+          console.error('[render-captions-fallback]', msg.slice(0, 240))
+          let plainFc = baseFc
+          let plainLabel = 'vout'
+          if (logoFile) {
+            const lw = Math.max(24, Math.round(outW * Math.max(0.05, Math.min(0.8, Number(projectLogo.w) || 0.28))))
+            const opacity = Math.max(0.1, Math.min(1, Number(projectLogo.opacity) || 1))
+            const cx = Math.round(outW * Math.max(0, Math.min(1, Number(projectLogo.x) || 0.5)))
+            const cy = Math.round(outH * Math.max(0, Math.min(1, Number(projectLogo.y) || 0.88)))
+            const overlayX = `max(0,min(main_w-overlay_w,${cx}-overlay_w/2))`
+            const overlayY = `max(0,min(main_h-overlay_h,${cy}-overlay_h/2))`
+            plainFc = plainFc.replace(/\[vout\]\s*$/, '[vbase]')
+            plainFc += `;[${logoInputIdx}:v]format=rgba,scale=${lw}:-1,colorchannelmixer=aa=${opacity}[logo]`
+            plainFc += `;[vbase][logo]overlay=${overlayX}:${overlayY}[vlogo]`
+            plainLabel = 'vlogo'
+          }
+          const plainArgs = ['-filter_complex', plainFc, '-map', `[${plainLabel}]`, '-map', `${videoInputIdx}:a?`]
+          await run(FFMPEG_BIN, ffmpegArgs(plainArgs, Boolean(logoFile)), { cwd: EXPORTS, timeout: ffmpegTimeout })
+        } else if (logoFile) {
+          console.error('[render-logo-fallback]', msg.slice(0, 240))
+          // fallback: render without logo
+          let noLogoFc = baseFc
+          let noLogoLabel = 'vout'
+          if (assName) {
+            noLogoFc = noLogoFc.replace(/\[vout\]\s*$/, '[vpre]')
+            noLogoFc += `;[vpre]subtitles='${assName}'[vout]`
+            noLogoLabel = 'vout'
+          }
+          const noLogoArgs = ['-filter_complex', noLogoFc, '-map', `[${noLogoLabel}]`, '-map', `${videoInputIdx}:a?`]
+          try {
+            await run(FFMPEG_BIN, ffmpegArgs(noLogoArgs, false), { cwd: EXPORTS, timeout: ffmpegTimeout })
+          } catch {
+            // final fallback: no logo, no subs
+            const plainArgs = ['-filter_complex', baseFc, '-map', '[vout]', '-map', `${videoInputIdx}:a?`]
+            await run(FFMPEG_BIN, ffmpegArgs(plainArgs, false), { cwd: EXPORTS, timeout: ffmpegTimeout })
+          }
+        } else {
+          throw err
+        }
       }
     } finally {
       if (assFile) try { fs.unlinkSync(assFile) } catch {}

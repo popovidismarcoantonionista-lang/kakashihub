@@ -154,8 +154,16 @@ export interface Activity {
   text: string
 }
 
+export interface ChannelLogo {
+  url: string
+  x: number
+  y: number
+  w: number
+  opacity: number
+}
+
 export interface State {
-  project: { name: string; handle: string; niche: string; channel: string }
+  project: { name: string; handle: string; niche: string; channel: string; logo?: ChannelLogo | null }
   settings: Settings
   sources: Source[]
   clips: Clip[]

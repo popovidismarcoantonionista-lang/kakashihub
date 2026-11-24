@@ -17,7 +17,7 @@ import {
   save,
   storeMiddleware,
 } from './store.mjs'
-import { blobStorageEnabled, deleteBlobMedia, getPrivateBlob } from './media-store.mjs'
+import { blobStorageEnabled, deleteBlobMedia, getPrivateBlob, storeLocalFile } from './media-store.mjs'
 import {
   OUTPUT_SIZES, clipFrame, detectCamBoxForClip, detectCamBoxForLive, fetchChannelVideos,
   getLiveHlsUrl, isLiveRunning, liveCapabilities, liveCaptureConfig, liveErrorText, liveFrame,
@@ -33,7 +33,7 @@ import {
 import { getRadar } from './radar.mjs'
 
 const app = express()
-app.use(express.json({ limit: '2mb' }))
+app.use(express.json({ limit: '6mb' }))
 
 function verifyNetlifySigned(sig, secret) {
   try {
@@ -177,6 +177,56 @@ app.post('/api/settings', (req, res) => {
   state.project.niche = NICHE_LABELS[state.settings.niche] || state.project.niche
   save()
   ok(res, { settings: state.settings, project: state.project })
+})
+
+function parseLogoDataUrl(value) {
+  const raw = String(value || '').trim()
+  const m = raw.match(/^data:(image\/png|image\/webp|image\/gif);base64,(.+)$/i)
+  if (!m) return null
+  const mime = m[1].toLowerCase()
+  const buf = Buffer.from(m[2], 'base64')
+  if (!buf.length || buf.length > 2 * 1024 * 1024) return null
+  const ext = mime === 'image/webp' ? '.webp' : mime === 'image/gif' ? '.gif' : '.png'
+  return { buf, mime, ext }
+}
+
+app.post('/api/project/logo', async (req, res) => {
+  try {
+    const parsed = parseLogoDataUrl(req.body?.dataUrl || req.body?.image || req.body?.data)
+    if (!parsed) return fail(res, 400, 'Envie uma logo PNG transparente (até 2 MB).')
+    const state = getState()
+    const prev = state.project?.logo
+    const prevPath = prev?.url ? String(prev.url).replace(/^\/covers\//, 'covers/') : null
+    const fileName = `channel-logo-${Date.now()}${parsed.ext}`
+    const abs = path.join(COVERS, fileName)
+    fs.writeFileSync(abs, parsed.buf)
+    let url = `/covers/${fileName}`
+    try {
+      const key = await storeLocalFile(abs, `covers/${fileName}`, parsed.mime)
+      if (key) url = `/covers/${fileName}`
+    } catch (err) {
+      console.warn('[logo:blob]', err?.message || err)
+    }
+    if (prevPath && prevPath !== `covers/${fileName}`) {
+      try {
+        const prevAbs = path.join(COVERS, path.basename(prevPath))
+        if (fs.existsSync(prevAbs)) fs.unlinkSync(prevAbs)
+      } catch {}
+      try { await deleteBlobMedia([prevPath]) } catch {}
+    }
+    state.project.logo = {
+      url,
+      x: Math.max(0, Math.min(1, Number(prev?.x) || 0.5)),
+      y: Math.max(0, Math.min(1, Number(prev?.y) || 0.88)),
+      w: Math.max(0.05, Math.min(0.8, Number(prev?.w) || 0.28)),
+      opacity: Math.max(0.1, Math.min(1, Number(prev?.opacity) || 1)),
+    }
+    save()
+    ok(res, { project: state.project })
+  } catch (err) {
+    console.error('[logo]', err?.message || err)
+    fail(res, 500, 'Não foi possível salvar a logo.')
+  }
 })
 
 app.post('/api/project', (req, res) => {

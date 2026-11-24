@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
-  AudioLines, Check, CheckCircle2, Clapperboard, Crop, Lightbulb,
-  RefreshCw, Scissors, Sparkles, UploadCloud, Youtube,
+  AudioLines, Check, CheckCircle2, Clapperboard, Crop, ImagePlus, Lightbulb,
+  RefreshCw, Scissors, Sparkles, Trash2, UploadCloud, Youtube,
 } from 'lucide-react'
 import { useApp } from '../store'
 import { navigate } from '../router'
@@ -19,6 +19,13 @@ export function IAPage() {
   })
   const [saving, setSaving] = useState(false)
   const [channel, setChannel] = useState(state?.project?.channel ?? '')
+  const [logoBusy, setLogoBusy] = useState(false)
+  const [logoDraft, setLogoDraft] = useState(() => ({
+    x: state?.project?.logo?.x ?? 0.5,
+    y: state?.project?.logo?.y ?? 0.88,
+    w: state?.project?.logo?.w ?? 0.28,
+    opacity: state?.project?.logo?.opacity ?? 1,
+  }))
 
   useEffect(() => {
     if (!settings) return
@@ -31,6 +38,12 @@ export function IAPage() {
   useEffect(() => {
     setChannel(state?.project?.channel ?? '')
   }, [state?.project?.channel])
+
+  useEffect(() => {
+    const logo = state?.project?.logo
+    if (!logo) return
+    setLogoDraft({ x: logo.x, y: logo.y, w: logo.w, opacity: logo.opacity })
+  }, [state?.project?.logo?.url, state?.project?.logo?.x, state?.project?.logo?.y, state?.project?.logo?.w, state?.project?.logo?.opacity])
 
   if (!state || !settings) return null
 
@@ -54,6 +67,47 @@ export function IAPage() {
       await api('/api/project', { method: 'POST', body: JSON.stringify({ channel: value }) })
     } catch (e: any) {
     }
+  }
+
+  const uploadLogo = async (file: File | null) => {
+    if (!file) return
+    if (!/^image\/(png|webp|gif)$/i.test(file.type)) return
+    if (file.size > 2 * 1024 * 1024) return
+    setLogoBusy(true)
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result || ''))
+        reader.onerror = () => reject(new Error('read'))
+        reader.readAsDataURL(file)
+      })
+      await api('/api/project/logo', { method: 'POST', body: JSON.stringify({ dataUrl }) })
+    } catch {}
+    finally { setLogoBusy(false) }
+  }
+
+  const saveLogoPatch = async (patch: Partial<{ x: number; y: number; w: number; opacity: number }>) => {
+    const current = state.project?.logo
+    if (!current?.url) return
+    const next = {
+      url: current.url,
+      x: Math.max(0, Math.min(1, patch.x ?? logoDraft.x)),
+      y: Math.max(0, Math.min(1, patch.y ?? logoDraft.y)),
+      w: Math.max(0.05, Math.min(0.8, patch.w ?? logoDraft.w)),
+      opacity: Math.max(0.1, Math.min(1, patch.opacity ?? logoDraft.opacity)),
+    }
+    setLogoDraft({ x: next.x, y: next.y, w: next.w, opacity: next.opacity })
+    try {
+      await api('/api/project', { method: 'POST', body: JSON.stringify({ logo: next }) })
+    } catch {}
+  }
+
+  const removeLogo = async () => {
+    setLogoBusy(true)
+    try {
+      await api('/api/project', { method: 'POST', body: JSON.stringify({ logo: null }) })
+    } catch {}
+    finally { setLogoBusy(false) }
   }
 
   const saveStyle = async () => {
@@ -184,6 +238,90 @@ export function IAPage() {
               onBlur={saveChannel}
               onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
             />
+
+            <div style={{ marginTop: 14, borderTop: '1px solid rgba(255,255,255,.08)', paddingTop: 14 }}>
+              <div className="panel-head" style={{ marginBottom: 8 }}>
+                <h3 style={{ fontSize: 13 }}>Logo do canal</h3>
+                <ImagePlus size={14} className="muted" />
+              </div>
+              <p className="fine" style={{ marginBottom: 10 }}>PNG transparente. Aparece nos cortes renderizados.</p>
+
+              <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                <div style={{ width: 132, aspectRatio: '9 / 16', background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.1)', borderRadius: 10, position: 'relative', overflow: 'hidden', flex: '0 0 auto' }}>
+                  {state.project?.logo?.url ? (
+                    <img
+                      src={state.project.logo.url}
+                      alt="Logo do canal"
+                      style={{
+                        position: 'absolute',
+                        left: `${logoDraft.x * 100}%`,
+                        top: `${logoDraft.y * 100}%`,
+                        width: `${logoDraft.w * 100}%`,
+                        transform: 'translate(-50%, -50%)',
+                        opacity: logoDraft.opacity,
+                        pointerEvents: 'none',
+                        objectFit: 'contain',
+                      }}
+                    />
+                  ) : (
+                    <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,.35)', fontSize: 12, textAlign: 'center', padding: 10 }}>Sem logo</div>
+                  )}
+                </div>
+
+                <div style={{ flex: 1, minWidth: 180 }}>
+                  <label className="btn btn-soft btn-sm" style={{ display: 'inline-flex', cursor: logoBusy ? 'wait' : 'pointer', marginBottom: 8 }}>
+                    {logoBusy ? <span className="spinner" /> : <UploadCloud size={13} />}
+                    {state.project?.logo?.url ? 'Trocar logo' : 'Enviar logo'}
+                    <input
+                      type="file"
+                      accept="image/png,image/webp,image/gif"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] || null
+                        e.currentTarget.value = ''
+                        void uploadLogo(f)
+                      }}
+                    />
+                  </label>
+                  {state.project?.logo?.url && (
+                    <>
+                      <button className="btn btn-soft btn-sm" style={{ marginLeft: 8, marginBottom: 8 }} onClick={() => void removeLogo()} disabled={logoBusy}>
+                        <Trash2 size={13} /> Remover
+                      </button>
+
+                      <div className="range-field" style={{ marginTop: 6 }}>
+                        <div className="rf-head"><span>Tamanho</span><b className="mono">{Math.round(logoDraft.w * 100)}%</b></div>
+                        <input type="range" min={5} max={80} value={Math.round(logoDraft.w * 100)}
+                          onChange={(e) => setLogoDraft((d) => ({ ...d, w: Number(e.target.value) / 100 }))}
+                          onMouseUp={(e) => void saveLogoPatch({ w: Number((e.target as HTMLInputElement).value) / 100 })}
+                          onTouchEnd={(e) => void saveLogoPatch({ w: Number((e.target as HTMLInputElement).value) / 100 })} />
+                      </div>
+                      <div className="range-field">
+                        <div className="rf-head"><span>Opacidade</span><b className="mono">{Math.round(logoDraft.opacity * 100)}%</b></div>
+                        <input type="range" min={10} max={100} value={Math.round(logoDraft.opacity * 100)}
+                          onChange={(e) => setLogoDraft((d) => ({ ...d, opacity: Number(e.target.value) / 100 }))}
+                          onMouseUp={(e) => void saveLogoPatch({ opacity: Number((e.target as HTMLInputElement).value) / 100 })}
+                          onTouchEnd={(e) => void saveLogoPatch({ opacity: Number((e.target as HTMLInputElement).value) / 100 })} />
+                      </div>
+                      <div className="range-field">
+                        <div className="rf-head"><span>Posição X</span><b className="mono">{Math.round(logoDraft.x * 100)}%</b></div>
+                        <input type="range" min={0} max={100} value={Math.round(logoDraft.x * 100)}
+                          onChange={(e) => setLogoDraft((d) => ({ ...d, x: Number(e.target.value) / 100 }))}
+                          onMouseUp={(e) => void saveLogoPatch({ x: Number((e.target as HTMLInputElement).value) / 100 })}
+                          onTouchEnd={(e) => void saveLogoPatch({ x: Number((e.target as HTMLInputElement).value) / 100 })} />
+                      </div>
+                      <div className="range-field">
+                        <div className="rf-head"><span>Posição Y</span><b className="mono">{Math.round(logoDraft.y * 100)}%</b></div>
+                        <input type="range" min={0} max={100} value={Math.round(logoDraft.y * 100)}
+                          onChange={(e) => setLogoDraft((d) => ({ ...d, y: Number(e.target.value) / 100 }))}
+                          onMouseUp={(e) => void saveLogoPatch({ y: Number((e.target as HTMLInputElement).value) / 100 })}
+                          onTouchEnd={(e) => void saveLogoPatch({ y: Number((e.target as HTMLInputElement).value) / 100 })} />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="panel style-panel">

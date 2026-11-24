@@ -99,6 +99,18 @@ function normalizeState(value) {
   state.settings.niche ||= 'fuga'
   state.settings.resolution ||= '4k'
   state.project.channel = typeof state.project.channel === 'string' ? state.project.channel : ''
+  const logo = state.project.logo
+  if (logo && typeof logo === 'object' && typeof logo.url === 'string' && logo.url) {
+    state.project.logo = {
+      url: String(logo.url).slice(0, 500),
+      x: Math.max(0, Math.min(1, Number(logo.x) || 0.5)),
+      y: Math.max(0, Math.min(1, Number(logo.y) || 0.88)),
+      w: Math.max(0.05, Math.min(0.8, Number(logo.w) || 0.28)),
+      opacity: Math.max(0.1, Math.min(1, Number(logo.opacity) || 1)),
+    }
+  } else {
+    state.project.logo = null
+  }
   state.sources = Array.isArray(state.sources) ? state.sources : []
   state.clips = Array.isArray(state.clips) ? state.clips : []
   state.uploads = Array.isArray(state.uploads) ? state.uploads : []
