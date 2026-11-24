@@ -57,13 +57,16 @@ function audioPercent(level?: number | null): number {
 }
 
 function LiveAudioMeter({ level, silent }: { level?: number | null; silent?: boolean }) {
-  const active = silent === false && audioPercent(level) > 5
+  const pct = audioPercent(level)
+  const active = silent === false && pct > 5
+  // Quanto mais alto o áudio, mais rápido o equalizador "ouvindo" se move.
+  const speed = Math.max(0.32, 1 - pct / 160)
   return (
     <div className={`live-audio ${active ? 'is-listening' : ''}`}>
       <span className="mono">{level == null ? 'áudio —' : active ? 'ouvindo' : 'silêncio'}</span>
       <div className="live-eq" aria-hidden="true">
         {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
-          <i key={i} style={{ animationDelay: `${i * 0.09}s`, animationDuration: `${0.5 + (i % 4) * 0.12}s` }} />
+          <i key={i} style={{ animationDelay: `${i * 0.07}s`, animationDuration: `${(speed + (i % 4) * 0.06).toFixed(2)}s` }} />
         ))}
       </div>
       {level != null && <span className="mono">{level} dB</span>}
@@ -413,7 +416,7 @@ export function VideosPage() {
                     <Cover src={liveThumb} alt={source.title} className="src-img" />
                   )}
                   <div className="src-grad" />
-                  {(processing || liveOn) && !liveThumb && (
+                  {((processing && !isLive) || (liveOn && !liveThumb)) && (
                     <div className="src-loading" aria-hidden="true"><Logo size={44} className="src-spin" /></div>
                   )}
                   <span className={`src-badge ${source.status} ${isLive ? 'live' : ''}`}>{badge}</span>
