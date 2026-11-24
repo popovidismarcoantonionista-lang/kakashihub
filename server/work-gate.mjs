@@ -26,7 +26,9 @@ export function endLiveRecording() {
   liveRecording = Math.max(0, liveRecording - 1)
 }
 
-export async function waitForLiveRecording(timeoutMs = 26000) {
+// Uma janela da live pode durar até clipMax (38s) + overhead; 26s deixava o
+// ingest começar no meio de uma gravação e derrubar o processo no Render free.
+export async function waitForLiveRecording(timeoutMs = 70000) {
   const deadline = Date.now() + timeoutMs
   while (liveRecording > 0 && Date.now() < deadline) await sleep(500)
 }

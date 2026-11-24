@@ -40,6 +40,44 @@ for (const dir of [DATA, MEDIA, SRC_MEDIA, EXPORTS, COVERS]) {
 const clone = (value) => JSON.parse(JSON.stringify(value))
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 
+// Reconcilia o estado sem trocar as referências que rotinas longas guardaram
+// (state, source, clip, comp). Arrays com itens id preservam a identidade de
+// cada item pelo id e mantêm a ordem recebida.
+function assignInPlace(target, source) {
+  for (const key of Object.keys(target)) {
+    if (!(key in source) && key !== 'length') delete target[key]
+  }
+  for (const key of Object.keys(source)) {
+    const next = source[key]
+    const current = target[key]
+    if (isObject(next) && isObject(current)) {
+      assignInPlace(current, next)
+    } else if (Array.isArray(next) && Array.isArray(current)) {
+      const byId = (arr) => new Map(
+        arr.filter((item) => isObject(item) && typeof item.id === 'string').map((item) => [item.id, item]),
+      )
+      const currentById = byId(current)
+      const nextById = byId(next)
+      const keyed = currentById.size === current.length && nextById.size === next.length
+      const rebuilt = keyed
+        ? next.map((item) => {
+          const existing = currentById.get(item.id)
+          if (existing) {
+            assignInPlace(existing, item)
+            return existing
+          }
+          return item
+        })
+        : next
+      current.length = 0
+      current.push(...rebuilt)
+    } else {
+      target[key] = next
+    }
+  }
+  return target
+}
+
 function mergeChanges(base, ours, theirs) {
   if (isDeepStrictEqual(ours, base)) return theirs
   if (isDeepStrictEqual(theirs, base)) return ours
@@ -316,8 +354,7 @@ async function persistState(context) {
     // as alterações finais (clips, status, progresso) nunca chegam ao banco.
     const unchanged = isDeepStrictEqual(context.state, snapshot)
     const nextState = unchanged ? mergedState : mergeChanges(snapshot, context.state, mergedState)
-    for (const key of Object.keys(context.state)) delete context.state[key]
-    Object.assign(context.state, nextState)
+    assignInPlace(context.state, nextState)
     context.stateDirty = !unchanged
   })
 }

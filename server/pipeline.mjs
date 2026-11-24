@@ -1459,7 +1459,8 @@ export async function runIngest(sourceId, url, opts = {}) {
     finishJob(job)
     return created
   } catch (err) {
-    console.error('[ingest]', String(err?.message || err).slice(0, 800))
+    // O usuário vê só a mensagem curta; o motivo real fica no log do Render.
+    console.error('[ingest-error]', sourceId, String(err?.stderr || err?.stack || err?.message || err).slice(-1800))
     source.status = 'erro'
     source.error = friendlyError(err)
     source.progress = 0
