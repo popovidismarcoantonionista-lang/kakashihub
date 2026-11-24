@@ -336,6 +336,23 @@ export function IAPage() {
               ))}
             </div>
 
+            <div className="option-row">
+              <div><b>Legendas no vídeo</b><em>Texto falado em caixa alta</em></div>
+              <Switch
+                checked={Boolean(settings?.captions)}
+                label="Legendas no vídeo"
+                onChange={(v) => { void api('/api/settings', { method: 'POST', body: JSON.stringify({ captions: v }) }) }}
+              />
+            </div>
+            <div className="option-row">
+              <div><b>Marca d'água do estúdio</b><em>Nome do perfil no canto do corte</em></div>
+              <Switch
+                checked={Boolean(settings?.watermark)}
+                label="Marca d'água do estúdio"
+                onChange={(v) => { void api('/api/settings', { method: 'POST', body: JSON.stringify({ watermark: v }) }) }}
+              />
+            </div>
+
             <div className="range-field">
               <div className="rf-head"><span>Duração mínima</span><b className="mono">{draft.clipMin}s</b></div>
               <input

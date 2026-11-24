@@ -1567,7 +1567,7 @@ function buildCaptionChunks(clip, duration, gta = false) {
   return chunks.filter((c) => c.words.length && c.end > c.start).slice(0, 160)
 }
 
-function buildCaptionAss(clip, duration, outW, outH, gta = false) {
+function buildCaptionAss(clip, duration, outW, outH, gta = false, watermark = false) {
   const chunks = buildCaptionChunks(clip, duration, gta)
   if (!chunks.length) return null
   const fontSize = Math.max(42, Math.round(outH * (gta ? 0.062 : 0.055)))
@@ -1611,7 +1611,7 @@ function buildCaptionAss(clip, duration, outW, outH, gta = false) {
       events.push(`Dialogue: 0,${assTime(start)},${assTime(end)},Default,,0,0,0,,${text}`)
     }
   }
-  if (gta) {
+  if (gta && watermark) {
     const project = getState().project || {}
     const name = String(project.name || project.handle || '').replace(/^@/, '').trim()
     if (name) {
@@ -1649,6 +1649,10 @@ export async function runRender(clipId, opts = {}) {
     const out = path.join(EXPORTS, `${clip.id}.mp4`)
     const size = renderSize()
     const gta = clip.niche === 'gta' || getState().settings?.niche === 'gta'
+    // Texto no vídeo só se o usuário ligar explicitamente nas configurações.
+    const renderSettings = getState().settings || {}
+    const wantCaptions = renderSettings.captions === true
+    const wantWatermark = renderSettings.watermark === true
     updateJob(job, { progress: 22, step: 'Calculando o enquadramento' })
     let cam = clip.cam || source?.cam || null
     const wantsSplit = gta || clip.framing === 'cam' || clip.framing === 'auto' || !clip.framing
@@ -1706,7 +1710,7 @@ export async function runRender(clipId, opts = {}) {
       step: gta ? `Split GTA · ${sizeLabel(size)}` : split ? `Split · ${sizeLabel(size)}` : `9:16 · ${sizeLabel(size)}`,
     })
     const duration = Math.max(1, Number(clip.end) - Number(clip.start) || 0)
-    const ass = buildCaptionAss(clip, duration, outW, outH, gta)
+    const ass = wantCaptions ? buildCaptionAss(clip, duration, outW, outH, gta, wantWatermark) : null
     const assFile = ass ? path.join(EXPORTS, `${clip.id}.captions.ass`) : null
     if (assFile) fs.writeFileSync(assFile, ass, 'utf8')
 

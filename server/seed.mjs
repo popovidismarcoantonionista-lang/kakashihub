@@ -14,6 +14,8 @@ export function seedState() {
       format: '9:16',
       resolution: '4k',
       autoApprove: false,
+      captions: false,
+      watermark: false,
       agents: {
         radar: true,
         momentos: true,

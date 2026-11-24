@@ -129,6 +129,8 @@ export interface Settings {
   format: string
   resolution: '720p' | '1080p' | '4k'
   autoApprove: boolean
+  captions?: boolean
+  watermark?: boolean
   agents: Record<string, boolean>
 }
 
