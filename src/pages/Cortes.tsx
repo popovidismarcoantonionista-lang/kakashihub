@@ -5,7 +5,7 @@ import {
 import { useApp } from '../store'
 import { navigate } from '../router'
 import { ClipCard, ClipPlayer, PlayerModal } from '../components'
-import { Cover, EmptyState, Modal, PageHead, ProgressBar, Select, StatCard } from '../ui'
+import { Cover, EmptyState, Logo, Modal, PageHead, ProgressBar, Select, StatCard } from '../ui'
 import { fmtTime } from '../lib/format'
 import { CLIP_TYPES } from '../types'
 import type { Clip, ClipType, Compilation } from '../types'
@@ -263,7 +263,7 @@ export function CortesPage() {
             <div className="grow" />
             <button className="btn btn-ghost" onClick={() => setLongOpen(false)}>Cancelar</button>
             <button className="btn btn-primary" onClick={buildLong} disabled={picked.length < 2 || building}>
-              {building ? <span className="spinner" /> : <Film size={14} />} Montar vídeo
+              {building ? <Logo size={13} className="btn-spin" /> : <Film size={14} />} Montar vídeo
             </button>
           </>
         }
@@ -310,7 +310,7 @@ export function CortesPage() {
             <div className="grow" />
             <button className="btn btn-ghost" onClick={() => { setAddTarget(null); setAddPicked([]) }}>Cancelar</button>
             <button className="btn btn-primary" onClick={addToLong} disabled={!addPicked.length || adding}>
-              {adding ? <span className="spinner" /> : <Plus size={14} />} Adicionar e montar
+              {adding ? <Logo size={13} className="btn-spin" /> : <Plus size={14} />} Adicionar e montar
             </button>
           </>
         }

@@ -323,7 +323,10 @@ export function VideosPage() {
             return (
               <div className="running-row" key={j.id}>
                 <div className="rr-main">
-                  <b>{j.kind === 'render' ? 'Preparando corte' : j.kind === 'compile' ? 'Montando vídeo longo' : j.kind === 'live' ? 'Monitorando a live' : src?.title || 'Analisando vídeo'}</b>
+                  <span className="rr-title">
+                    <Logo size={14} className="rr-spin" />
+                    <b>{j.kind === 'render' ? 'Preparando corte' : j.kind === 'compile' ? 'Montando vídeo longo' : j.kind === 'live' ? 'Monitorando a live' : src?.title || 'Analisando vídeo'}</b>
+                  </span>
                   <em>{j.kind === 'render' ? 'Ajustando o vídeo' : j.kind === 'compile' ? 'Juntando os melhores momentos' : j.kind === 'live' ? 'Acompanhando a transmissão' : 'Lendo o vídeo enviado'}</em>
                 </div>
                 <ProgressBar value={j.progress} animated />

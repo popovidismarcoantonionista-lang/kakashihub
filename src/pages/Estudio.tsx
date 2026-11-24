@@ -6,7 +6,7 @@ import { useApp } from '../store'
 import { CamBoxCanvas } from '../CamBoxCanvas'
 import { navigate, useRoute } from '../router'
 import { Preview } from '../components'
-import { Dot, EmptyState, PageHead, ProgressBar, ScoreRing, Select, StagePill, TypeBadge } from '../ui'
+import { Dot, EmptyState, Logo, PageHead, ProgressBar, ScoreRing, Select, StagePill, TypeBadge } from '../ui'
 import { fmtRange, fmtTime } from '../lib/format'
 import { detectCamBoxAuto } from '../lib/camBox'
 import type { CamBox, Clip, Source } from '../types'
@@ -256,7 +256,10 @@ export function EstudioPage() {
             </div>
             {renderJob && (
               <div className="render-live">
-                <div className="rl-head"><span className="mono">Preparando o vídeo…</span><span className="mono">{renderJob.progress}%</span></div>
+                <div className="rl-head">
+                  <span className="rl-title"><Logo size={16} className="rl-spin" /><span className="mono">Preparando o vídeo…</span></span>
+                  <span className="mono">{renderJob.progress}%</span>
+                </div>
                 <ProgressBar value={renderJob.progress} animated />
               </div>
             )}
@@ -367,7 +370,7 @@ export function EstudioPage() {
                   onClick={() => trim()}
                   disabled={trimming || Boolean(renderJob) || !(source.hasMedia || clip.media || clip.renderedUrl)}
                 >
-                  {trimming ? <span className="spinner" /> : <Scissors size={14} />}
+                  {trimming ? <Logo size={13} className="btn-spin" /> : <Scissors size={14} />}
                   {trimming ? 'Recortando…' : 'Aplicar recorte'}
                 </button>
               </div>
@@ -394,7 +397,7 @@ export function EstudioPage() {
                     onClick={render}
                     disabled={Boolean(renderJob) || !(source.hasMedia || clip.renderedUrl)}
                   >
-                    {renderJob ? <span className="spinner" /> : <Play size={14} fill="currentColor" />}
+                    {renderJob ? <Logo size={13} className="btn-spin" /> : <Play size={14} fill="currentColor" />}
                     {renderJob ? 'Preparando…' : clip.renderedUrl ? 'Atualizar vídeo' : 'Gerar corte'}
                   </button>
                   {(clip.renderedUrl || clip.media) && (

@@ -2588,7 +2588,14 @@ async function processLiveWindowFile(sourceId, win, job) {
 
   source.liveMisses = 0
   source.liveLastError = null
-  const level = null
+  // Medidor de áudio da live: sem isso o equalizador "ouvindo" nunca aparece.
+  const level = await liveAudioLevel(winFile)
+  if (level) {
+    source.liveAudioLevel = level.mean
+    source.liveAudioPeak = level.peak
+    source.liveAudioSilent = level.silent
+    source.liveAudioAt = new Date().toISOString()
+  }
   source.liveCaptions = captions.length
   if (captions.length) {
     source.liveCaptionLines = captions.slice(-12).map((cue) => ({
