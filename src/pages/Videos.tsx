@@ -537,8 +537,13 @@ export function VideosPage() {
                     <Cover src={liveThumb} alt={source.title} className="src-img" />
                   )}
                   <div className="src-grad" />
-                  {((processing && !isLive) || (liveOn && !liveThumb)) && (
+                  {(processing && !isLive) && (
                     <div className="src-loading" aria-hidden="true"><Logo size={44} className="src-spin" /></div>
+                  )}
+                  {liveOn && (
+                    <div className="live-sharingan" aria-hidden="true">
+                      <Logo size={64} className="live-sharingan-mark" />
+                    </div>
                   )}
                   <span className={`src-badge ${source.status} ${isLive ? 'live' : ''}`}>
                     {isLive && <Logo size={10} className="badge-spin" />}
