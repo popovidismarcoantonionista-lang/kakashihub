@@ -409,6 +409,15 @@ export function EstudioPage() {
                       <Download size={14} /> {clip.renderedUrl ? 'Salvar corte final' : 'Baixar corte'}
                     </a>
                   )}
+                  {!clip.renderedUrl && !clip.media && source.hasMedia && (
+                    <a
+                      className="btn btn-ghost w-full"
+                      href={`/media/src/${source.id}.mp4`}
+                      download={`${source.id}.mp4`}
+                    >
+                      <Download size={14} /> Baixar vídeo original
+                    </a>
+                  )}
                 </>
               ) : (
                 <>

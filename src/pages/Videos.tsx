@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  AlertTriangle, Clapperboard, Crop,
+  AlertTriangle, Clapperboard, Crop, Download,
   Play, Plus, Radio, RefreshCw, Search, Square, Trash2, UploadCloud, Youtube,
 } from 'lucide-react'
 import { useApp } from '../store'
@@ -681,6 +681,19 @@ export function VideosPage() {
         title={watching?.title || 'Assistir fonte'}
         subtitle={watching ? `${watching.channel || 'Fonte'} · ${fmtTime(watching.duration)}` : ''}
         width={900}
+        footer={
+          <>
+            <a
+              className="btn btn-ghost"
+              href={watching ? `/media/src/${watching.id}.mp4` : undefined}
+              download={watching ? `${watching.id}.mp4` : undefined}
+            >
+              <Download size={14} /> Baixar vídeo
+            </a>
+            <div className="grow" />
+            <button className="btn btn-ghost" onClick={() => setWatching(null)}>Fechar</button>
+          </>
+        }
       >
         {watching && (
           <video
