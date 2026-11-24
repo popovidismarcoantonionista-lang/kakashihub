@@ -212,23 +212,27 @@ async function loadContext() {
   let lastError = null
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const inserted = await db.insert(fugaState)
-        .values({ id: 'primary', revision: 1, data: legacyState() })
-        .onConflictDoNothing()
-        .returning({ id: fugaState.id })
+      // Só insere se o registro não existir. Fazer INSERT em toda request
+      // multiplica timeouts quando o banco está indisponível.
+      let row = (await db.select().from(fugaState).where(eq(fugaState.id, 'primary')).limit(1))[0]
+      if (!row) {
+        const inserted = await db.insert(fugaState)
+          .values({ id: 'primary', revision: 1, data: legacyState() })
+          .onConflictDoNothing()
+          .returning({ id: fugaState.id })
 
-      if (inserted.length) {
-        const legacyJobs = readJson(JOBS_FILE, [])
-        if (Array.isArray(legacyJobs) && legacyJobs.length) {
-          for (const job of legacyJobs.slice(-40)) {
-            if (job?.id && job.kind && job.status) {
-              await db.insert(fugaJobs).values(jobToRow(job)).onConflictDoNothing()
+        if (inserted.length) {
+          const legacyJobs = readJson(JOBS_FILE, [])
+          if (Array.isArray(legacyJobs) && legacyJobs.length) {
+            for (const job of legacyJobs.slice(-40)) {
+              if (job?.id && job.kind && job.status) {
+                await db.insert(fugaJobs).values(jobToRow(job)).onConflictDoNothing()
+              }
             }
           }
         }
+        row = (await db.select().from(fugaState).where(eq(fugaState.id, 'primary')).limit(1))[0]
       }
-
-      const [row] = await db.select().from(fugaState).where(eq(fugaState.id, 'primary')).limit(1)
       if (!row) throw new Error('O registro de estado do Kakashi Hub não pôde ser inicializado.')
       const rows = await db.select().from(fugaJobs).orderBy(desc(fugaJobs.startedAt)).limit(40)
       let rawState = clone(row.data)

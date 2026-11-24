@@ -138,7 +138,10 @@ app.get('/api/health', async (req, res) => {
       await db.execute(sql`select 1`)
       dbProbe = 'ok'
     } catch (error) {
-      dbProbe = `erro:${error?.code || 'conexao'}`
+      const detail = String(error?.message || error?.code || 'conexao')
+        .replace(/postgres(ql)?:\/\/\S+/gi, 'postgres://***')
+        .slice(0, 140)
+      dbProbe = `erro:${detail}`
     }
   }
   ok(res, {
