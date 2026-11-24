@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { upload } from '@vercel/blob/client'
 import {
   AlertTriangle, Clapperboard, Crop, Download,
   Play, Plus, Radio, RefreshCw, Search, Square, Trash2, UploadCloud, Youtube,
@@ -37,16 +36,16 @@ type FoundVideo = {
   url: string
 }
 
-// O Render sai de IP de datacenter e o Cobalt exige JWT/Cloudflare para esses
-// IPs. O navegador do usuário resolve e baixa o vídeo, depois envia o arquivo
-// para o estúdio pelo fluxo de upload (que já existe).
+// Baixar é uma ação do navegador do usuário: o Render sai de IP de datacenter e
+// é bloqueado pelo YouTube. A instância pública do Cobalt responde com CORS
+// aberto e devolve um link de download; a gente só abre esse link e o usuário
+// envia o arquivo manualmente pelo botão "Enviar vídeo".
 const COBALT_BROWSER = 'https://rue-cobalt.xenon.zone/'
 
-async function downloadInBrowser(url: string): Promise<File> {
+async function requestCobaltDownload(url: string): Promise<string> {
   const res = await fetch(COBALT_BROWSER, {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(20_000),
     body: JSON.stringify({
       url,
       videoQuality: '720',
@@ -54,13 +53,14 @@ async function downloadInBrowser(url: string): Promise<File> {
       youtubeVideoCodec: 'h264',
       youtubeVideoContainer: 'mp4',
       alwaysProxy: false,
-      disableMetadata: true,
+      disableMetadata: false,
     }),
   })
   if (!res.ok) throw new Error('Não foi possível preparar o download.')
   const json = await res.json()
-  if (json?.status === 'error') throw new Error('Este vídeo não está disponível para download.')
-
+  if (json?.status === 'error') {
+    throw new Error(json?.text || 'Este vídeo não está disponível para download.')
+  }
   let mediaUrl = ''
   if (json?.status === 'tunnel' || json?.status === 'redirect') mediaUrl = json.url || ''
   else if (json?.status === 'local-processing' && Array.isArray(json.tunnel)) mediaUrl = json.tunnel[0] || ''
@@ -68,12 +68,17 @@ async function downloadInBrowser(url: string): Promise<File> {
     mediaUrl = json.picker.find((item: any) => item?.type === 'video' && item?.url)?.url || ''
   }
   if (!/^https?:\/\//i.test(mediaUrl)) throw new Error('Este vídeo não está disponível para download.')
+  return mediaUrl
+}
 
-  const fileRes = await fetch(mediaUrl, { signal: AbortSignal.timeout(120_000) })
-  if (!fileRes.ok) throw new Error('Não foi possível baixar o vídeo.')
-  const blob = await fileRes.blob()
-  if (blob.size < 1024) throw new Error('O arquivo baixado veio vazio.')
-  return new File([blob], 'video.mp4', { type: blob.type || 'video/mp4' })
+function triggerDownload(mediaUrl: string) {
+  const a = document.createElement('a')
+  a.href = mediaUrl
+  a.target = '_blank'
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
 }
 
 const FIND_PRESETS = [
@@ -252,7 +257,8 @@ export function VideosPage() {
   const [found, setFound] = useState<FoundVideo[] | null>(null)
   const [findBusy, setFindBusy] = useState(false)
   const [findError, setFindError] = useState('')
-  const [addingVideo, setAddingVideo] = useState('')
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [downloadingIds, setDownloadingIds] = useState<string[]>([])
 
   useEffect(() => {
     let alive = true
@@ -342,38 +348,34 @@ export function VideosPage() {
     }
   }
 
-  const analyzeFound = async (item: FoundVideo) => {
-    setAddingVideo(item.id)
-    try {
-      let file: File | null = null
+  const toggleSelected = (id: string) => {
+    setSelectedIds((prev) => prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id])
+  }
+
+  const downloadFound = async (items: FoundVideo[]) => {
+    if (!items.length) return
+    setFindError('')
+    setDownloadingIds(items.map((item) => item.id))
+    let failed = 0
+    for (const item of items) {
       try {
-        file = await downloadInBrowser(item.url)
+        const mediaUrl = await requestCobaltDownload(item.url)
+        triggerDownload(mediaUrl)
       } catch {
-        file = null
+        failed += 1
       }
-      if (file) {
-        const clean = `${item.channel || 'YouTube'} - ${item.title}`.replace(/[\\/:*?"<>|]/g, '').slice(0, 140)
-        const { source } = await api('/api/sources/upload', {
-          method: 'POST',
-          body: JSON.stringify({ name: `${clean}.mp4`, size: file.size, type: 'video/mp4' }),
-        })
-        await upload(`media/src/${source.id}.mp4`, file, {
-          access: 'private',
-          handleUploadUrl: '/api/sources/upload-token',
-          clientPayload: JSON.stringify({ sourceId: source.id }),
-          contentType: 'video/mp4',
-          multipart: file.size >= 100 * 1024 * 1024,
-        })
-      } else {
-        // Se o navegador não conseguir, mantém o fluxo antigo no servidor.
-        await api('/api/sources', { method: 'POST', body: JSON.stringify({ url: item.url }) })
-      }
-      await refresh()
-    } catch (e: any) {
-      window.alert(e?.message || 'Não foi possível adicionar este vídeo.')
-    } finally {
-      setAddingVideo('')
+      // A instância pública limita a 20 pedidos por minuto.
+      await new Promise((resolve) => setTimeout(resolve, 500))
     }
+    setDownloadingIds([])
+    if (failed) {
+      setFindError(`${failed} vídeo(s) não puderam ser baixados. Tente de novo em instantes.`)
+    }
+  }
+
+  const downloadSelected = () => {
+    const items = (found || []).filter((item) => selectedIds.includes(item.id))
+    void downloadFound(items)
   }
 
   const openStudio = (source: Source) => {
@@ -449,7 +451,7 @@ export function VideosPage() {
         <div className="finder-head">
           <div>
             <b>Achar vídeos</b>
-            <em>Enquadros, flagrantes e temas virais. Escolha um vídeo para o estúdio analisar.</em>
+            <em>Escolha um ou vários vídeos, baixe e envie pelo botão “Enviar vídeo”.</em>
           </div>
           <span className="stage-pill">YouTube · gravados</span>
         </div>
@@ -483,30 +485,53 @@ export function VideosPage() {
         {found && found.length === 0 && !findError && (
           <p className="finder-empty">Nenhum vídeo gravado encontrado para esse termo.</p>
         )}
-        {found && found.length > 0 && (
-          <div className="finder-results">
-            {found.map((item) => (
-              <article className="finder-item" key={item.id}>
-                <img className="finder-thumb" src={item.thumb} alt="" loading="lazy" />
-                <div className="finder-meta">
-                  <b title={item.title}>{item.title}</b>
-                  <em>
-                    {item.channel}
-                    {item.duration ? ` · ${fmtTime(item.duration)}` : ''}
-                    {item.views ? ` · ${fmtViews(item.views)} visualizações` : ''}
-                  </em>
-                </div>
-                <button
-                  className="btn btn-soft btn-sm finder-add"
-                  disabled={addingVideo === item.id}
-                  onClick={() => { void analyzeFound(item) }}
-                >
-                  {addingVideo === item.id ? <Logo size={13} className="btn-spin" /> : <Plus size={14} />}
-                  {addingVideo === item.id ? 'Adicionando…' : 'Analisar'}
-                </button>
-              </article>
-            ))}
+        {selectedIds.length > 0 && (
+          <div className="finder-bulk">
+            <span className="mono">{selectedIds.length} selecionado(s)</span>
+            <button className="btn btn-soft btn-sm" onClick={() => setSelectedIds([])} disabled={downloadingIds.length > 0}>
+              Limpar
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={downloadSelected} disabled={downloadingIds.length > 0}>
+              {downloadingIds.length > 0 ? <Logo size={13} className="btn-spin" /> : <Download size={14} />}
+              {downloadingIds.length > 0 ? 'Baixando…' : 'Baixar selecionados'}
+            </button>
           </div>
+        )}
+        {found && found.length > 0 && (
+          <>
+            <div className="finder-results">
+              {found.map((item) => (
+                <article className="finder-item" key={item.id}>
+                  <label className="finder-check">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(item.id)}
+                      onChange={() => toggleSelected(item.id)}
+                      aria-label={`Selecionar ${item.title}`}
+                    />
+                  </label>
+                  <img className="finder-thumb" src={item.thumb} alt="" loading="lazy" />
+                  <div className="finder-meta">
+                    <b title={item.title}>{item.title}</b>
+                    <em>
+                      {item.channel}
+                      {item.duration ? ` · ${fmtTime(item.duration)}` : ''}
+                      {item.views ? ` · ${fmtViews(item.views)} visualizações` : ''}
+                    </em>
+                  </div>
+                  <button
+                    className="btn btn-soft btn-sm finder-add"
+                    disabled={downloadingIds.includes(item.id)}
+                    onClick={() => { void downloadFound([item]) }}
+                  >
+                    {downloadingIds.includes(item.id) ? <Logo size={13} className="btn-spin" /> : <Download size={14} />}
+                    {downloadingIds.includes(item.id) ? 'Baixando…' : 'Baixar'}
+                  </button>
+                </article>
+              ))}
+            </div>
+            <p className="finder-empty">Os arquivos baixam no seu navegador. Depois use “Enviar vídeo” para o estúdio analisar.</p>
+          </>
         )}
       </section>
 
