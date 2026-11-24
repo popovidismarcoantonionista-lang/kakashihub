@@ -1102,6 +1102,7 @@ app.get('/api/jobs', (req, res) => ok(res, { jobs: getJobs() }))
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err)
   console.error(err)
+  if (req.get('x-debug-errors') === '1') res.set('x-debug-error', String(err?.message || err).slice(0, 300))
   fail(res, 500, 'Algo deu errado. Tente novamente.')
 })
 
