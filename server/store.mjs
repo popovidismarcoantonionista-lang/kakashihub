@@ -570,13 +570,28 @@ export function closeOrphanWork() {
       if (context) queueJobWrite(context, job)
     }
   }
-  for (const source of getState().sources) {
+  const mediaFileExists = (rel) => {
+    if (!rel) return false
+    const file = path.join(DATA, String(rel).replace(/^\/+/, ''))
+    try { return fs.existsSync(file) && fs.statSync(file).size > 1024 } catch { return false }
+  }
+  const state = getState()
+  for (const source of state.sources) {
     if (source.status === 'ao-vivo') {
       source.status = 'pronto'
       source.liveStopRequested = true
-      save()
+    }
+    if (source.hasMedia && !source.mediaKey
+      && !mediaFileExists(`media/src/${source.id}.mp4`)
+      && !mediaFileExists(`media/live/${source.id}.mp4`)) {
+      source.hasMedia = false
     }
   }
+  for (const clip of state.clips) {
+    if (clip.renderedUrl && !clip.mediaKey && !mediaFileExists(clip.renderedUrl)) clip.renderedUrl = undefined
+    if (clip.media && !clip.mediaKey && !mediaFileExists(clip.media)) clip.media = undefined
+  }
+  save()
 }
 
 export function addActivity(kind, text) {

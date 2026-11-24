@@ -387,15 +387,23 @@ export function EstudioPage() {
             </div>
 
             <div className="render-box">
-              {source.hasMedia || clip.renderedUrl ? (
+              {source.hasMedia || clip.renderedUrl || clip.media ? (
                 <>
-                  <button className="btn btn-primary w-full" onClick={render} disabled={Boolean(renderJob)}>
+                  <button
+                    className="btn btn-primary w-full"
+                    onClick={render}
+                    disabled={Boolean(renderJob) || !(source.hasMedia || clip.renderedUrl)}
+                  >
                     {renderJob ? <span className="spinner" /> : <Play size={14} fill="currentColor" />}
                     {renderJob ? 'Preparando…' : clip.renderedUrl ? 'Atualizar vídeo' : 'Gerar corte'}
                   </button>
-                  {clip.renderedUrl && (
-                    <a className="btn btn-ghost w-full" href={clip.renderedUrl} download={`${clip.id}.mp4`}>
-                      <Download size={14} /> Salvar corte final
+                  {(clip.renderedUrl || clip.media) && (
+                    <a
+                      className="btn btn-ghost w-full"
+                      href={clip.renderedUrl || clip.media}
+                      download={`${clip.id}.mp4`}
+                    >
+                      <Download size={14} /> {clip.renderedUrl ? 'Salvar corte final' : 'Baixar corte'}
                     </a>
                   )}
                 </>

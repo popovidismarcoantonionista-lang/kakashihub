@@ -34,9 +34,11 @@ const YTDLP_BIN = process.env.YTDLP_BIN || path.join(APP_ROOT, '.bin', 'yt-dlp')
 // Render free tem ~512 MB de RAM. Renderizar 4K vertical com split + blur +
 // legendas estoura o processo e derruba o estado. Por padrão, limitamos a 720p
 // quando estamos no Render; use FUGA_LIGHT_RENDER=false para forçar o perfil cheio.
+const ON_RENDER = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID || process.env.RENDER_GIT_COMMIT
+  || Object.keys(process.env).some((key) => key.startsWith('RENDER_')))
 const LIGHT_RENDER = process.env.FUGA_LIGHT_RENDER
   ? !/^(0|false|no)$/i.test(String(process.env.FUGA_LIGHT_RENDER).trim())
-  : Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID)
+  : ON_RENDER
 
 // Arquivos recebidos por ZIP podem perder o bit de execução. Corrija isso
 // antes do primeiro spawn para evitar que toda live falhe ainda na sondagem.
