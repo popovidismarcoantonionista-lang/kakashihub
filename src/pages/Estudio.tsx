@@ -84,12 +84,16 @@ export function EstudioPage() {
   useEffect(() => {
     if (!clip || !source || autoCamDone.current.has(clip.id)) return
     autoCamDone.current.add(clip.id)
+    // Nunca sobrescreve um ajuste manual (ou um ajuste já detectado). O auto
+    // só roda uma vez, para clipes que ainda não têm caixa salva.
+    if (clip.cam || source?.cam) return
     const call = apiRef.current
     void detectCamBoxAuto('clip', clip.id, call).then(async (cam) => {
       if (!cam) return
       setCamDraft(cam)
+      // Salva só neste clipe: gravar na fonte espalharia a caixa para os
+      // outros cortes e faria ela "andar" sozinha em cada reprocessamento.
       await call(`/api/clips/${clip.id}`, { method: 'PATCH', body: JSON.stringify({ cam }) })
-      await call(`/api/sources/${source.id}`, { method: 'PATCH', body: JSON.stringify({ cam }) })
     }).catch(() => {})
   }, [clip?.id, source?.id])
 
@@ -145,7 +149,6 @@ export function EstudioPage() {
       if (cam) {
         setCamDraft(cam)
         await api(`/api/clips/${clip.id}`, { method: 'PATCH', body: JSON.stringify({ cam }) })
-        if (source) await api(`/api/sources/${source.id}`, { method: 'PATCH', body: JSON.stringify({ cam }) })
       }
     } catch {} finally {
       setCamBusy(false)
