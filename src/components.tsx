@@ -69,6 +69,7 @@ export function PlayerModal({
 
 export function ClipPlayer({ clip, source }: { clip: Clip; source?: Source }) {
   const ref = useRef<HTMLVideoElement>(null)
+  const replaying = useRef(false)
   const [failed, setFailed] = useState(false)
   const live = Boolean(clip.media)
   const raw = !clip.renderedUrl && !live && source?.hasMedia ? `/media/src/${source.id}.mp4` : null
@@ -94,7 +95,20 @@ export function ClipPlayer({ clip, source }: { clip: Clip; source?: Source }) {
       autoPlay
       playsInline
       onLoadedMetadata={() => { const v = ref.current; if (v && raw) v.currentTime = clip.start }}
-      onTimeUpdate={() => { const v = ref.current; if (v && raw && v.currentTime >= clip.end) v.pause() }}
+      onPlay={() => {
+        const v = ref.current
+        // O arquivo é maior que o corte: se o usuário deu play com o cursor
+        // no fim do trecho, voltamos ao início em vez de pausar de novo.
+        if (v && raw && v.currentTime >= clip.end - 0.05) {
+          replaying.current = true
+          try { v.currentTime = clip.start } catch {}
+        }
+      }}
+      onSeeked={() => { replaying.current = false }}
+      onTimeUpdate={() => {
+        const v = ref.current
+        if (v && raw && !replaying.current && v.currentTime >= clip.end) v.pause()
+      }}
       onError={() => setFailed(true)}
     />
   )
