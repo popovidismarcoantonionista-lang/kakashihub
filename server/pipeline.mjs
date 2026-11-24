@@ -2738,8 +2738,8 @@ export async function captureLiveWindow(sourceId) {
   if (source.liveStopRequested) return finishLiveStep(source, job)
   if (!source.url) return finishLiveStep(source, job, LIVE_TEXT.failed)
   if (heavyWorkActive()) {
-    if (job.step !== 'Ao vivo · pausado durante o render') {
-      updateJob(job, { progress: 50, step: 'Ao vivo · pausado durante o render' })
+    if (job.step !== 'Ao vivo · pausado durante o processamento') {
+      updateJob(job, { progress: 50, step: 'Ao vivo · pausado durante o processamento' })
     }
     return { continue: true }
   }

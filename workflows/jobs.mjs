@@ -7,7 +7,7 @@ import {
   sourceBecameLiveStep,
   startLiveWorkflowStep,
 } from './steps.mjs'
-import { beginHeavyWork, endHeavyWork } from '../server/work-gate.mjs'
+import { beginHeavyWork, endHeavyWork, waitForLiveRecording } from '../server/work-gate.mjs'
 
 // `use workflow` / `sleep` do SDK exigem um build Nitro/Next. Aqui as funções
 // são orquestrações comuns executadas por server/background.mjs no mesmo
@@ -15,9 +15,14 @@ import { beginHeavyWork, endHeavyWork } from '../server/work-gate.mjs'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export async function processJobWorkflow(kind, payload) {
-  // Render/trim/compilação não podem concorrer com a gravação da live no Render free.
+  // Render/trim/compilação e análise de vídeo não podem concorrer com a gravação
+  // da live no Render free: era isso que derrubava o ingest no meio do corte.
   const heavy = kind === 'render' || kind === 'trim' || kind === 'compilation'
-  if (heavy) beginHeavyWork()
+    || kind === 'ingest' || kind === 'analyze'
+  if (heavy) {
+    beginHeavyWork()
+    await waitForLiveRecording()
+  }
   try {
     const result = await processJobStep(kind, payload)
     if (kind === 'analyze' && await sourceBecameLiveStep(payload.sourceId)) {

@@ -119,7 +119,9 @@ export function Preview({ clip, source, compact = false }: { clip: Clip; source?
       ? { x: 0.71, y: 0.26, w: 0.27, h: 0.4 }
       : { x: 0.68, y: 0.02, w: 0.3, h: 0.36 }))
     : null
-  const split = Boolean(cam && src)
+  // O vídeo renderizado já vem com o split GTA queimado. Dividir de novo
+  // mostraria o quadro inteiro em cada metade (3 telas na prévia).
+  const split = Boolean(cam && src && !rendered)
 
   useEffect(() => {
     setElapsed(0)

@@ -547,7 +547,10 @@ export function VideosPage() {
                   {(processing || source.status === 'ao-vivo') && (
                     <div className="src-progress">
                       <div className="sp-head">
-                        <span className="mono">{source.status === 'ao-vivo' ? 'Acompanhando a transmissão' : jobLabel(job?.kind)}</span>
+                        <span className="sp-title">
+                          <Logo size={12} className="badge-spin" />
+                          <span className="mono">{source.status === 'ao-vivo' ? 'Acompanhando a transmissão' : jobLabel(job?.kind)}</span>
+                        </span>
                         {source.status !== 'ao-vivo' && <span className="mono">{source.progress}%</span>}
                       </div>
                       {source.status === 'ao-vivo'
