@@ -106,7 +106,22 @@ export function EstudioPage() {
         method: 'PATCH',
         body: JSON.stringify({ cam: camDraft, framing: 'cam' }),
       })
-      await api(`/api/sources/${source?.id}`, {
+      setSavedFlash(true)
+      setTimeout(() => setSavedFlash(false), 1400)
+    } catch {} finally {
+      setCamBusy(false)
+    }
+  }
+
+  const applyCamAll = async () => {
+    if (!clip || !source) return
+    setCamBusy(true)
+    try {
+      await api(`/api/clips/${clip.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ cam: camDraft, framing: 'cam' }),
+      })
+      await api(`/api/sources/${source.id}`, {
         method: 'PATCH',
         body: JSON.stringify({ cam: camDraft, applyCam: true }),
       })
@@ -286,9 +301,14 @@ export function EstudioPage() {
                   onChange={setCamDraft}
                 />
                 <span className="cam-hint">Arraste a caixa para mover e os cantos para redimensionar.</span>
-                <button type="button" className="btn btn-primary btn-sm w-full" disabled={camBusy} onClick={applyCamManual}>
-                  Aplicar caixa ao corte
-                </button>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button type="button" className="btn btn-soft btn-sm" style={{ flex: 1 }} disabled={camBusy} onClick={applyCamManual}>
+                    Aplicar neste corte
+                  </button>
+                  <button type="button" className="btn btn-primary btn-sm" style={{ flex: 1 }} disabled={camBusy} onClick={applyCamAll}>
+                    Aplicar a todos os clipes
+                  </button>
+                </div>
               </div>
             )}
 
