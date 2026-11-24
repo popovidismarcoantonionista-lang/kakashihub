@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import app from './index.mjs'
+import { withStore, closeOrphanWork } from './store.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DIST = path.join(ROOT, 'dist')
@@ -17,6 +18,8 @@ if (serveFrontend && fs.existsSync(DIST)) {
     res.sendFile(path.join(DIST, 'index.html'))
   })
 }
+
+await withStore(() => closeOrphanWork())
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`[server] Kakashi Hub ouvindo em 0.0.0.0:${port}`)

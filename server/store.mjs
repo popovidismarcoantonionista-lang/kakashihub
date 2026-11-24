@@ -555,6 +555,30 @@ export function finishJob(job, error) {
   if (context) queueJobWrite(context, job)
 }
 
+// Um deploy/restart mata os processos em andamento. Sem isso, jobs ficam
+// "running" para sempre e o front continua atualizando em alta frequência.
+export function closeOrphanWork() {
+  const now = new Date().toISOString()
+  const context = contextStorage.getStore()
+  for (const job of stateScope().jobs) {
+    if (job.status === 'running') {
+      Object.assign(job, {
+        status: 'erro',
+        error: 'Não foi possível concluir. Tente novamente.',
+        finishedAt: now,
+      })
+      if (context) queueJobWrite(context, job)
+    }
+  }
+  for (const source of getState().sources) {
+    if (source.status === 'ao-vivo') {
+      source.status = 'pronto'
+      source.liveStopRequested = true
+      save()
+    }
+  }
+}
+
 export function addActivity(kind, text) {
   const state = getState()
   state.activity.unshift({ id: `act-${Date.now()}`, at: new Date().toISOString(), kind, text })
