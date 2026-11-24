@@ -455,7 +455,7 @@ app.patch('/api/sources/:id', (req, res) => {
   }
   if (body.cam) {
     const w = clamp(body.cam.w, 0.08, 1, 0.3)
-    const h = clamp(body.cam.h, 0.08, 1, 0.42)
+    const h = clamp(body.cam.h, 0.08, 1, 0.95)
     source.cam = {
       w: +w.toFixed(4),
       h: +h.toFixed(4),
@@ -858,7 +858,7 @@ app.patch('/api/clips/:id', (req, res) => {
       return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d
     }
     const w = num(req.body.cam.w, 0.08, 1, 0.3)
-    const h = num(req.body.cam.h, 0.08, 1, 0.42)
+    const h = num(req.body.cam.h, 0.08, 1, 0.95)
     clip.cam = {
       w: +w.toFixed(4),
       h: +h.toFixed(4),

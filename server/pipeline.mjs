@@ -1165,6 +1165,84 @@ async function downloadViaInvidious(url, destPath) {
   throw new Error('invidious-no-stream')
 }
 
+const YT_PLAYER_KEY = (process.env.YT_PLAYER_KEY || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8').trim()
+const YT_PLAYER_VERSION = (process.env.YT_PLAYER_CLIENT_VERSION || '21.26.364').trim()
+const YT_PLAYER_UA = `com.google.android.youtube/${YT_PLAYER_VERSION} (Linux; U; Android 11) gzip`
+
+/**
+ * Rota direta ao player do YouTube com o cliente ANDROID. Em IP de datacenter
+ * ela devolve o progressivo itag 18 com URL assinada, enquanto yt-dlp/Cobalt/
+ * Invidious caem no "Sign in to confirm you're not a bot". Nenhuma URL bruta
+ * sai do servidor: só o arquivo baixado entra no storage.
+ */
+async function downloadViaPlayer(url, destPath) {
+  const id = videoIdFromUrl(url)
+  if (!id) throw new Error('player-sem-id')
+  const res = await fetch(
+    `https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(YT_PLAYER_KEY)}&prettyPrint=false`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        Origin: 'https://www.youtube.com',
+        'User-Agent': YT_PLAYER_UA,
+        'X-Youtube-Client-Name': '3',
+        'X-Youtube-Client-Version': YT_PLAYER_VERSION,
+      },
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: 'ANDROID',
+            clientVersion: YT_PLAYER_VERSION,
+            androidSdkVersion: 30,
+            osName: 'Android',
+            osVersion: '11',
+            userAgent: YT_PLAYER_UA,
+            hl: 'pt',
+            gl: 'BR',
+          },
+        },
+        videoId: id,
+        contentCheckOk: true,
+        racyCheckOk: true,
+      }),
+      signal: AbortSignal.timeout(45000),
+    },
+  )
+  if (!res.ok) throw new Error(`player-http-${res.status}`)
+  const json = await res.json()
+  const status = json?.playabilityStatus?.status
+  if (status !== 'OK') throw new Error(`player-${status || 'sem-status'}`)
+  const formats = [
+    ...(Array.isArray(json?.streamingData?.formats) ? json.streamingData.formats : []),
+    ...(Array.isArray(json?.streamingData?.adaptiveFormats) ? json.streamingData.adaptiveFormats : []),
+  ].filter((f) => f?.url && !f.signatureCipher && /^video\//.test(String(f.mimeType || '')))
+  if (!formats.length) throw new Error('player-sem-url')
+  const height = (f) => Number(f.height || String(f.qualityLabel || '').match(/(\d+)p/)?.[1] || 0)
+  const hasAudio = (f) => /audio/.test(String(f.mimeType || ''))
+  const progressive = formats.filter(hasAudio).sort((a, b) => height(b) - height(a))[0]
+  if (progressive) {
+    await downloadHttp(progressive.url, destPath)
+    return
+  }
+  const video = formats.filter((f) => !hasAudio(f)).sort((a, b) => height(b) - height(a))[0]
+  const audio = (Array.isArray(json?.streamingData?.adaptiveFormats) ? json.streamingData.adaptiveFormats : [])
+    .find((f) => f?.url && /^audio\//.test(String(f.mimeType || '')))
+  if (!video || !audio) throw new Error('player-sem-progressivo')
+  const dir = fs.mkdtempSync(path.join(DATA, 'player-'))
+  const vFile = path.join(dir, 'video.mp4')
+  const aFile = path.join(dir, 'audio.m4a')
+  try {
+    await downloadHttp(video.url, vFile)
+    await downloadHttp(audio.url, aFile)
+    await run(FFMPEG_BIN, ['-y', '-hide_banner', '-loglevel', 'error', '-i', vFile, '-i', aFile, '-c', 'copy', '-shortest', destPath], { timeout: 1000 * 60 * 20 })
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  if (!fs.existsSync(destPath) || fs.statSync(destPath).size < 1024) throw new Error('player-vazio')
+}
+
 async function probeMeta(url, job) {
   // No Render/datacenter o yt-dlp demora ~3 min e ainda cai no bloqueio do YouTube.
   // Quando há chave Data API v3, ela resolve título/live/duração em ~300 ms.
@@ -1246,6 +1324,7 @@ export async function runIngest(sourceId, url, opts = {}) {
     updateJob(job, { progress: 4, step: localFile ? 'Lendo o vídeo enviado' : 'Abrindo o link e lendo a fonte' })
     let viaService = DL_ONLY && (canUseService() || hasCobalt())
     let viaInvidious = false
+    let viaPlayer = false
     const videoId = videoIdFromUrl(url || '')
     let meta = { ...metaHint }
     const videoPath = localFile || path.join(SRC_MEDIA, `${sourceId}.mp4`)
@@ -1374,12 +1453,22 @@ export async function runIngest(sourceId, url, opts = {}) {
         } catch (err) {
           dlError = err
           attempts.push(`yt-dlp:${String(err?.message || err).slice(0, 300)}`)
-          if (!canMirror(err)) {
+          // Tentativa direta ao player ANTES dos espelhos: no Render é a única
+          // rota que já devolveu mídia sem cookies.
+          try {
+            await downloadViaPlayer(url, videoPath)
+            viaPlayer = true
+            attempts.push('player:android-ok')
+          } catch (playerErr) {
+            attempts.push(`player:${String(playerErr?.message || playerErr).slice(0, 160)}`)
+          }
+          if (viaPlayer) {
+            // arquivo já está no destino; pula Cobalt/Invidious/serviço.
+          } else if (!canMirror(err)) {
             const error = new Error(friendlyError(err))
             error.debug = attempts.join(' | ')
             throw error
-          }
-          if (hasInvidious()) {
+          } else if (hasInvidious()) {
             try {
               console.log('[download:invidious] yt-dlp bloqueado; tentando espelho público')
               updateJob(job, { step: 'Baixando o vídeo' })
@@ -1390,7 +1479,7 @@ export async function runIngest(sourceId, url, opts = {}) {
               dlError = invErr
             }
           }
-          if (!viaInvidious) {
+          if (!viaPlayer && !viaInvidious) {
             if (!(canUseService() || hasCobalt())) throw new Error(friendlyError(dlError))
             viaService = true
           }
@@ -1877,8 +1966,15 @@ export async function runRender(clipId, opts = {}) {
       const ch = Math.max(2, Math.round(cam.h * height))
       const cx = Math.round(Math.min(width - cw, Math.max(0, cam.x * width)))
       const cy = Math.round(Math.min(height - ch, Math.max(0, cam.y * height)))
-      filterComplex = '[0:v]split=2[camf][gamef];'
-        + `[camf]crop=${cw}:${ch}:${cx}:${cy},scale=${outW}:${bandH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${bandH},setsar=1[ct];`
+      // A caixa escolhida no Estúdio é a fonte da verdade: mostramos ela inteira
+      // na faixa superior. O fundo usa a própria caixa desfocada para preencher
+      // o 9:16 sem black bars — o antigo `increase,crop` cortava as laterais e
+      // fazia a webcam parecer ter "andado" para fora do lugar marcado.
+      filterComplex = '[0:v]split=2[camsrc][gamef];'
+        + `[camsrc]crop=${cw}:${ch}:${cx}:${cy},split=2[cambg][camfg];`
+        + `[cambg]scale=${outW}:${bandH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${bandH},gblur=sigma=${blur},setsar=1[cambgf];`
+        + `[camfg]scale=${outW}:${bandH}:flags=lanczos:force_original_aspect_ratio=decrease,setsar=1[camfgf];`
+        + `[cambgf][camfgf]overlay=(W-w)/2:(H-h)/2,setsar=1[ct];`
         + `[gamef]scale=${outW}:${bandH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${bandH},setsar=1[gt];`
         + `[ct][gt]vstack=2,setsar=1[vout]`
     } else if (clip.framing === 'preencher') {
@@ -2506,6 +2602,26 @@ async function probeLive(url) {
   return inv.is_live ? liveFromMirror(inv) : null
 }
 
+/** Confirma pela Data API se aquela live do YouTube ainda está no ar.
+ *  Só roda para fontes marcadas como live e no máximo a cada 2 minutos. */
+async function refreshYouTubeLiveConfirmation(source) {
+  if (!YT_API_KEY || !source || !/(?:youtube\.com|youtu\.be)/i.test(source.url || '')) return null
+  if (Date.now() - (Number(source.liveApiCheckedAt) || 0) < 2 * 60 * 1000) {
+    return typeof source.liveApiLive === 'boolean' ? source.liveApiLive : null
+  }
+  const id = source.liveId || videoIdFromUrl(source.url)
+  if (!id) return null
+  try {
+    const api = await ytApiMeta(id)
+    source.liveApiLive = Boolean(api?.is_live)
+    source.liveApiCheckedAt = Date.now()
+    save()
+    return source.liveApiLive
+  } catch {
+    return typeof source.liveApiLive === 'boolean' ? source.liveApiLive : null
+  }
+}
+
 function liveStreamCacheKey(url) {
   const id = youtubeVideoId(url) || String(url || '')
   return id
@@ -3015,13 +3131,34 @@ export async function captureLiveWindow(sourceId) {
           apiAnswered = Boolean(meta)
         }
       }
-      if (!meta && !apiAnswered) {
-        meta = await probeLive(url)
-        metaSource = meta ? 'probe' : ''
+      // Se a Data API disser "não ao vivo" mas o usuário colou uma live, ainda
+      // vale tentar o probe: a API costuma atrasar alguns segundos no início.
+      let probeError = ''
+      if (!meta && (!apiAnswered || /(?:youtube\.com|youtu\.be)/i.test(url))) {
+        try {
+          meta = await probeLive(url)
+          metaSource = meta ? 'probe' : ''
+        } catch (error) {
+          probeError = liveErrorText(error, 200)
+        }
       }
       source = findSource(sourceId)
       if (!source) return { continue: false, status: 'removed' }
-      if (!meta) return finishLiveStep(source, job, LIVE_TEXT.offline)
+      if (!meta) {
+        // A Data API pode estar atrasada no início da live. Se o probe também
+        // falhou, tenta de novo nas próximas janelas em vez de encerrar.
+        if (probeError && apiAnswered && /(?:youtube\.com|youtu\.be)/i.test(url)) {
+          source.liveProbeMisses = (Number(source.liveProbeMisses) || 0) + 1
+          if (source.liveProbeMisses < 6) {
+            source.liveLastError = `probe: ${probeError}`
+            updateJob(job, { step: 'Procurando a transmissão' })
+            save()
+            return { continue: true }
+          }
+        }
+        return finishLiveStep(source, job, LIVE_TEXT.offline)
+      }
+      source.liveProbeMisses = 0
 
       const priorDuration = Math.max(0, Number(source.duration) || 0)
       const currentClips = Array.isArray(getState().clips) ? getState().clips : []
@@ -3046,6 +3183,11 @@ export async function captureLiveWindow(sourceId) {
       source.liveLastEnd = priorDuration > 0 ? priorDuration : -999
       source.liveReady = true
       source.liveMetadataSource = metaSource || 'probe'
+      // Só consideramos "confirmada pela API" quando a Data API realmente
+      // respondeu is_live; isso evita encerrar uma live só porque o resolvedor
+      // de mídia falhou três vezes seguidas.
+      source.liveApiLive = /^youtube-data-api/.test(metaSource || '')
+      source.liveApiCheckedAt = Date.now()
       save()
       updateJob(job, { progress: 20, step: 'Ao vivo · acompanhando a transmissão' })
       addActivity('agent', `Monitorando a live "${source.title}"`)
@@ -3073,10 +3215,13 @@ export async function captureLiveWindow(sourceId) {
       return { continue: true }
     }
 
-    const apiConfirmed = () => Boolean(
-      liveCapabilities().youtubeDataApi
-      && (source?.platform === 'youtube' || /youtube/i.test(source?.url || ''))
-    )
+    const apiConfirmed = () => source?.liveApiLive === true
+    // Se a API confirmou a live, checamos de tempos em tempos se ela realmente
+    // acabou. Enquanto ela disser que está no ar, falha de stream NÃO encerra.
+    if (source.liveApiLive === true) {
+      const stillLive = await refreshYouTubeLiveConfirmation(source)
+      if (stillLive === false) return finishLiveStep(source, job, LIVE_TEXT.gone)
+    }
     let streamError = ''
     const parts = await liveStreamParts(source.url).catch((error) => {
       streamError = liveErrorText(error)
@@ -3087,7 +3232,16 @@ export async function captureLiveWindow(sourceId) {
       source.liveMisses = (Number(source.liveMisses) || 0) + 1
       source.liveLastError = `stream: ${streamError || 'nenhuma URL de mídia retornada'}`
       if (source.liveMisses >= 3) {
-        return finishLiveStep(source, job, apiConfirmed() ? LIVE_TEXT.streamBlocked : LIVE_TEXT.noStream)
+        if (apiConfirmed()) {
+          // YouTube confirma que a live continua no ar: o problema é o
+          // resolvedor/datacenter. Mantém o monitoramento e só avisa internamente.
+          source.liveMisses = 2
+          source.liveLastError = `stream: ${streamError || 'sem mídia'} · live confirmada pela API`
+          updateJob(job, { step: 'Reconectando na transmissão' })
+          save()
+          return { continue: true }
+        }
+        return finishLiveStep(source, job, LIVE_TEXT.noStream)
       }
       updateJob(job, { step: 'Reconectando na transmissão' })
       save()
