@@ -1927,13 +1927,15 @@ export async function runCompilation(compilationId, opts = {}) {
       const vf = 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=30,setsar=1'
       await run(FFMPEG_BIN, [
         '-y', '-hide_banner', '-loglevel', 'error',
+        ...(LIGHT_RENDER ? ['-threads', '1', '-filter_threads', '1'] : []),
         '-ss', String(from), '-t', String(dur), '-i', src,
         '-vf', vf,
-        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
+        '-c:v', 'libx264', '-preset', LIGHT_RENDER ? 'ultrafast' : 'veryfast',
+        '-crf', LIGHT_RENDER ? '26' : '21', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', LIGHT_RENDER ? '96k' : '160k', '-ar', '48000', '-ac', '2',
         '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',
         path.basename(seg),
-      ], { cwd: work, timeout: 1000 * 60 * 10 })
+      ], { cwd: work, timeout: 1000 * 60 * (LIGHT_RENDER ? 5 : 10) })
       parts.push(seg)
       total += dur
     }
@@ -1943,40 +1945,53 @@ export async function runCompilation(compilationId, opts = {}) {
     comp.progress = 92
     save()
 
-    const TD = 0.45
-    const durs = []
-    for (const p of parts) {
-      try {
-        durs.push(Math.max(TD + 0.2, (await probe(p)).duration || 0))
-      } catch {
-        durs.push(3.5)
-      }
-    }
-    const inputs = parts.flatMap((p) => ['-i', p])
-    const graph = []
-    let vIn = '[0:v]'
-    let aIn = '[0:a]'
-    let offset = 0
-    for (let i = 1; i < parts.length; i++) {
-      offset += durs[i - 1] - TD
-      const vOut = `[v${i}]`
-      const aOut = `[a${i}]`
-      graph.push(`${vIn}[${i}:v]xfade=transition=hblur:duration=${TD}:offset=${offset.toFixed(3)}${vOut}`)
-      graph.push(`${aIn}[${i}:a]acrossfade=d=${TD}:c1=tri:c2=tri${aOut}`)
-      vIn = vOut
-      aIn = aOut
-    }
     const out = path.join(EXPORTS, `${compilationId}.mp4`)
+    let joinArgs
+    if (LIGHT_RENDER) {
+      // xfade mantém todos os blocos decodificados ao mesmo tempo; com muitos
+      // cortes isso estoura a RAM do Render free. Concat por stream copy é leve.
+      const listFile = path.join(work, 'parts.txt')
+      fs.writeFileSync(listFile, parts.map((p) => `file '${path.basename(p)}'`).join('\n'))
+      joinArgs = ['-f', 'concat', '-safe', '0', '-i', path.basename(listFile), '-c', 'copy', '-avoid_negative_ts', 'make_zero']
+    } else {
+      const TD = 0.45
+      const durs = []
+      for (const p of parts) {
+        try {
+          durs.push(Math.max(TD + 0.2, (await probe(p)).duration || 0))
+        } catch {
+          durs.push(3.5)
+        }
+      }
+      const inputs = parts.flatMap((p) => ['-i', p])
+      const graph = []
+      let vIn = '[0:v]'
+      let aIn = '[0:a]'
+      let offset = 0
+      for (let i = 1; i < parts.length; i++) {
+        offset += durs[i - 1] - TD
+        const vOut = `[v${i}]`
+        const aOut = `[a${i}]`
+        graph.push(`${vIn}[${i}:v]xfade=transition=hblur:duration=${TD}:offset=${offset.toFixed(3)}${vOut}`)
+        graph.push(`${aIn}[${i}:a]acrossfade=d=${TD}:c1=tri:c2=tri${aOut}`)
+        vIn = vOut
+        aIn = aOut
+      }
+      joinArgs = [
+        ...inputs,
+        '-filter_complex', graph.join(';'),
+        '-map', vIn, '-map', aIn,
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
+      ]
+    }
     await run(FFMPEG_BIN, [
       '-y', '-hide_banner', '-loglevel', 'error',
-      ...inputs,
-      '-filter_complex', graph.join(';'),
-      '-map', vIn, '-map', aIn,
-      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
-      '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
+      ...(LIGHT_RENDER ? ['-threads', '1'] : []),
+      ...joinArgs,
       '-movflags', '+faststart',
       out,
-    ], { cwd: work, timeout: 1000 * 60 * 20 })
+    ], { cwd: work, timeout: 1000 * 60 * (LIGHT_RENDER ? 10 : 20) })
     if (!fs.existsSync(out)) throw new Error('Arquivo final não gerado')
     comp.mediaKey = await storeLocalFile(out, `media/exports/${compilationId}.mp4`, 'video/mp4')
 

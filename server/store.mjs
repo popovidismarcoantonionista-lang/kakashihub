@@ -591,6 +591,22 @@ export function closeOrphanWork() {
     if (clip.renderedUrl && !clip.mediaKey && !mediaFileExists(clip.renderedUrl)) clip.renderedUrl = undefined
     if (clip.media && !clip.mediaKey && !mediaFileExists(clip.media)) clip.media = undefined
   }
+  for (const comp of state.compilations || []) {
+    if (comp.status === 'processando') {
+      Object.assign(comp, {
+        status: 'erro',
+        error: 'Não foi possível concluir. Monte o vídeo novamente.',
+        progress: 0,
+      })
+    }
+    if (comp.url && !comp.mediaKey && !mediaFileExists(comp.url)) {
+      comp.url = ''
+      if (comp.status === 'pronto') {
+        comp.status = 'erro'
+        comp.error = 'O vídeo não está mais disponível. Monte novamente.'
+      }
+    }
+  }
   save()
 }
 
