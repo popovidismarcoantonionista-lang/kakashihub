@@ -27,16 +27,13 @@ type RadarItem = {
 type RadarData = { ok: boolean; kickOk?: boolean; items: RadarItem[]; liveCount: number }
 
 function normalizeLink(raw: string) {
-  const t = raw.trim()
-  if (/^@[\w.-]+$/.test(t)) return `https://www.youtube.com/${t}`
-  if (/^((www|m)\.)?(youtube\.com|youtu\.be)\//i.test(t)) return `https://${t}`
-  return t
+  return raw.trim()
 }
 
 function platformName(source: Source) {
   if (source.platform === 'twitch') return 'Twitch'
   if (source.platform === 'kick') return 'Kick'
-  return 'YouTube'
+  return 'Live'
 }
 
 function friendlyLiveError(message: string) {
@@ -79,11 +76,6 @@ function liveEmbed(source: Source): string | null {
     const slug = source.liveChannel || source.url?.match(/kick\.com\/([^/?#]+)/i)?.[1] || ''
     if (!slug || /^(video|category|search|browse)$/i.test(slug)) return null
     return `https://player.kick.com/${encodeURIComponent(slug)}?autoplay=true&muted=true`
-  }
-  if (source.platform === 'youtube') {
-    const id = source.liveId || source.url?.match(/(?:[?&]v=|\/live\/|youtu\.be\/)([\w-]{6,})/)?.[1] || ''
-    if (!id) return null
-    return `https://www.youtube.com/embed/${id}?autoplay=1&mute=1&enablejsapi=1&origin=${encodeURIComponent(origin)}`
   }
   return null
 }
@@ -211,7 +203,7 @@ export function VideosPage() {
     if (!/^https?:\/\//i.test(target)) {
       return
     }
-    if (!/twitch\.tv|youtube\.com|youtu\.be|kick\.com/i.test(target)) {
+    if (!/twitch\.tv|kick\.com/i.test(target)) {
       return
     }
     setLiveBusy(true)
@@ -292,7 +284,7 @@ export function VideosPage() {
               id="hero-url"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="Link da live (YouTube, Twitch ou Kick)"
+              placeholder="Link da live (Twitch ou Kick)"
               spellCheck={false}
             />
             <button className="btn btn-live" disabled={liveBusy} type="submit">

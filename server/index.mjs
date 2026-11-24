@@ -441,7 +441,6 @@ app.patch('/api/sources/:id', (req, res) => {
 function livePlatform(raw) {
   if (/^https?:\/\/([^/]*\.)?twitch\.tv\//i.test(raw)) return 'twitch'
   if (/^https?:\/\/([^/]*\.)?kick\.com\//i.test(raw)) return 'kick'
-  if (/^https?:\/\/([^/]*\.)?(youtube\.com|youtu\.be)\//i.test(raw)) return 'youtube'
   return null
 }
 
@@ -449,7 +448,7 @@ app.post('/api/live', async (req, res) => {
   const raw = String(req.body?.url || '').trim()
   if (!/^https?:\/\//i.test(raw)) return fail(res, 400, 'Cole o link da transmissão…')
   const platform = livePlatform(raw)
-  if (!platform) return fail(res, 400, 'Use o link de uma live da Twitch, do YouTube ou da Kick…')
+  if (!platform) return fail(res, 400, 'Use o link de uma live da Twitch ou da Kick.')
   const state = getState()
   const already = state.sources.find((s) => s.mode === 'live' && s.url === raw && isLiveRunning(s.id))
   if (already) return fail(res, 409, 'Esta live já está sendo monitorada.')
@@ -467,11 +466,7 @@ app.post('/api/live', async (req, res) => {
     url: raw,
     mode: 'live',
     platform,
-    // No YouTube o Render não consegue resolver o stream (IP de datacenter).
-    // A captura acontece no navegador que estiver com o estúdio aberto.
-    // No YouTube o Render não consegue resolver o stream (IP de datacenter).
-    // A captura acontece no navegador que estiver com o estúdio aberto.
-    captureMode: platform === 'youtube' ? 'browser' : 'server',
+    captureMode: 'server',
   }
   state.sources.unshift(source)
   addActivity('agent', 'Nova transmissão enviada para monitoramento')
@@ -498,7 +493,6 @@ app.post('/api/live/:id/capture-error', (req, res) => {
   if (message) {
     source.liveLastError = message
     source.liveCheckedAt = new Date().toISOString()
-    // Mantém captura no navegador no Render; captura no servidor de YouTube costuma falhar por IP de datacenter.
     save()
   }
   ok(res, { ok: true })

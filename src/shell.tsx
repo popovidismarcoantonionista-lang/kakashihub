@@ -312,7 +312,7 @@ function IngestModal() {
               rows={3}
               value={text}
               onChange={(e) => setText(e.target.value)}
-              placeholder={'https://www.youtube.com/live/...\nhttps://www.twitch.tv/canal\nhttps://kick.com/canal'}
+              placeholder={'https://www.twitch.tv/canal\nhttps://kick.com/canal'}
               autoFocus
             />
           </>

@@ -32,7 +32,7 @@ export interface Source {
   mode?: 'live' | 'vod'
   uploaded?: boolean
   upload?: { name: string; size: number; type: string }
-  platform?: 'twitch' | 'youtube' | 'kick'
+  platform?: 'twitch' | 'kick'
   liveStartedAt?: string
   liveCheckedAt?: string
   liveEndedAt?: string
