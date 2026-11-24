@@ -41,6 +41,17 @@ const FIND_PRESETS = [
   { label: 'Flagrantes', query: 'flagrante viral engraçado' },
   { label: 'Tiago da Titan 160', query: 'Tiago da Titan 160 enquadro' },
   { label: 'Titan 160', query: 'Titan 160 flagrantes enquadros' },
+  // Canais autorizados dos créditos dos vídeos.
+  { label: 'CB PM GUIDO', query: 'CB PM GUIDO enquadro' },
+  { label: 'Cavalcante', query: 'Cavalcante enquadro' },
+  { label: 'Miguelito da b12', query: 'Miguelito da b12 enquadro' },
+  { label: 'Cabo Cordeiro', query: 'CABO CORDEIRO enquadro' },
+  { label: 'Marcelo Eugenio', query: 'Marcelo Eugenio enquadro' },
+  { label: 'Luzivan', query: 'Luzivan enquadro' },
+  { label: 'Soldado Mayckon', query: 'Soldado Mayckon fuga enquadro' },
+  { label: 'Soldado Henrique', query: 'soldado henriquee enquadro' },
+  { label: 'Kesley', query: 'Kesley enquadro' },
+  { label: 'Higor Muniz', query: 'Higor Muniz enquadro' },
 ]
 
 function jobLabel(kind?: string) {
