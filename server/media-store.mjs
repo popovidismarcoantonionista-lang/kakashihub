@@ -7,7 +7,9 @@ import { Readable } from 'node:stream'
 import { DATA } from './store.mjs'
 
 const USE_BLOB = Boolean(process.env.BLOB_READ_WRITE_TOKEN || process.env.VERCEL)
-const PRIVATE_ACCESS = 'private'
+// O store do Blob foi criado como público. As URLs brutas nunca são expostas
+// ao front: toda mídia passa pelo proxy assinado do Netlify.
+const BLOB_ACCESS = 'public'
 const downloadedFiles = new Map()
 
 function cleanPathname(value) {
@@ -36,7 +38,7 @@ export async function storeLocalFile(filePath, pathname, contentType) {
     return null
   }
   const result = await put(safePath, fs.createReadStream(filePath), {
-    access: PRIVATE_ACCESS,
+    access: BLOB_ACCESS,
     contentType,
     addRandomSuffix: false,
     allowOverwrite: true,
@@ -50,7 +52,7 @@ export async function downloadBlobToTemp(pathname, filename = 'media.bin') {
   const safePath = cleanPathname(pathname)
   if (!safePath) throw new Error('Caminho de mídia inválido.')
   if (!USE_BLOB) throw new Error('O armazenamento Blob não está configurado.')
-  const result = await get(safePath, { access: PRIVATE_ACCESS })
+  const result = await get(safePath, { access: BLOB_ACCESS })
   if (!result || result.statusCode !== 200 || !result.stream) throw new Error('O arquivo não foi encontrado no Blob.')
   const tempDir = path.join(DATA, 'tmp')
   fs.mkdirSync(tempDir, { recursive: true })
@@ -88,7 +90,7 @@ export async function getPrivateBlob(pathname, requestHeaders = {}) {
   if (!safePath || !USE_BLOB) return null
   const range = requestHeaders.range || requestHeaders.Range
   const result = await get(safePath, {
-    access: PRIVATE_ACCESS,
+    access: BLOB_ACCESS,
     ifNoneMatch: requestHeaders['if-none-match'] || requestHeaders['If-None-Match'],
     headers: range ? { Range: String(range) } : undefined,
   })
