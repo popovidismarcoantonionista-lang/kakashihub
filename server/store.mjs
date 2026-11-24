@@ -636,9 +636,16 @@ export function closeOrphanWork() {
   }
   const state = getState()
   for (const source of state.sources) {
-    if (source.status === 'ao-vivo') {
-      source.status = 'pronto'
-      source.liveStopRequested = true
+    // Um deploy/restart não deve encerrar uma transmissão que ainda está no ar.
+    // Guardamos a intenção de retomar e o start.mjs reinicia o workflow depois.
+    if (source.mode === 'live' && ['ao-vivo', 'processando'].includes(source.status)) {
+      source.status = 'processando'
+      source.progress = Math.max(2, Number(source.progress) || 2)
+      source.error = null
+      source.liveStopRequested = false
+      source.liveResumePending = true
+      delete source.liveEndedAt
+      delete source.liveJobId
     } else if (source.status === 'processando') {
       source.status = 'erro'
       source.error = 'Não foi possível concluir. Tente novamente.'

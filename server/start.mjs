@@ -2,7 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import app from './index.mjs'
-import { withStore, closeOrphanWork } from './store.mjs'
+import { withStore, closeOrphanWork, getState, save } from './store.mjs'
+import { startLiveWorkflow } from './jobs.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DIST = path.join(ROOT, 'dist')
@@ -19,7 +20,26 @@ if (serveFrontend && fs.existsSync(DIST)) {
   })
 }
 
-await withStore(() => closeOrphanWork())
+const resumeLiveIds = await withStore(() => {
+  closeOrphanWork()
+  return getState().sources.filter((s) => s.liveResumePending).map((s) => s.id)
+})
+
+for (const id of resumeLiveIds) {
+  await withStore(() => {
+    const source = getState().sources.find((s) => s.id === id)
+    if (source) {
+      delete source.liveResumePending
+      save()
+    }
+  })
+  try {
+    await startLiveWorkflow(id)
+    console.log(`[live] monitoramento retomado após reinício: ${id}`)
+  } catch (err) {
+    console.error('[live] falha ao retomar monitoramento:', id, err?.message || err)
+  }
+}
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`[server] Kakashi Hub ouvindo em 0.0.0.0:${port}`)
