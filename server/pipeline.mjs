@@ -64,6 +64,18 @@ ensureExecutable(FFPROBE_LOCAL_BIN)
 // Quadro padrão usado quando a detecção automática não encontra um rosto.
 const DEFAULT_CAM = { x: 0.68, y: 0.02, w: 0.3, h: 0.36 }
 
+// yuv420p trabalha com pares de pixels: crop/overlay ímpar desalinha o chroma
+// e deixa a webcam com aspecto "estourado"/sujo. Arredondar antes do ffmpeg
+// evita esse artefato sem mudar a caixa escolhida no Estúdio.
+function evenFloor(value, min = 0) {
+  const n = Math.floor(Number(value) || 0)
+  return Math.max(min, n - (n % 2))
+}
+function evenRound(value, min = 2) {
+  const n = Math.round(Number(value) || 0)
+  return Math.max(min, n + (n % 2))
+}
+
 export const OUTPUT_SIZES = {
   '720p': { width: 720, height: 1280 },
   '1080p': { width: 1080, height: 1920 },
@@ -1962,20 +1974,27 @@ export async function runRender(clipId, opts = {}) {
     let vf = ''
     let filterComplex = null
     if (split) {
-      const cw = Math.max(2, Math.round(cam.w * width))
-      const ch = Math.max(2, Math.round(cam.h * height))
-      const cx = Math.round(Math.min(width - cw, Math.max(0, cam.x * width)))
-      const cy = Math.round(Math.min(height - ch, Math.max(0, cam.y * height)))
+      const cw = Math.min(width, evenRound(cam.w * width))
+      const ch = Math.min(height, evenRound(cam.h * height))
+      const cx = Math.min(width - cw, evenFloor(cam.x * width))
+      const cy = Math.min(height - ch, evenFloor(cam.y * height))
       // A caixa escolhida no Estúdio é a fonte da verdade: mostramos ela inteira
       // na faixa superior. O fundo usa a própria caixa desfocada para preencher
       // o 9:16 sem black bars — o antigo `increase,crop` cortava as laterais e
       // fazia a webcam parecer ter "andado" para fora do lugar marcado.
+      // Limitar o upscale a 3x evita que uma webcam pequena vire um borrão
+      // gigante; o unsharp leve devolve definição sem inventar detalhe.
+      const fit = Math.min(outW / cw, bandH / ch)
+      const upscale = Math.min(fit, 3)
+      const camOutW = Math.min(outW, evenRound(cw * upscale))
+      const camOutH = Math.min(bandH, evenRound(ch * upscale))
+      const camFlags = 'lanczos+accurate_rnd+full_chroma_int'
       filterComplex = '[0:v]split=2[camsrc][gamef];'
         + `[camsrc]crop=${cw}:${ch}:${cx}:${cy},split=2[cambg][camfg];`
-        + `[cambg]scale=${outW}:${bandH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${bandH},gblur=sigma=${blur},setsar=1[cambgf];`
-        + `[camfg]scale=${outW}:${bandH}:flags=lanczos:force_original_aspect_ratio=decrease,setsar=1[camfgf];`
+        + `[cambg]scale=${outW}:${bandH}:flags=${camFlags}:force_original_aspect_ratio=increase,crop=${outW}:${bandH},gblur=sigma=${blur},setsar=1[cambgf];`
+        + `[camfg]scale=${camOutW}:${camOutH}:flags=${camFlags},unsharp=5:5:0.35:5:5:0,setsar=1[camfgf];`
         + `[cambgf][camfgf]overlay=(W-w)/2:(H-h)/2,setsar=1[ct];`
-        + `[gamef]scale=${outW}:${bandH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${bandH},setsar=1[gt];`
+        + `[gamef]scale=${outW}:${bandH}:flags=${camFlags}:force_original_aspect_ratio=increase,crop=${outW}:${bandH},setsar=1[gt];`
         + `[ct][gt]vstack=2,setsar=1[vout]`
     } else if (clip.framing === 'preencher') {
       filterComplex = '[0:v]split=2[bgs][fgs];'
