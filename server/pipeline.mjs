@@ -1149,7 +1149,7 @@ export async function runIngest(sourceId, url, opts = {}) {
         source.channel = String(meta.uploader || meta.channel || source.channel || 'Transmissão').slice(0, 90)
         if (meta.thumbnail) source.thumb = meta.thumbnail
         source.originalUrl = url
-        source.url = meta.sourceUrl || (meta.liveId ? watchUrl(meta.liveId) : url)
+        source.url = meta.sourceUrl || (meta.liveId && /youtube\.com|youtu\.be/i.test(url) ? watchUrl(meta.liveId) : url)
         if (meta.liveId) source.liveId = meta.liveId
         if (meta.liveChannel) source.liveChannel = meta.liveChannel
         source.status = 'processando'
@@ -2111,13 +2111,14 @@ async function probeLive(url) {
     const info = JSON.parse(stdout)
     const id = info.id ? String(info.id) : ''
     if (info.is_live) {
+      const isYouTube = /youtube\.com|youtu\.be/i.test(url)
       return {
         title: String(info.title || 'Transmissão ao vivo').slice(0, 140),
         channel: String(info.uploader || info.channel || '').slice(0, 90),
         thumb: bestThumb(info.thumbnails),
         liveId: id,
         liveChannel: String(info.uploader_id || '').slice(0, 90),
-        sourceUrl: id ? watchUrl(id) : '',
+        sourceUrl: isYouTube ? (id ? watchUrl(id) : '') : (info.webpage_url || info.original_url || url),
       }
     }
     // Em URL de canal, o yt-dlp pode devolver só o id do vídeo ao vivo.
@@ -2608,7 +2609,7 @@ export async function captureLiveWindow(sourceId) {
 
       const priorDuration = Math.max(0, Number(source.duration) || 0)
       const priorClips = getState().clips.filter((clip) => clip.sourceId === sourceId).length
-      source.url = meta.sourceUrl || (meta.liveId ? watchUrl(meta.liveId) : url)
+      source.url = meta.sourceUrl || (meta.liveId && /youtube\.com|youtu\.be/i.test(url) ? watchUrl(meta.liveId) : url)
       source.title = meta.title || source.title
       source.channel = meta.channel || source.channel
       if (meta.thumb) source.thumb = meta.thumb
