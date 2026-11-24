@@ -322,6 +322,7 @@ export function VideosPage() {
       await api(`/api/sources/${confirm.id}`, { method: 'DELETE' })
       setConfirm(null)
     } catch (e: any) {
+      window.alert(e?.message || 'Não foi possível remover esta fonte agora.')
     } finally {
       setRemoving(false)
     }

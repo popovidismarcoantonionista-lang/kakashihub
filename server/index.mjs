@@ -693,12 +693,17 @@ app.delete('/api/sources/:id', async (req, res) => {
     }
     stopLive(source.id)
   }
-  const clips = state.clips.filter((c) => c.sourceId === source.id)
+  const clipsState = Array.isArray(state.clips) ? state.clips : []
+  const uploadsState = Array.isArray(state.uploads) ? state.uploads : []
+  const sourcesState = Array.isArray(state.sources) ? state.sources : []
+  const compilationsState = Array.isArray(state.compilations) ? state.compilations : []
+  const clips = clipsState.filter((c) => c.sourceId === source.id)
   const clipIds = new Set(clips.map((c) => c.id))
-  const dropped = (state.compilations || []).filter((c) => c.clipIds?.some((id) => clipIds.has(id)))
-  state.clips = state.clips.filter((c) => c.sourceId !== source.id)
-  state.uploads = state.uploads.filter((u) => !clipIds.has(u.clipId))
-  state.sources = state.sources.filter((s) => s.id !== source.id)
+  const dropped = compilationsState.filter((c) => c.clipIds?.some((id) => clipIds.has(id)))
+  state.clips = clipsState.filter((c) => c.sourceId !== source.id)
+  state.uploads = uploadsState.filter((u) => !clipIds.has(u.clipId))
+  state.sources = sourcesState.filter((s) => s.id !== source.id)
+  state.compilations = compilationsState
   save()
   try {
     await deleteBlobMedia([
@@ -733,7 +738,8 @@ app.delete('/api/sources/:id', async (req, res) => {
   }
   if (dropped.length) {
     const droppedIds = new Set(dropped.map((c) => c.id))
-    state.uploads = state.uploads.filter((u) => !u.compilationId || !droppedIds.has(u.compilationId))
+    state.uploads = (Array.isArray(state.uploads) ? state.uploads : [])
+      .filter((u) => !u.compilationId || !droppedIds.has(u.compilationId))
     state.compilations = state.compilations.filter((c) => !dropped.includes(c))
     save()
     for (const comp of dropped) removeCompilationFiles(comp.id)
