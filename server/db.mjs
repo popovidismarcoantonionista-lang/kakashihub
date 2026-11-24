@@ -37,6 +37,9 @@ export function normalizeConnectionString(raw) {
   const credentials = body.slice(0, at)
   let host = body.slice(at + 1).replace(/[\s\x00-\x1F\x7F]/g, '')
   host = host.replace(/^(?:(?:postgres(?:ql)?)?:\/\/)+/i, '')
+  if (/supabase\.com$/i.test(host) && !/pooler\.supabase\.com/i.test(host)) {
+    host = 'aws-0-us-east-2.pooler.supabase.com:6543'
+  }
   const colon = credentials.indexOf(':')
   connectionInfo.credentialsColon = colon >= 0
   if (colon < 0) return value
