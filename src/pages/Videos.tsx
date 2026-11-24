@@ -46,6 +46,7 @@ async function downloadInBrowser(url: string): Promise<File> {
   const res = await fetch(COBALT_BROWSER, {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(20_000),
     body: JSON.stringify({
       url,
       videoQuality: '720',
@@ -68,7 +69,7 @@ async function downloadInBrowser(url: string): Promise<File> {
   }
   if (!/^https?:\/\//i.test(mediaUrl)) throw new Error('Este vídeo não está disponível para download.')
 
-  const fileRes = await fetch(mediaUrl)
+  const fileRes = await fetch(mediaUrl, { signal: AbortSignal.timeout(120_000) })
   if (!fileRes.ok) throw new Error('Não foi possível baixar o vídeo.')
   const blob = await fileRes.blob()
   if (blob.size < 1024) throw new Error('O arquivo baixado veio vazio.')

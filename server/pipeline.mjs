@@ -1353,6 +1353,8 @@ export async function runIngest(sourceId, url, opts = {}) {
         }
       }
       let dlError
+      // Motivo de cada tentativa fica só em job.debug (nunca aparece no front).
+      const attempts = []
       if (!viaService) {
         try {
           await ytdlp([
@@ -1368,7 +1370,12 @@ export async function runIngest(sourceId, url, opts = {}) {
           })
         } catch (err) {
           dlError = err
-          if (!canMirror(err)) throw new Error(friendlyError(err))
+          attempts.push(`yt-dlp:${String(err?.message || err).slice(0, 300)}`)
+          if (!canMirror(err)) {
+            const error = new Error(friendlyError(err))
+            error.debug = attempts.join(' | ')
+            throw error
+          }
           if (hasInvidious()) {
             try {
               console.log('[download:invidious] yt-dlp bloqueado; tentando espelho público')
@@ -1388,8 +1395,6 @@ export async function runIngest(sourceId, url, opts = {}) {
       }
       if (viaService) {
         updateJob(job, { step: 'Baixando o vídeo' })
-        // Motivo de cada tentativa fica só em job.debug (não aparece no front).
-        const attempts = []
         try {
           let downloaded = false
           if (!downloaded && hasCobalt()) {
@@ -1436,7 +1441,11 @@ export async function runIngest(sourceId, url, opts = {}) {
         }
       }
       const downloaded = fs.existsSync(videoPath) && fs.statSync(videoPath).size > 1024
-      if (!downloaded) throw new Error(friendlyError(dlError))
+      if (!downloaded) {
+        const error = new Error(friendlyError(dlError))
+        error.debug = attempts.join(' | ')
+        throw error
+      }
       source.mediaKey = await storeLocalFile(videoPath, `media/src/${sourceId}.mp4`, 'video/mp4') || source.mediaKey || null
       source.hasMedia = true
       if (!source.duration) {
