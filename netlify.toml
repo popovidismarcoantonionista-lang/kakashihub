@@ -5,6 +5,13 @@
 [build.environment]
   NODE_VERSION = "20"
 
+# Relay de live roda no Netlify Function (evita 502 do Render free/datacenter).
+[[redirects]]
+  from = "/api/live/relay"
+  to = "/.netlify/functions/live-relay"
+  status = 200
+  force = true
+
 # Proxy API/media/covers para o backend no Render.
 # Defina PROXY_SECRET no Netlify e no Render com o mesmo valor.
 [[redirects]]
