@@ -36,6 +36,8 @@ const YTDLP_BIN = process.env.YTDLP_BIN || path.join(APP_ROOT, '.bin', 'yt-dlp')
 // Render free tem ~512 MB de RAM. Renderizar 4K vertical com split + blur +
 // legendas estoura o processo e derruba o estado. Por padrão, limitamos a 720p
 // quando estamos no Render; use FUGA_LIGHT_RENDER=false para forçar o perfil cheio.
+// Mesmo em 720p o encoder precisa ser rápido (1 thread), mas não precisa ser
+// ultrafast/crf 26 — isso deixava o vídeo visivelmente pixelado.
 const ON_RENDER = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID || process.env.RENDER_GIT_COMMIT
   || Object.keys(process.env).some((key) => key.startsWith('RENDER_')))
 const LIGHT_RENDER = process.env.FUGA_LIGHT_RENDER
@@ -1711,8 +1713,8 @@ export async function runRender(clipId, opts = {}) {
       const cx = Math.round(Math.min(width - cw, Math.max(0, cam.x * width)))
       const cy = Math.round(Math.min(height - ch, Math.max(0, cam.y * height)))
       filterComplex = '[0:v]split=2[camf][gamef];'
-        + `[camf]crop=${cw}:${ch}:${cx}:${cy},scale=${outW}:${bandH}:force_original_aspect_ratio=increase,crop=${outW}:${bandH},setsar=1[ct];`
-        + `[gamef]scale=${outW}:${bandH}:force_original_aspect_ratio=increase,crop=${outW}:${bandH},setsar=1[gt];`
+        + `[camf]crop=${cw}:${ch}:${cx}:${cy},scale=${outW}:${bandH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${bandH},setsar=1[ct];`
+        + `[gamef]scale=${outW}:${bandH}:flags=lanczos:force_original_aspect_ratio=increase,crop=${outW}:${bandH},setsar=1[gt];`
         + `[ct][gt]vstack=2,setsar=1[vout]`
     } else if (clip.framing === 'preencher') {
       filterComplex = '[0:v]split=2[bgs][fgs];'
@@ -1806,11 +1808,11 @@ export async function runRender(clipId, opts = {}) {
         ...args,
         '-c:v', 'libx264',
         ...(LIGHT_RENDER ? ['-x264-params', 'threads=1:rc-lookahead=0'] : []),
-        '-preset', LIGHT_RENDER ? 'ultrafast' : 'veryfast',
-        '-crf', LIGHT_RENDER ? '26' : '20',
+        '-preset', 'veryfast',
+        '-crf', '20',
         '-pix_fmt', 'yuv420p',
         ...(LIGHT_RENDER ? ['-r', '30'] : []),
-        '-c:a', 'aac', '-b:a', LIGHT_RENDER ? '96k' : '160k', '-ar', '48000',
+        '-c:a', 'aac', '-b:a', '160k', '-ar', '48000',
         '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
         '-max_muxing_queue_size', '256',
         '-movflags', '+faststart', '-shortest',
@@ -1929,9 +1931,9 @@ export async function runTrim(clipId, startInput, endInput, opts = {}) {
         '-y', '-hide_banner', '-loglevel', 'error',
         ...(LIGHT_RENDER ? ['-threads', '1', '-filter_threads', '1'] : []),
         '-ss', String(start), '-t', String(length), '-i', liveSrc,
-        '-c:v', 'libx264', '-preset', LIGHT_RENDER ? 'ultrafast' : 'veryfast',
-        '-crf', LIGHT_RENDER ? '26' : '20', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', LIGHT_RENDER ? '96k' : '160k', '-ar', '48000', '-ac', '2',
+        '-c:v', 'libx264', '-preset', 'veryfast',
+        '-crf', '20', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
         '-movflags', '+faststart', '-avoid_negative_ts', 'make_zero',
         tmp,
       ], { timeout: 1000 * 60 * (LIGHT_RENDER ? 5 : 20) })
@@ -2038,9 +2040,9 @@ export async function runCompilation(compilationId, opts = {}) {
         ...(LIGHT_RENDER ? ['-threads', '1', '-filter_threads', '1'] : []),
         '-ss', String(from), '-t', String(dur), '-i', src,
         '-vf', vf,
-        '-c:v', 'libx264', '-preset', LIGHT_RENDER ? 'ultrafast' : 'veryfast',
-        '-crf', LIGHT_RENDER ? '26' : '21', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', LIGHT_RENDER ? '96k' : '160k', '-ar', '48000', '-ac', '2',
+        '-c:v', 'libx264', '-preset', 'veryfast',
+        '-crf', '20', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
         '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',
         path.basename(seg),
       ], { cwd: work, timeout: 1000 * 60 * (LIGHT_RENDER ? 5 : 10) })
