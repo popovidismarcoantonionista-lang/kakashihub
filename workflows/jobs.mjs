@@ -7,6 +7,7 @@ import {
   sourceBecameLiveStep,
   startLiveWorkflowStep,
 } from './steps.mjs'
+import { beginHeavyWork, endHeavyWork } from '../server/work-gate.mjs'
 
 // `use workflow` / `sleep` do SDK exigem um build Nitro/Next. Aqui as funções
 // são orquestrações comuns executadas por server/background.mjs no mesmo
@@ -14,6 +15,9 @@ import {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export async function processJobWorkflow(kind, payload) {
+  // Render/trim/compilação não podem concorrer com a gravação da live no Render free.
+  const heavy = kind === 'render' || kind === 'trim' || kind === 'compilation'
+  if (heavy) beginHeavyWork()
   try {
     const result = await processJobStep(kind, payload)
     if (kind === 'analyze' && await sourceBecameLiveStep(payload.sourceId)) {
@@ -23,6 +27,8 @@ export async function processJobWorkflow(kind, payload) {
   } catch (error) {
     await failJobStep(payload.jobId, error?.message || 'O processamento falhou.')
     throw error
+  } finally {
+    if (heavy) endHeavyWork()
   }
 }
 

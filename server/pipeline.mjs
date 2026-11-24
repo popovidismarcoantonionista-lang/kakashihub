@@ -22,6 +22,7 @@ import {
   updateJob,
 } from './store.mjs'
 import { ensureLocalMedia, mediaPathFromUrl, storeLocalFile } from './media-store.mjs'
+import { beginLiveRecording, endLiveRecording, heavyWorkActive, waitForLiveRecording } from './work-gate.mjs'
 import { INVIDIOUS_URL, INVIDIOUS_URLS, cobaltResolve, hasCobalt, hasYtdlpApi, hasInvidious, invidiousInfo, ydlInfo, youtubeVideoId } from './services.mjs'
 
 const PYTHON = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
@@ -72,8 +73,8 @@ function renderSize() {
 }
 
 function sizeLabel(size) {
-  if (size.height >= 2000) return '4K'
-  if (size.height >= 1000) return '1080p'
+  if (size.height >= 3000) return '4K'
+  if (size.height >= 1600) return '1080p'
   return '720p'
 }
 
@@ -1551,12 +1552,24 @@ function buildCaptionAss(clip, duration, outW, outH, gta = false) {
       const start = chunk.start + i * step
       const end = Math.min(chunk.end, i === words.length - 1 ? chunk.end : chunk.start + (i + 1) * step)
       if (end - start < 0.08) continue
+      // Estilo máquina-cortes-gta: caixa alta, palavra falada em amarelo (#FFD400).
       const text = words.map((w, idx) => {
-        const word = assEscape(w)
-        if (idx === i) return `{\\c&H0000FFFF&\\3c&H00000000&\\bord${outline + 1}}${word}{\\r}`
+        const word = assEscape(String(w).toUpperCase())
+        if (idx === i) return `{\\c&H0000D4FF&\\3c&H00000000&\\bord${outline + 1}}${word}{\\r}`
         return `{\\c&H00FFFFFF&\\3c&H00000000&}${word}`
       }).join(' ')
       events.push(`Dialogue: 0,${assTime(start)},${assTime(end)},Default,,0,0,0,,${text}`)
+    }
+  }
+  if (gta) {
+    const project = getState().project || {}
+    const name = String(project.name || project.handle || '').replace(/^@/, '').trim()
+    if (name) {
+      const wmSize = Math.max(24, Math.round(outH * 0.032))
+      const wmX = outW - Math.max(20, Math.round(outW * 0.05))
+      const wmY = Math.round(outH * 0.175)
+      const wmBorder = Math.max(3, Math.round(wmSize * 0.18))
+      events.push(`Dialogue: 0,0:00:00.00,${assTime(duration)},Default,,0,0,0,,{\\an9\\pos(${wmX},${wmY})\\fs${wmSize}\\c&H00FFFFFF&\\3c&H00000000&\\bord${wmBorder}}${assEscape(name.toUpperCase().slice(0, 28))}`)
     }
   }
   return events.length ? header.concat(events).join('\n') + '\n' : null
@@ -1666,6 +1679,10 @@ export async function runRender(clipId, opts = {}) {
       }
     }
 
+    // Não compete com a gravação da live: no Render free, os dois juntos
+    // estouram a memória e derrubam o processo no meio do render.
+    await waitForLiveRecording()
+
     try {
       const assName = assFile ? path.basename(assFile).replace(/'/g, "\\'") : null
       const logoInputArgs = logoFile ? ['-loop', '1', '-t', String(duration), '-i', logoFile] : []
@@ -1674,6 +1691,15 @@ export async function runRender(clipId, opts = {}) {
 
       let baseFc = filterComplex
       if (!baseFc) baseFc = `[${videoInputIdx}:v]${vf}[vout]`
+      if (gta) {
+        // Faixa escura na divisa (estilo máquina-cortes-gta), em três camadas
+        // para dar a sensação de degradê sem custo de blur.
+        const bandY = Math.max(0, Math.round(outH * 0.37))
+        const bandH = Math.round(outH * 0.26)
+        baseFc = baseFc.replace(/\[vout\]\s*$/, '')
+        baseFc += `,drawbox=x=0:y=${bandY}:w=${outW}:h=${bandH}:color=black@0.20:t=fill`
+        baseFc += `,drawbox=x=0:y=${bandY + Math.round(bandH * 0.25)}:w=${outW}:h=${Math.round(bandH * 0.5)}:color=black@0.18:t=fill[vout]`
+      }
 
       let outLabel = 'vout'
       let fc = baseFc
@@ -1698,14 +1724,16 @@ export async function runRender(clipId, opts = {}) {
       const outArgs = ['-filter_complex', fc, '-map', `[${outLabel}]`, '-map', `${videoInputIdx}:a?`]
       const ffmpegArgs = (args, withLogo = Boolean(logoFile)) => [
         '-y', '-hide_banner', '-loglevel', 'error',
-        ...(LIGHT_RENDER ? ['-threads', '1', '-filter_threads', '1'] : []),
+        ...(LIGHT_RENDER ? ['-threads', '1', '-filter_threads', '1', '-filter_complex_threads', '1'] : []),
         '-ss', String(from), '-t', String(duration), '-i', src,
         ...(withLogo ? logoInputArgs : []),
         ...args,
         '-c:v', 'libx264',
+        ...(LIGHT_RENDER ? ['-x264-params', 'threads=1:rc-lookahead=0'] : []),
         '-preset', LIGHT_RENDER ? 'ultrafast' : 'veryfast',
         '-crf', LIGHT_RENDER ? '26' : '20',
         '-pix_fmt', 'yuv420p',
+        ...(LIGHT_RENDER ? ['-r', '30'] : []),
         '-c:a', 'aac', '-b:a', LIGHT_RENDER ? '96k' : '160k', '-ar', '48000',
         '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
         '-max_muxing_queue_size', '256',
@@ -1785,6 +1813,8 @@ export async function runRender(clipId, opts = {}) {
     finishJob(job)
     return clip
   } catch (err) {
+    // O usuário vê só a mensagem curta; o motivo real fica no log do Render.
+    console.error('[render-error]', clipId, String(err?.stderr || err?.message || err).slice(-1800))
     finishJob(job, new Error('Não foi possível renderizar este corte agora.'))
     throw new Error('Não foi possível renderizar este corte agora.')
   }
@@ -2646,6 +2676,12 @@ export async function captureLiveWindow(sourceId) {
 
   if (source.liveStopRequested) return finishLiveStep(source, job)
   if (!source.url) return finishLiveStep(source, job, LIVE_TEXT.failed)
+  if (heavyWorkActive()) {
+    if (job.step !== 'Ao vivo · pausado durante o render') {
+      updateJob(job, { progress: 50, step: 'Ao vivo · pausado durante o render' })
+    }
+    return { continue: true }
+  }
 
   try {
     if (!source.liveReady) {
@@ -2756,9 +2792,11 @@ export async function captureLiveWindow(sourceId) {
     liveStops.set(sourceId, stop)
     updateJob(job, { progress: 50, step: `Ao vivo · ${liveStamp(session)} acompanhados · ${made} cortes` })
     let rec
+    beginLiveRecording()
     try {
       rec = await recordWindow(parts, win, LIVE_WINDOW, stop)
     } finally {
+      endLiveRecording()
       if (stop.child) { try { stop.child.kill() } catch {} }
       liveStops.delete(sourceId)
     }
