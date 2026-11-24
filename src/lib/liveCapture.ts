@@ -386,7 +386,7 @@ export async function captureLiveWindowWithFallback(
   api: Api,
   config: CaptureConfig,
 ): Promise<void> {
-  const mirrors = [...new Set([config.mirror, ...(config.mirrors || [])])].filter(Boolean).slice(0, 2)
+  const mirrors = [...new Set([config.mirror, ...(config.mirrors || [])])].filter(Boolean).slice(0, 4)
   let last: unknown = new Error('sem espelhos disponíveis')
   const attempt = async (mirror: string, useRelay: boolean) => {
     try {
