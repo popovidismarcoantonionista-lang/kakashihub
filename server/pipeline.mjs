@@ -2579,13 +2579,11 @@ export async function captureLiveWindow(sourceId) {
       if (browserStale) {
         // No Render, captura no servidor de YouTube é bloqueada por IP; mantém no navegador.
         updateJob(job, { progress: 50, step: 'Monitorando a transmissão' })
-        source.liveLastError = null
         source.liveCheckedAt = new Date().toISOString()
         save()
         return { continue: true }
       } else {
         updateJob(job, { progress: 50, step: 'Monitorando a transmissão' })
-        source.liveLastError = null
         source.liveCheckedAt = new Date().toISOString()
         save()
         return { continue: true }
