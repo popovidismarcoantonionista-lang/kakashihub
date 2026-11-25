@@ -2375,7 +2375,13 @@ export async function runRender(clipId, opts = {}) {
     clip.framingBias = frac
     addActivity('render', `Corte "${clip.hook}" renderizado em ${aspect} · ${sizeLabel(size)}`)
     save()
-    await flushStore()
+    // Vídeo e capa já estão no blob. Uma queda transitória do Postgres no
+    // flush não pode transformar um render concluído em job com erro.
+    try {
+      await flushStore()
+    } catch (error) {
+      console.warn('[render-flush]', String(error?.message || error).slice(0, 200))
+    }
     updateJob(job, { progress: 99, step: 'Corte finalizado' })
     finishJob(job)
     return clip
