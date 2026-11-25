@@ -25,7 +25,7 @@ import {
 import { ensureLocalMedia, mediaPathFromUrl, storeLocalFile } from './media-store.mjs'
 import { beginLiveRecording, endLiveRecording, heavyWorkActive, waitForLiveRecording } from './work-gate.mjs'
 import { INVIDIOUS_URL, INVIDIOUS_URLS, cobaltResolve, hasCobalt, hasYtdlpApi, hasInvidious, invidiousInfo, ydlInfo, youtubeVideoId } from './services.mjs'
-import { analyzeXracing, wordsToCues } from './xracing-engine.mjs'
+import { analyzeXracing, avoidSkippableRanges, detectSkippableRanges, wordsToCues } from './xracing-engine.mjs'
 import { transcribeXracing } from './xracing-stt.mjs'
 
 const PYTHON = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
@@ -423,6 +423,21 @@ export function parseVtt(raw) {
     out.push({ ...cue })
   }
   return out.filter((c) => c.end - c.start > 0.5 && c.text.length > 1)
+}
+
+// As legendas VTT não trazem palavras separadas; distribui o texto ao longo
+// da fala para o detector de intro/patrocínio usar os mesmos timestamps.
+function cuesToWords(cues) {
+  const out = []
+  for (const cue of cues) {
+    const parts = splitCaptionWords(cue.text)
+    if (!parts.length) continue
+    const start = Number(cue.start)
+    const span = Math.max(0.5, Number(cue.end) - start)
+    const step = span / parts.length
+    parts.forEach((w, i) => out.push({ w, s: start + i * step, e: start + (i + 1) * step }))
+  }
+  return out
 }
 
 function timeToSec(t) {
@@ -1583,7 +1598,9 @@ export async function runIngest(sourceId, url, opts = {}) {
         try {
           await ytdlp([
             '--write-auto-subs', '--write-subs',
-            '--sub-langs', 'pt.*,pt,pt-BR,en.*,en',
+            // Nunca usar legendas automáticas em inglês: o YouTube entrega
+            // faixas "en" mesmo para vídeos falados em português.
+            '--sub-langs', 'pt.*,pt-BR,pt',
             '--sub-format', 'vtt/best', '--convert-subs', 'vtt',
             '--skip-download', '--no-warnings', '--socket-timeout', '20',
             '-o', path.join(SRC_MEDIA, `${sourceId}.%(ext)s`), url,
@@ -1593,22 +1610,33 @@ export async function runIngest(sourceId, url, opts = {}) {
       const subFile = await findSubFile(sourceId)
       if (subFile) cues = parseVtt(fs.readFileSync(subFile, 'utf8'))
     }
-    // Motor XRacing: ao enviar um vídeo local, transcreve no próprio Render e
-    // monta corte principal + replay + legenda + bipes. Se o modelo não estiver
-    // disponível, o ingest continua igual (a análise antiga não quebra).
+    // Transcrição local com modelo tiny/pt. Além do motor XRacing, ela é o
+    // fallback quando não há legenda em português: o YouTube entrega faixas
+    // automáticas em inglês e era isso que vazava no vídeo final.
+    const xracingOn = getState().settings?.xracing === true
+    let words = []
     let xracingEdit = null
-    if (getState().settings?.xracing === true && localFile) {
-      updateJob(job, { progress: 72, step: 'Transcrevendo o áudio · estilo XRacing' })
+    if (fs.existsSync(videoPath) && (xracingOn || cues.length === 0)) {
+      updateJob(job, { progress: 72, step: xracingOn ? 'Transcrevendo o áudio · estilo XRacing' : 'Transcrevendo o áudio em português' })
       try {
-        const words = await transcribeXracing(videoPath)
+        words = await transcribeXracing(videoPath)
         if (words.length >= 6) {
-          cues = wordsToCues(words)
-          xracingEdit = analyzeXracing(words, source.duration || 0, getState().settings || {})
-          if (xracingEdit) addActivity('agent', `Motor XRacing preparou o corte de "${source.title}"`)
+          if (xracingOn || !cues.length) cues = wordsToCues(words)
+          if (xracingOn) {
+            xracingEdit = analyzeXracing(words, source.duration || 0, getState().settings || {})
+            if (xracingEdit) addActivity('agent', `Motor XRacing preparou o corte de "${source.title}"`)
+          }
         }
       } catch (error) {
         console.warn('[xracing] transcrição indisponível:', String(error?.message || error).slice(0, 200))
       }
+    }
+    // Remove abertura, patrocínio e chamadas de engajamento antes de escolher
+    // os cortes. Vale para todos os vídeos, não só para o estilo XRacing.
+    const skipRanges = detectSkippableRanges(words.length ? words : cuesToWords(cues), source.duration || 0)
+    if (skipRanges.length) {
+      cues = cues.filter((c) => !skipRanges.some((r) => c.start < r.end && c.end > r.start))
+      console.log('[cortes] trechos ignorados:', skipRanges.map((r) => `${r.reason} ${r.start}-${r.end}s`).join(', '))
     }
     updateJob(job, {
       progress: cues.length ? 76 : 74,
@@ -1634,6 +1662,19 @@ export async function runIngest(sourceId, url, opts = {}) {
       windows = spreadWindows(source.duration, settings.clipMin, settings.clipMax)
     }
     if (!windows.length) throw new Error('Não encontramos momentos suficientes neste vídeo.')
+
+    if (skipRanges.length) {
+      windows = windows.map((w) => {
+        const cut = avoidSkippableRanges(w.start, w.end, skipRanges, settings.clipMin, source.duration || 0)
+        return {
+          ...w,
+          start: cut.start,
+          end: cut.end,
+          cues: (w.cues || []).filter((c) => c.end > cut.start && c.start < cut.end),
+        }
+      }).filter((w) => w.end - w.start >= settings.clipMin * 0.8)
+      if (!windows.length) throw new Error('Não encontramos momentos suficientes neste vídeo.')
+    }
 
     if (xracingEdit) {
       // O corte do motor entra primeiro; os outros momentos detectados ficam
@@ -1800,6 +1841,15 @@ function cleanContextText(raw) {
     .trim()
 }
 
+// Descrições de vídeos estrangeiros viravam legenda ao cair no fallback do
+// estilo XRacing. Só aceita frases claramente em português.
+function isPortugueseCaptionText(text) {
+  const t = String(text || '').toLowerCase()
+  const en = (t.match(/\b(?:the|and|you|with|this|that|was|were|for|from|his|her|their|into|sponsored|subscribe|video)\b/g) || []).length
+  const pt = (t.match(/\b(?:que|com|para|por|n[aã]o|dos|das|foi|moto|motoca|motorista|faixa|carro|quase|jogou|atropel\w*|desvio|caiu|ocorreu|enquadro|persegui\w*)\b/g) || []).length
+  return pt >= en
+}
+
 // Os compilados estilo XRacing já descrevem a ocorrência na descrição:
 // "04:55 Cavalcante - DESVIO SUSPEITO NA OPERAÇÃO...". A frase após o nome
 // do canal é exatamente a legenda contextual que queremos queimar no corte.
@@ -1819,6 +1869,7 @@ function parseCreditCaption(description, start) {
     // Descrições de compilados costumam só creditar o autor ("Arquivo
     // Pessoal" / link). Isso não é contexto; descartar para não virar legenda.
     if (/^(aviso inicial|arquivo pessoal|previamente autorizado|envie seus|créditos|música|loja|contato)\b/i.test(phrase)) continue
+    if (!isPortugueseCaptionText(phrase)) continue
     if (splitCaptionWords(phrase).length < 2 || phrase.length < 8 || phrase.length > 130) continue
     const [h, mi, s] = m[1].split(':').map(Number)
     const t = h * 3600 + mi * 60 + (s || 0)
