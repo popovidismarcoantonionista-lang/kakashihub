@@ -40,14 +40,15 @@ function readMeta(id) {
   }
 }
 
-function safeFilename(title) {
+function safeFilename(title, quality) {
   const clean = String(title || '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^\w.\- ()]+/g, '_')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 80)
-  return `${clean || 'video'}-720p.mp4`
+  const label = String(quality || '').match(/(\d+)p/i)?.[1] || '720'
+  return `${clean || 'video'}-${label}p.mp4`
 }
 
 export function cleanupPreparedDownloads() {
@@ -169,7 +170,7 @@ export function finalizePreparedDownload(id, payload) {
         ...meta,
         status: 'done',
         size,
-        filename: safeFilename(meta.title),
+        filename: safeFilename(meta.title, payload?.quality),
       }
       fs.writeFileSync(metaPath(id), JSON.stringify(result))
       fs.rmSync(videoFile, { force: true })

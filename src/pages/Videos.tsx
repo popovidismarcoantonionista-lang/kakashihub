@@ -68,20 +68,29 @@ async function requestDownloadSession(url: string, title: string): Promise<Downl
   }
 }
 
+function qualityOf(format: ProviderFormat) {
+  const match = String(format.qualityLabel || '').match(/(\d+)p/i)
+  return match ? Number(match[1]) : 0
+}
+
 function pickProviderFormats(json: any) {
   const formats: ProviderFormat[] = Array.isArray(json?.adaptiveFormats) ? json.adaptiveFormats : []
-  const video = formats
+  const videos = formats
     .filter((f) => String(f.type || '').startsWith('video/mp4')
       && /avc1/.test(String(f.type || ''))
-      && /720/i.test(String(f.qualityLabel || ''))
       && Number(f.clen) > 0 && /^https:/i.test(String(f.url || '')))
-    .sort((a, b) => Number(b.clen) - Number(a.clen))[0]
+  // Sempre preferimos 720p. Se o vídeo não oferece 720p, usamos a melhor faixa
+  // H264 disponível em vez de falhar o download.
+  const hd = videos.filter((f) => /720/i.test(String(f.qualityLabel || '')))
+  const pool = hd.length ? hd : videos
+  const video = pool
+    .sort((a, b) => qualityOf(b) - qualityOf(a) || Number(b.clen) - Number(a.clen))[0]
   const audio = formats
     .filter((f) => String(f.type || '').startsWith('audio/mp4')
       && /mp4a\.40\.2/.test(String(f.type || ''))
       && Number(f.clen) > 0 && /^https:/i.test(String(f.url || '')))
     .sort((a, b) => Number(b.clen) - Number(a.clen))[0]
-  if (!video || !audio) throw new Error('Este vídeo não tem versão 720p com áudio disponível.')
+  if (!video || !audio) throw new Error('Este vídeo não tem faixa H264 com áudio disponível.')
   return { video, audio }
 }
 
@@ -134,7 +143,11 @@ async function requestPreparedDownload(url: string, title: string): Promise<Prep
   const done = await fetch(`/api/downloads/${session.id}/finalize`, {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ videoSize: Number(video.clen), audioSize: Number(audio.clen) }),
+    body: JSON.stringify({
+      videoSize: Number(video.clen),
+      audioSize: Number(audio.clen),
+      quality: String(video.qualityLabel || ''),
+    }),
   })
   const data = await done.json().catch(() => ({}))
   if (!done.ok || !data?.url) throw new Error(data?.error || 'Não foi possível montar o download. Tente de novo.')
