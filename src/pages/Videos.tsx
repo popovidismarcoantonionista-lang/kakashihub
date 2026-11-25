@@ -126,7 +126,9 @@ async function triggerDownload(download: CobaltDownload) {
     frame.referrerPolicy = 'no-referrer'
     frame.src = download.url
     document.body.appendChild(frame)
-    setTimeout(() => frame.remove(), 60000)
+    // Não remover o iframe enquanto o download corre: o stream é lento e
+    // removê-lo antes do fim aborta a transferência e o navegador retoma.
+    // Ele some sozinho quando a página é recarregada/fechada.
     return
   }
   // Baixar via blob evita o arquivo de 0 bytes que acontecia quando o link do
