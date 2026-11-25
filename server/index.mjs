@@ -33,7 +33,6 @@ import {
 } from './social.mjs'
 import { getRadar } from './radar.mjs'
 import { db, connectionInfo } from './db.mjs'
-import { createDownload, getDownload, getDownloadFile } from './download-proxy.mjs'
 
 const app = express()
 app.use(express.json({ limit: '6mb' }))
@@ -122,76 +121,6 @@ async function servePrivateMedia(req, res, next, prefix) {
 
 app.get('/media/*', (req, res, next) => servePrivateMedia(req, res, next, 'media'))
 app.get('/covers/*', (req, res, next) => servePrivateMedia(req, res, next, 'covers'))
-
-function downloadContentDisposition(filename) {
-  const safe = path.basename(String(filename || 'video.mp4')).slice(0, 160)
-  const ascii = safe.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_')
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(safe)}`
-}
-
-function parseDownloadRange(header, size) {
-  const match = /^bytes=(\d*)-(\d*)$/.exec(String(header || '').trim())
-  if (!match || (!match[1] && !match[2])) return null
-  let start
-  let end
-  if (!match[1]) {
-    const suffix = Number(match[2])
-    if (!Number.isFinite(suffix) || suffix <= 0) return 'invalid'
-    start = Math.max(0, size - suffix)
-    end = size - 1
-  } else {
-    start = Number(match[1])
-    end = match[2] ? Number(match[2]) : size - 1
-    if (!Number.isFinite(start) || !Number.isFinite(end)) return 'invalid'
-    end = Math.min(end, size - 1)
-  }
-  if (start < 0 || end < start || start >= size) return 'invalid'
-  return { start, end }
-}
-
-function servePreparedDownload(req, res, item) {
-  const range = parseDownloadRange(req.headers.range, item.size)
-  if (range === 'invalid') {
-    res.set('Accept-Ranges', 'bytes').set('Content-Range', `bytes */${item.size}`)
-    return res.status(416).end()
-  }
-  const start = range ? range.start : 0
-  const end = range ? range.end : item.size - 1
-  res.status(range ? 206 : 200)
-    .set('Content-Type', 'video/mp4')
-    .set('Content-Length', String(end - start + 1))
-    .set('Content-Disposition', downloadContentDisposition(item.filename))
-    .set('Accept-Ranges', 'bytes')
-    .set('Cache-Control', 'private, no-store')
-  if (range) res.set('Content-Range', `bytes ${start}-${end}/${item.size}`)
-  if (req.method === 'HEAD') return res.end()
-  const stream = fs.createReadStream(item.file, { start, end })
-  stream.on('error', () => {
-    if (res.headersSent) return res.destroy()
-    fail(res, 500, 'Não foi possível enviar o arquivo agora.')
-  })
-  stream.pipe(res)
-}
-
-app.post('/api/downloads', (req, res) => {
-  try {
-    res.status(202).json(createDownload(req.body?.url))
-  } catch {
-    fail(res, 400, 'Cole um link de vídeo válido.')
-  }
-})
-
-app.get('/api/downloads/:id/file', (req, res) => {
-  const item = getDownloadFile(req.params.id)
-  if (!item) return fail(res, 404, 'Download não encontrado.')
-  servePreparedDownload(req, res, item)
-})
-
-app.get('/api/downloads/:id', (req, res) => {
-  const job = getDownload(req.params.id)
-  if (!job) return fail(res, 404, 'Download não encontrado.')
-  ok(res, job)
-})
 
 app.get('/api/health', async (req, res) => {
   let downloader = 'off'

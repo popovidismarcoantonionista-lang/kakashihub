@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url'
 import app from './index.mjs'
 import { withStore, closeOrphanWork, getState, save, sweepStaleJobs } from './store.mjs'
 import { startLiveWorkflow, resumePendingJobs, recoverLiveWorkflows } from './jobs.mjs'
-import { sweepDownloads } from './download-proxy.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DIST = path.join(ROOT, 'dist')
@@ -61,10 +60,8 @@ async function resumePendingWhenIdle() {
 }
 
 await withStore(() => sweepStaleJobs())
-sweepDownloads()
 await resumePendingWhenIdle()
 const resumeTimer = setInterval(() => {
-  sweepDownloads()
   withStore(() => sweepStaleJobs())
     .then(() => resumePendingWhenIdle())
     .catch((error) => {
