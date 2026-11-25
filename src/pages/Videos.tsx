@@ -36,21 +36,108 @@ type FoundVideo = {
   url: string
 }
 
-// O download da busca é preparado no Render: o provedor devolve vídeo 720p e
-// áudio em faixas separadas, o ffmpeg junta os dois e o arquivo é servido com
-// Content-Length real. O front recebe só um caminho interno, sem URL do CDN e
-// sem query string; o envio para o estúdio continua manual.
+// O Render sai de IP de datacenter e é bloqueado pelo YouTube/espelhos. Quem
+// busca os bytes é este navegador (IP do usuário); o Render recebe as partes,
+// junta 720p + áudio com ffmpeg e serve o MP4 com Content-Length real. O link
+// final é só um caminho interno, sem URL do provedor e sem query string.
+type DownloadSession = {
+  id: string
+  videoId: string
+  provider: string
+  url: string
+}
 type PreparedDownload = { url: string }
+type ProviderFormat = { url: string; clen: string | number; qualityLabel?: string }
 
-async function requestPreparedDownload(url: string): Promise<PreparedDownload> {
+const UPLOAD_CHUNK = 2 * 1024 * 1024
+
+async function requestDownloadSession(url: string, title: string): Promise<DownloadSession> {
   const res = await fetch('/api/downloads/prepare', {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({ url, title }),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data?.error || 'Não foi possível preparar o download.')
-  if (!data?.url) throw new Error('O download não ficou pronto. Tente de novo.')
+  if (!data?.id || !data?.provider || !data?.videoId) throw new Error('O download não foi iniciado. Tente de novo.')
+  return {
+    id: String(data.id),
+    videoId: String(data.videoId),
+    provider: String(data.provider),
+    url: String(data.url || `/api/downloads/${data.id}/file.mp4`),
+  }
+}
+
+function pickProviderFormats(json: any) {
+  const formats: ProviderFormat[] = Array.isArray(json?.adaptiveFormats) ? json.adaptiveFormats : []
+  const video = formats
+    .filter((f) => String(f.type || '').startsWith('video/mp4')
+      && /avc1/.test(String(f.type || ''))
+      && /720/i.test(String(f.qualityLabel || ''))
+      && Number(f.clen) > 0 && /^https:/i.test(String(f.url || '')))
+    .sort((a, b) => Number(b.clen) - Number(a.clen))[0]
+  const audio = formats
+    .filter((f) => String(f.type || '').startsWith('audio/mp4')
+      && /mp4a\.40\.2/.test(String(f.type || ''))
+      && Number(f.clen) > 0 && /^https:/i.test(String(f.url || '')))
+    .sort((a, b) => Number(b.clen) - Number(a.clen))[0]
+  if (!video || !audio) throw new Error('Este vídeo não tem versão 720p com áudio disponível.')
+  return { video, audio }
+}
+
+async function uploadPart(session: DownloadSession, part: 'video' | 'audio', format: ProviderFormat) {
+  const res = await fetch(format.url, { mode: 'cors' })
+  if (!res.ok || !res.body) throw new Error('O provedor não entregou o arquivo. Tente de novo.')
+  const expected = Number(format.clen)
+  const reader = res.body.getReader()
+  let received = 0
+  let pending: Uint8Array[] = []
+  let pendingSize = 0
+  const flush = async () => {
+    if (!pendingSize) return
+    const chunk = new Uint8Array(pendingSize)
+    let offset = 0
+    for (const piece of pending) {
+      chunk.set(piece, offset)
+      offset += piece.length
+    }
+    const sent = await fetch(`/api/downloads/${session.id}/upload?part=${part}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: chunk,
+    })
+    if (!sent.ok) throw new Error('O envio do vídeo falhou. Tente de novo.')
+    pending = []
+    pendingSize = 0
+  }
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (!value) continue
+    pending.push(value)
+    pendingSize += value.length
+    received += value.length
+    if (pendingSize >= UPLOAD_CHUNK) await flush()
+  }
+  await flush()
+  if (received !== expected) throw new Error('O arquivo veio incompleto do provedor. Tente de novo.')
+}
+
+async function requestPreparedDownload(url: string, title: string): Promise<PreparedDownload> {
+  const session = await requestDownloadSession(url, title)
+  const endpoint = `${session.provider}/api/v1/videos/${encodeURIComponent(session.videoId)}?local=true`
+  const res = await fetch(endpoint, { headers: { Accept: 'application/json' } })
+  if (!res.ok) throw new Error('O provedor não respondeu. Tente de novo em instantes.')
+  const { video, audio } = pickProviderFormats(await res.json())
+  await uploadPart(session, 'video', video)
+  await uploadPart(session, 'audio', audio)
+  const done = await fetch(`/api/downloads/${session.id}/finalize`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ videoSize: Number(video.clen), audioSize: Number(audio.clen) }),
+  })
+  const data = await done.json().catch(() => ({}))
+  if (!done.ok || !data?.url) throw new Error(data?.error || 'Não foi possível montar o download. Tente de novo.')
   return { url: String(data.url) }
 }
 
@@ -366,7 +453,7 @@ export function VideosPage() {
     let reason = ''
     for (const item of items) {
       try {
-        await triggerDownload(await requestPreparedDownload(item.url))
+        await triggerDownload(await requestPreparedDownload(item.url, item.title))
       } catch (error: any) {
         failed += 1
         reason = String(error?.message || '').trim()

@@ -33,7 +33,10 @@ import {
 } from './social.mjs'
 import { getRadar } from './radar.mjs'
 import { youtubeVideoId } from './services.mjs'
-import { cleanupPreparedDownloads, findPreparedDownload, friendlyDownloadError, prepareSearchDownload, probeInnertube, probeInnertubeClients } from './download-prep.mjs'
+import {
+  appendDownloadPart, cleanupPreparedDownloads, createPreparedDownload,
+  finalizePreparedDownload, findPreparedDownload, friendlyDownloadError,
+} from './download-prep.mjs'
 import { db, connectionInfo } from './db.mjs'
 
 const app = express()
@@ -303,19 +306,20 @@ app.get('/api/videos/search', async (req, res) => {
   }
 })
 
-// O download da busca é preparado no Render (720p + áudio, tamanho real) e
-// servido por um caminho sem query string. A URL do provedor nunca vai ao front.
-app.post('/api/downloads/prepare', async (req, res) => {
+// O IP do Render é bloqueado pelo YouTube e pelos espelhos. O navegador do
+// usuário busca o vídeo/áudio e envia em partes; o Render junta e serve o MP4
+// final num caminho sem query string, com Content-Length real.
+app.post('/api/downloads/prepare', (req, res) => {
   const url = String(req.body?.url || '').trim()
   if (!youtubeVideoId(url)) return fail(res, 400, 'Cole um link de vídeo do YouTube.')
   try {
-    const prepared = await prepareSearchDownload(url)
+    const prepared = createPreparedDownload(url, req.body?.title)
     ok(res, {
       ok: true,
       id: prepared.id,
-      url: `/api/downloads/${prepared.id}/file.mp4`,
-      size: prepared.size,
-      filename: prepared.filename,
+      videoId: prepared.videoId,
+      provider: prepared.provider,
+      url: prepared.url,
     })
   } catch (err) {
     console.error('[download:prepare]', String(err?.message || err).slice(0, 240))
@@ -323,47 +327,28 @@ app.post('/api/downloads/prepare', async (req, res) => {
   }
 })
 
-// TEMP: diagnóstico interno para testar espelhos a partir do IP do Render.
-app.post('/api/downloads/probe', async (req, res) => {
-  if (req.body?.mode === 'clients') {
-    return ok(res, { out: await probeInnertubeClients(String(req.body?.id || '5fxUjqly8oM').slice(0, 11)) })
+app.post('/api/downloads/:id/upload', express.raw({ type: '*/*', limit: '9mb' }), (req, res) => {
+  try {
+    ok(res, appendDownloadPart(req.params.id, req.query?.part, req.body))
+  } catch (err) {
+    console.error('[download:upload]', String(err?.message || err).slice(0, 200))
+    fail(res, 422, friendlyDownloadError(err))
   }
-  if (req.body?.mode === 'innertube') {
-    return ok(res, { out: await probeInnertube(String(req.body?.id || '5fxUjqly8oM').slice(0, 11)) })
+})
+
+app.post('/api/downloads/:id/finalize', async (req, res) => {
+  try {
+    const final = await finalizePreparedDownload(req.params.id, req.body)
+    ok(res, {
+      ok: true,
+      url: `/api/downloads/${final.id}/file.mp4`,
+      size: final.size,
+      filename: final.filename,
+    })
+  } catch (err) {
+    console.error('[download:finalize]', String(err?.message || err).slice(0, 200))
+    fail(res, 422, 'Não foi possível montar o download agora. Tente de novo em instantes.')
   }
-  const hosts = Array.isArray(req.body?.hosts) ? req.body.hosts.slice(0, 40) : []
-  const id = String(req.body?.id || '5fxUjqly8oM').slice(0, 11)
-  const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
-  const out = []
-  for (const raw of hosts) {
-    const base = String(raw || '').trim().replace(/\/+$/, '')
-    let host = base
-    try { host = new URL(base).host } catch {}
-    if (!/^https:\/\//i.test(base)) { out.push({ host, error: 'invalid' }); continue }
-    try {
-      const endpoint = new URL(`${base}/api/v1/videos/${encodeURIComponent(id)}`)
-      endpoint.searchParams.set('local', 'true')
-      const r = await fetch(endpoint, {
-        headers: { Accept: 'application/json', 'User-Agent': ua },
-        signal: AbortSignal.timeout(12000),
-      })
-      const text = await r.text().catch(() => '')
-      let n = 0
-      let has720 = false
-      let json = false
-      try {
-        const parsed = JSON.parse(text)
-        json = true
-        const formats = Array.isArray(parsed?.adaptiveFormats) ? parsed.adaptiveFormats : []
-        n = formats.length
-        has720 = formats.some((f) => /720/i.test(String(f?.qualityLabel || '')) && /avc1/.test(String(f?.type || '')))
-      } catch {}
-      out.push({ host, status: r.status, json, n, has720, head: text.slice(0, 30) })
-    } catch (error) {
-      out.push({ host, error: String(error?.message || error).slice(0, 80) })
-    }
-  }
-  ok(res, { out })
 })
 
 app.get('/api/downloads/:id/file.mp4', (req, res) => {

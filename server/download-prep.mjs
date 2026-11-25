@@ -1,16 +1,15 @@
-// Prepara o download da busca com tamanho real: o player do YouTube devolve o
-// vídeo 720p e o áudio em faixas separadas; o ffmpeg junta os dois em um MP4
-// progressivo servido por /api/downloads/:id/file.mp4. A URL do CDN nunca é
-// devolvida ao navegador, e nenhum `?` aparece no link de download.
+// Download da busca: o IP do Render/Netlify é bloqueado pelo YouTube e pelos
+// espelhos públicos, então quem busca os bytes é o navegador do usuário (IP
+// residencial). O Render só recebe as partes, junta 720p + áudio com ffmpeg e
+// serve o MP4 final em /api/downloads/:id/file.mp4, com Content-Length real e
+// sem query string. Nenhuma URL do provedor/CDN aparece na interface.
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { Readable } from 'node:stream'
-import { pipeline as streamPipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
 import { DATA } from './store.mjs'
-import { INVIDIOUS_URL, INVIDIOUS_URLS, youtubeVideoId } from './services.mjs'
+import { youtubeVideoId } from './services.mjs'
 import {
   beginHeavyWork, endHeavyWork, runHeavyExclusive, waitForLiveRecording,
 } from './work-gate.mjs'
@@ -21,283 +20,24 @@ fs.mkdirSync(DOWNLOADS, { recursive: true })
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const LOCAL_FFMPEG = path.join(APP_ROOT, '.bin', 'ffmpeg')
 const FFMPEG_BIN = process.env.FFMPEG_BIN || (fs.existsSync(LOCAL_FFMPEG) ? LOCAL_FFMPEG : 'ffmpeg')
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
-const INNERTUBE_KEY = process.env.YOUTUBE_INNERTUBE_KEY || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
-const ANDROID_UA = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip'
-const INNERTUBE_UA = ANDROID_UA
-const INNERTUBE_CLIENTS = [
-  { name: 'ANDROID', ua: ANDROID_UA, client: { clientName: 'ANDROID', clientVersion: '20.10.38', androidSdkVersion: 30, hl: 'en', gl: 'US' } },
-  { name: 'IOS', ua: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_1 like Mac OS X;)', client: { clientName: 'IOS', clientVersion: '20.10.4', deviceMake: 'Apple', deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.3.1.22D72', hl: 'en', gl: 'US' } },
-  { name: 'WEB', ua: UA, client: { clientName: 'WEB', clientVersion: '2.20250312.04.00', hl: 'en', gl: 'US' } },
-  { name: 'MWEB', ua: UA, client: { clientName: 'MWEB', clientVersion: '2.20250311.03.00', hl: 'en', gl: 'US' } },
-  { name: 'TVHTML5', ua: 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version', client: { clientName: 'TVHTML5', clientVersion: '7.20250312.18.00', hl: 'en', gl: 'US' } },
-  { name: 'TV_EMBEDDED', ua: UA, client: { clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', clientVersion: '2.0', hl: 'en', gl: 'US' }, thirdParty: { embedUrl: 'https://www.youtube.com/' } },
-  { name: 'WEB_EMBEDDED', ua: UA, client: { clientName: 'WEB_EMBEDDED_PLAYER', clientVersion: '1.20250310.01.00', hl: 'en', gl: 'US' }, thirdParty: { embedUrl: 'https://www.youtube.com/' } },
-  { name: 'ANDROID_EMBEDDED', ua: ANDROID_UA, client: { clientName: 'ANDROID_EMBEDDED_PLAYER', clientVersion: '19.44.38', androidSdkVersion: 30, hl: 'en', gl: 'US' }, thirdParty: { embedUrl: 'https://www.youtube.com/' } },
-  { name: 'ANDROID_VR', ua: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip', client: { clientName: 'ANDROID_VR', clientVersion: '1.60.19', androidSdkVersion: 32, osName: 'Android', osVersion: '12', hl: 'en', gl: 'US' } },
-  { name: 'VISIONOS', ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15', client: { clientName: 'VISIONOS', clientVersion: '1.0.0', hl: 'en', gl: 'US' } },
-  { name: 'IOS_WEBKEY', ua: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_1 like Mac OS X;)', client: { clientName: 'IOS', clientVersion: '20.10.4', deviceMake: 'Apple', deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.3.1.22D72', hl: 'en', gl: 'US' }, headers: { 'x-youtube-client-name': '5', 'x-youtube-client-version': '20.10.4' } },
-  { name: 'WEB_SAFARI', ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15', client: { clientName: 'WEB', clientVersion: '2.20250312.04.00', hl: 'en', gl: 'US' } },
-  { name: 'TV_SAMSUNG', ua: 'Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.0) AppleWebKit/537.36 (KHTML, like Gecko) 6.0/6.0 TV Safari/537.36', client: { clientName: 'TVHTML5_SAMSUNG', clientVersion: '6.0100', deviceModel: 'SmartTV', hl: 'en', gl: 'US' } },
-]
-const STREAM_HEADERS = {
-  'user-agent': UA,
-  accept: '*/*',
-  'accept-encoding': 'identity',
-  // O companion do Invidious quebra com `bytes=0-1023`; o range aberto devolve
-  // o arquivo inteiro com Content-Length e Content-Range exatos.
-  range: 'bytes=0-',
-}
-const API_TIMEOUT = 18000
-const STREAM_TIMEOUT = 150000
+const PROVIDER = String(process.env.SEARCH_DOWNLOAD_PROVIDER || 'https://yt.chocolatemoo53.com')
+  .trim().replace(/\/+$/, '')
 const FFMPEG_TIMEOUT = 10 * 60 * 1000
 const TTL = 30 * 60 * 1000
 const MAX_FILES = 12
 const ID_RE = /^dl-[a-z0-9-]+$/i
+const PARTS = new Set(['video', 'audio'])
 
-const preferred = String(process.env.SEARCH_DOWNLOAD_INVIDIOUS_URL || '').trim().replace(/\/+$/, '')
-const HOSTS = [...new Set([
-  preferred,
-  INVIDIOUS_URL,
-  ...INVIDIOUS_URLS.slice(0, 3),
-].filter(Boolean))]
+const sessionDir = (id) => path.join(DOWNLOADS, id)
+const metaPath = (id) => path.join(sessionDir(id), 'meta.json')
 
-function asAbsolute(value, base) {
-  const raw = String(value || '').trim()
-  if (!raw) return ''
+function readMeta(id) {
+  if (!ID_RE.test(String(id || ''))) return null
   try {
-    const parsed = new URL(raw, base)
-    return parsed.protocol === 'https:' ? parsed.toString() : ''
+    return JSON.parse(fs.readFileSync(metaPath(id), 'utf8'))
   } catch {
-    return ''
+    return null
   }
-}
-
-function pickFormats(json) {
-  const adaptive = Array.isArray(json?.adaptiveFormats) ? json.adaptiveFormats : []
-  const videos = adaptive.filter((fmt) => {
-    const type = String(fmt?.type || '')
-    return type.startsWith('video/mp4')
-      && type.includes('avc1')
-      && /720/i.test(String(fmt?.qualityLabel || ''))
-      && Number(fmt?.clen) > 0
-  }).sort((a, b) => Number(b.clen) - Number(a.clen))
-  const audios = adaptive.filter((fmt) => {
-    const type = String(fmt?.type || '')
-    return type.startsWith('audio/mp4')
-      && type.includes('mp4a.40.2')
-      && Number(fmt?.clen) > 0
-  }).sort((a, b) => Number(b.clen) - Number(a.clen))
-  return { video: videos[0] || null, audio: audios[0] || null }
-}
-
-// O player interno do YouTube devolve URLs diretas com contentLength. Alguns
-// clientes são bloqueados em IP de datacenter; tentamos todos em ordem.
-async function innertubeJson(id, client) {
-  const endpoint = new URL('https://www.youtube.com/youtubei/v1/player')
-  endpoint.searchParams.set('key', INNERTUBE_KEY)
-  const context = { client: client.client }
-  if (client.thirdParty) context.thirdParty = client.thirdParty
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'user-agent': client.ua, ...(client.headers || {}) },
-    body: JSON.stringify({ context, videoId: id, contentCheckOk: true, racyCheckOk: true }),
-    signal: AbortSignal.timeout(API_TIMEOUT),
-  })
-  if (!res.ok) throw new Error(`youtube-player-${res.status}`)
-  return res.json()
-}
-
-/** Diagnóstico interno: quais clientes o IP do Render consegue usar? */
-export async function probeInnertubeClients(id) {
-  const out = []
-  for (const client of INNERTUBE_CLIENTS) {
-    try {
-      const json = await innertubeJson(id, client)
-      const formats = Array.isArray(json?.streamingData?.adaptiveFormats) ? json.streamingData.adaptiveFormats : []
-      out.push({
-        name: client.name,
-        status: json?.playabilityStatus?.status,
-        reason: String(json?.playabilityStatus?.reason || '').slice(0, 90),
-        formats: formats.length,
-        has720: formats.some((f) => /720/i.test(String(f?.qualityLabel || '')) && /avc1/.test(String(f?.mimeType || ''))),
-      })
-    } catch (error) {
-      out.push({ name: client.name, error: String(error?.message || error).slice(0, 90) })
-    }
-  }
-  return out
-}
-
-async function innertubePlayer(id) {
-  let lastError = new Error('youtube-no-client')
-  for (const client of INNERTUBE_CLIENTS) {
-    try {
-      const meta = await innertubePlayerWithClient(id, client)
-      console.log('[download:resolve]', `youtube-player/${client.name} → 720p`)
-      return meta
-    } catch (error) {
-      lastError = error
-      console.warn('[download:resolve]', `youtube-player/${client.name}: ${String(error?.message || error).slice(0, 100)}`)
-    }
-  }
-  throw lastError
-}
-
-async function innertubePlayerWithClient(id, client) {
-  const json = await innertubeJson(id, client)
-  if (String(json?.playabilityStatus?.status || '') !== 'OK') {
-    throw new Error(`youtube-playability-${json?.playabilityStatus?.status || 'unknown'}`)
-  }
-  const adaptive = Array.isArray(json?.streamingData?.adaptiveFormats)
-    ? json.streamingData.adaptiveFormats : []
-  const httpsUrl = (fmt) => {
-    const url = String(fmt?.url || '')
-    return /^https:\/\//i.test(url) ? url : ''
-  }
-  const videos = adaptive.filter((fmt) => {
-    const type = String(fmt?.mimeType || '')
-    return type.startsWith('video/mp4')
-      && type.includes('avc1')
-      && /720/i.test(String(fmt?.qualityLabel || ''))
-      && Number(fmt?.contentLength) > 0
-      && httpsUrl(fmt)
-  }).sort((a, b) => Number(b.contentLength) - Number(a.contentLength))
-  const audios = adaptive.filter((fmt) => {
-    const type = String(fmt?.mimeType || '')
-    return type.startsWith('audio/mp4')
-      && type.includes('mp4a.40.2')
-      && Number(fmt?.contentLength) > 0
-      && httpsUrl(fmt)
-  }).sort((a, b) => Number(b.contentLength) - Number(a.contentLength))
-  if (!videos[0] || !audios[0]) throw new Error('youtube-no-format')
-  return {
-    base: 'youtube-player',
-    title: String(json?.videoDetails?.title || 'Vídeo do YouTube').slice(0, 120),
-    video: { url: httpsUrl(videos[0]), size: Number(videos[0].contentLength) },
-    audio: { url: httpsUrl(audios[0]), size: Number(audios[0].contentLength) },
-  }
-}
-
-/** Diagnóstico interno: o IP do Render consegue chamar o player e o CDN? */
-export async function probeInnertube(id) {
-  try {
-    const meta = await innertubePlayer(id)
-    const test = async (url) => {
-      try {
-        const r = await fetch(url, {
-          headers: { 'user-agent': INNERTUBE_UA, accept: '*/*', range: 'bytes=0-1023' },
-          signal: AbortSignal.timeout(20000),
-        })
-        await r.arrayBuffer().catch(() => {})
-        return {
-          status: r.status,
-          cl: r.headers.get('content-length'),
-          cr: r.headers.get('content-range'),
-          type: r.headers.get('content-type'),
-        }
-      } catch (error) {
-        return { error: String(error?.message || error).slice(0, 100) }
-      }
-    }
-    return {
-      ok: true,
-      title: meta.title,
-      video: { size: meta.video.size, ...(await test(meta.video.url)) },
-      audio: { size: meta.audio.size, ...(await test(meta.audio.url)) },
-    }
-  } catch (error) {
-    return { ok: false, error: String(error?.message || error).slice(0, 160) }
-  }
-}
-
-async function resolveFormats(id) {
-  try {
-    const fromYoutube = await innertubePlayer(id)
-    console.log('[download:resolve] youtube-player → 720p')
-    return fromYoutube
-  } catch (error) {
-    console.warn('[download:resolve] youtube-player:', String(error?.message || error).slice(0, 120))
-  }
-  let lastError = new Error('invidious-unreachable')
-  for (const base of HOSTS) {
-    try {
-      const endpoint = new URL(`${base}/api/v1/videos/${encodeURIComponent(id)}`)
-      endpoint.searchParams.set('local', 'true')
-      const res = await fetch(endpoint, {
-        headers: { Accept: 'application/json', 'User-Agent': UA },
-        signal: AbortSignal.timeout(API_TIMEOUT),
-      })
-      if (!res.ok) throw new Error(`invidious-${res.status}`)
-      const json = await res.json()
-      if (!json || typeof json !== 'object') throw new Error('invidious-invalid')
-      if (json.error) throw new Error('invidious-error')
-      if (json.liveNow || json.isUpcoming) throw new Error('invidious-live')
-      const { video, audio } = pickFormats(json)
-      if (!video || !audio) throw new Error('invidious-no-format')
-      const videoUrl = asAbsolute(video.url, base)
-      const audioUrl = asAbsolute(audio.url, base)
-      if (!videoUrl || !audioUrl) throw new Error('invidious-no-url')
-      console.log('[download:resolve]', `${new URL(base).host} → 720p`)
-      return {
-        base,
-        title: String(json.title || 'Vídeo do YouTube').slice(0, 120),
-        video: { url: videoUrl, size: Number(video.clen) },
-        audio: { url: audioUrl, size: Number(audio.clen) },
-      }
-    } catch (error) {
-      lastError = error
-      console.warn('[download:resolve]', `${new URL(base).host}: ${String(error?.message || error).slice(0, 120)}`)
-    }
-  }
-  throw lastError
-}
-
-async function fetchStream(url, headers) {
-  const res = await fetch(url, {
-    headers,
-    redirect: 'follow',
-    signal: AbortSignal.timeout(STREAM_TIMEOUT),
-  })
-  if (!res.ok || !res.body) {
-    await res.body?.cancel().catch(() => {})
-    throw new Error(`stream-${res.status}`)
-  }
-  const declared = Number(res.headers.get('content-length') || 0)
-  const total = Number(String(res.headers.get('content-range') || '').split('/').pop() || 0)
-  return { res, declared: total || declared }
-}
-
-async function saveStream(url, expected, dest) {
-  let opened
-  try {
-    opened = await fetchStream(url, STREAM_HEADERS)
-  } catch (error) {
-    // Alguns CDNs só respondem sem Range; nesse caso o Content-Length é o total.
-    opened = await fetchStream(url, { 'user-agent': UA, accept: '*/*', 'accept-encoding': 'identity' })
-  }
-  if (opened.declared && opened.declared !== expected) throw new Error('stream-size')
-  await streamPipeline(Readable.fromWeb(opened.res.body), fs.createWriteStream(dest))
-  const saved = fs.statSync(dest).size
-  if (saved !== expected) throw new Error('stream-size')
-}
-
-function runFfmpeg(args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(FFMPEG_BIN, args, { windowsHide: true })
-    let stderr = ''
-    const timer = setTimeout(() => child.kill('SIGKILL'), FFMPEG_TIMEOUT)
-    child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-1200) })
-    child.on('error', (error) => {
-      clearTimeout(timer)
-      reject(error)
-    })
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      if (code === 0) return resolve()
-      reject(new Error(`ffmpeg-${code}: ${stderr.trim().slice(-300)}`))
-    })
-  })
 }
 
 function safeFilename(title) {
@@ -338,66 +78,104 @@ export function cleanupPreparedDownloads() {
 }
 
 export function findPreparedDownload(id) {
-  if (!ID_RE.test(String(id || ''))) return null
-  const dir = path.join(DOWNLOADS, id)
-  try {
-    const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'))
-    const file = path.join(dir, 'final.mp4')
-    if (!Number.isFinite(Number(meta?.size)) || !fs.existsSync(file)) return null
-    const size = fs.statSync(file).size
-    if (size !== Number(meta.size)) return null
-    return { ...meta, size, file }
-  } catch {
-    return null
-  }
+  const meta = readMeta(id)
+  if (!meta || meta.status !== 'done') return null
+  const file = path.join(sessionDir(id), 'final.mp4')
+  if (!Number.isFinite(Number(meta.size)) || !fs.existsSync(file)) return null
+  const size = fs.statSync(file).size
+  if (size !== Number(meta.size)) return null
+  return { ...meta, size, file }
 }
 
-async function prepare(url) {
-  const id = youtubeVideoId(url)
-  if (!id) throw new Error('invidious-no-id')
+/** Abre uma sessão de upload. O front busca os bytes e envia em partes. */
+export function createPreparedDownload(url, title) {
+  const videoId = youtubeVideoId(url)
+  if (!videoId) throw new Error('invidious-no-id')
   cleanupPreparedDownloads()
-  const meta = await resolveFormats(id)
-
-  const token = `dl-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`
-  const dir = path.join(DOWNLOADS, token)
-  const videoFile = path.join(dir, 'video.mp4')
-  const audioFile = path.join(dir, 'audio.m4a')
-  const finalFile = path.join(dir, 'final.mp4')
-  fs.mkdirSync(dir, { recursive: true })
-  try {
-    await saveStream(meta.video.url, meta.video.size, videoFile)
-    await saveStream(meta.audio.url, meta.audio.size, audioFile)
-    await runFfmpeg([
-      '-hide_banner', '-loglevel', 'error', '-y',
-      '-i', videoFile, '-i', audioFile,
-      '-c', 'copy', '-bsf:a', 'aac_adtstoasc',
-      '-movflags', '+faststart', '-shortest', finalFile,
-    ])
-    const size = fs.statSync(finalFile).size
-    if (size < 1024 * 100) throw new Error('ffmpeg-empty')
-    const result = {
-      id: token,
-      size,
-      title: meta.title,
-      filename: safeFilename(meta.title),
-      createdAt: Date.now(),
-    }
-    fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(result))
-    fs.rmSync(videoFile, { force: true })
-    fs.rmSync(audioFile, { force: true })
-    return result
-  } catch (error) {
-    fs.rmSync(dir, { recursive: true, force: true })
-    throw error
+  const id = `dl-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`
+  fs.mkdirSync(sessionDir(id), { recursive: true })
+  fs.writeFileSync(metaPath(id), JSON.stringify({
+    id,
+    status: 'pending',
+    title: String(title || 'Vídeo do YouTube').slice(0, 120),
+    createdAt: Date.now(),
+  }))
+  return {
+    id,
+    videoId,
+    provider: PROVIDER,
+    url: `/api/downloads/${id}/file.mp4`,
   }
 }
 
-export function prepareSearchDownload(url) {
+export function appendDownloadPart(id, part, buffer) {
+  const meta = readMeta(id)
+  if (!meta || meta.status !== 'pending') throw new Error('download-sessao-invalida')
+  if (!PARTS.has(String(part || ''))) throw new Error('download-parte-invalida')
+  if (!Buffer.isBuffer(buffer) || !buffer.length) throw new Error('download-vazio')
+  if (buffer.length > 8 * 1024 * 1024) throw new Error('download-parte-grande')
+  const target = path.join(sessionDir(id), `${part}.part`)
+  fs.appendFileSync(target, buffer)
+  return { ok: true, size: fs.statSync(target).size }
+}
+
+function runFfmpeg(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(FFMPEG_BIN, args, { windowsHide: true })
+    let stderr = ''
+    const timer = setTimeout(() => child.kill('SIGKILL'), FFMPEG_TIMEOUT)
+    child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-1200) })
+    child.on('error', (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code === 0) return resolve()
+      reject(new Error(`ffmpeg-${code}: ${stderr.trim().slice(-300)}`))
+    })
+  })
+}
+
+/** Junta as partes e publica o MP4 final. */
+export function finalizePreparedDownload(id, payload) {
+  const meta = readMeta(id)
+  if (!meta || meta.status !== 'pending') throw new Error('download-sessao-invalida')
+  const videoFile = path.join(sessionDir(id), 'video.part')
+  const audioFile = path.join(sessionDir(id), 'audio.part')
+  const finalFile = path.join(sessionDir(id), 'final.mp4')
+  const videoSize = Number(payload?.videoSize)
+  const audioSize = Number(payload?.audioSize)
+  if (!Number.isFinite(videoSize) || !Number.isFinite(audioSize)
+    || videoSize <= 0 || audioSize <= 0
+    || fs.statSync(videoFile).size !== videoSize
+    || fs.statSync(audioFile).size !== audioSize) {
+    throw new Error('download-tamanho')
+  }
+
   const execute = async () => {
     beginHeavyWork()
     await waitForLiveRecording()
     try {
-      return await prepare(url)
+      await runFfmpeg([
+        '-hide_banner', '-loglevel', 'error', '-y',
+        '-i', videoFile, '-i', audioFile,
+        '-c', 'copy', '-bsf:a', 'aac_adtstoasc',
+        '-movflags', '+faststart', '-shortest', finalFile,
+      ])
+      const size = fs.statSync(finalFile).size
+      if (size < 1024 * 100) throw new Error('ffmpeg-empty')
+      const result = {
+        ...meta,
+        status: 'done',
+        size,
+        filename: safeFilename(meta.title),
+      }
+      fs.writeFileSync(metaPath(id), JSON.stringify(result))
+      fs.rmSync(videoFile, { force: true })
+      fs.rmSync(audioFile, { force: true })
+      console.log('[download:ready]', `${id} → ${size} bytes`)
+      return result
     } finally {
       endHeavyWork()
     }
@@ -407,8 +185,7 @@ export function prepareSearchDownload(url) {
 
 export function friendlyDownloadError(error) {
   const message = String(error?.message || '')
-  if (message.includes('invidious-live')) return 'Este vídeo está ao vivo ou ainda não foi publicado.'
-  if (message.includes('invidious-no-format')) return 'Este vídeo não tem uma versão 720p com áudio disponível.'
   if (message.includes('invidious-no-id')) return 'Cole um link de vídeo do YouTube.'
+  if (message.includes('download-sessao')) return 'Este download expirou. Tente de novo.'
   return 'Não foi possível preparar o download agora. Tente de novo em instantes.'
 }
