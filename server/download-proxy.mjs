@@ -95,7 +95,10 @@ async function bufferStream(job, streamUrl) {
       headers: { 'User-Agent': 'Mozilla/5.0' },
       signal: controller.signal,
     })
-    if (!res.ok || !res.body) throw new Error('stream-indisponivel')
+    if (!res.ok || !res.body) {
+      const detail = await res.text().catch(() => '')
+      throw new Error(`stream-http-${res.status}-${detail.slice(0, 80)}`)
+    }
     let received = 0
     async function* counted(source) {
       for await (const chunk of source) {
