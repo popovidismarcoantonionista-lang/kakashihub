@@ -71,7 +71,7 @@ async function resolveGenDownload(sourceUrl) {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     body: JSON.stringify({ url: sourceUrl }),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(120_000),
   })
   if (!res.ok) throw new Error('extract-falhou')
   const json = await res.json()
