@@ -182,9 +182,12 @@ export function debugScores(words, duration, span = 8) {
 }
 
 function infractionFor(text) {
-  if (/faixa contínua|continua|mudança de faixa|mudanca de faixa|vindo pra faixa/i.test(text)) return 'MUDANÇA DE FAIXA SEM SINALIZAR'
-  if (/proibido|return|virar|conversão|conversao/i.test(text)) return 'CONVERSÃO PROIBIDA'
-  if (/sinal vermelho|vermelho/i.test(text)) return 'AVANÇAR SINAL VERMELHO'
+  // Cita o CTB só quando a fala descreve a infração; os artigos foram conferidos
+  // na Lei 9.503/97 (196 = não sinalizar deslocamento lateral, 207 = conversão
+  // em local proibido, 208 = avançar sinal vermelho).
+  if (/faixa contínua|continua|mudança de faixa|mudanca de faixa|vindo pra faixa/i.test(text)) return 'MUDANÇA DE FAIXA SEM SINALIZAR (CTB ART. 196)'
+  if (/sinal vermelho|vermelho/i.test(text)) return 'AVANÇAR SINAL VERMELHO (CTB ART. 208)'
+  if (/proibido|return|virar|conversão|conversao/i.test(text)) return 'CONVERSÃO PROIBIDA (CTB ART. 207)'
   if (/contramão|contramao/i.test(text)) return 'CONTRAMÃO'
   if (/corredor|ônibus|onibus/i.test(text)) return 'CORREDOR ENTRE FAIXAS SEM CAUTELA'
   if (/pedestre|faixa de pedestre/i.test(text)) return 'DAR PASSAGEM A PEDESTRE'
