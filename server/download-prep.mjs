@@ -23,20 +23,18 @@ const LOCAL_FFMPEG = path.join(APP_ROOT, '.bin', 'ffmpeg')
 const FFMPEG_BIN = process.env.FFMPEG_BIN || (fs.existsSync(LOCAL_FFMPEG) ? LOCAL_FFMPEG : 'ffmpeg')
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
 const INNERTUBE_KEY = process.env.YOUTUBE_INNERTUBE_KEY || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
-const INNERTUBE_UA = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip'
-const INNERTUBE_BODY = {
-  context: {
-    client: {
-      clientName: 'ANDROID',
-      clientVersion: '20.10.38',
-      androidSdkVersion: 30,
-      hl: 'en',
-      gl: 'US',
-    },
-  },
-  contentCheckOk: true,
-  racyCheckOk: true,
-}
+const ANDROID_UA = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip'
+const INNERTUBE_UA = ANDROID_UA
+const INNERTUBE_CLIENTS = [
+  { name: 'ANDROID', ua: ANDROID_UA, client: { clientName: 'ANDROID', clientVersion: '20.10.38', androidSdkVersion: 30, hl: 'en', gl: 'US' } },
+  { name: 'IOS', ua: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_1 like Mac OS X;)', client: { clientName: 'IOS', clientVersion: '20.10.4', deviceMake: 'Apple', deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.3.1.22D72', hl: 'en', gl: 'US' } },
+  { name: 'WEB', ua: UA, client: { clientName: 'WEB', clientVersion: '2.20250312.04.00', hl: 'en', gl: 'US' } },
+  { name: 'MWEB', ua: UA, client: { clientName: 'MWEB', clientVersion: '2.20250311.03.00', hl: 'en', gl: 'US' } },
+  { name: 'TVHTML5', ua: 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version', client: { clientName: 'TVHTML5', clientVersion: '7.20250312.18.00', hl: 'en', gl: 'US' } },
+  { name: 'TV_EMBEDDED', ua: UA, client: { clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', clientVersion: '2.0', hl: 'en', gl: 'US' }, thirdParty: { embedUrl: 'https://www.youtube.com/' } },
+  { name: 'WEB_EMBEDDED', ua: UA, client: { clientName: 'WEB_EMBEDDED_PLAYER', clientVersion: '1.20250310.01.00', hl: 'en', gl: 'US' }, thirdParty: { embedUrl: 'https://www.youtube.com/' } },
+  { name: 'ANDROID_EMBEDDED', ua: ANDROID_UA, client: { clientName: 'ANDROID_EMBEDDED_PLAYER', clientVersion: '19.44.38', androidSdkVersion: 30, hl: 'en', gl: 'US' }, thirdParty: { embedUrl: 'https://www.youtube.com/' } },
+]
 const STREAM_HEADERS = {
   'user-agent': UA,
   accept: '*/*',
@@ -88,20 +86,61 @@ function pickFormats(json) {
   return { video: videos[0] || null, audio: audios[0] || null }
 }
 
-// O player interno do YouTube funciona a partir de IP de datacenter e devolve
-// URLs diretas com contentLength. É a fonte principal; espelhos Invidious são
-// apenas fallback (quase todos bloqueiam IP de datacenter).
-async function innertubePlayer(id) {
+// O player interno do YouTube devolve URLs diretas com contentLength. Alguns
+// clientes são bloqueados em IP de datacenter; tentamos todos em ordem.
+async function innertubeJson(id, client) {
   const endpoint = new URL('https://www.youtube.com/youtubei/v1/player')
   endpoint.searchParams.set('key', INNERTUBE_KEY)
+  const context = { client: client.client }
+  if (client.thirdParty) context.thirdParty = client.thirdParty
   const res = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'user-agent': INNERTUBE_UA },
-    body: JSON.stringify({ ...INNERTUBE_BODY, videoId: id }),
+    headers: { 'content-type': 'application/json', 'user-agent': client.ua },
+    body: JSON.stringify({ context, videoId: id, contentCheckOk: true, racyCheckOk: true }),
     signal: AbortSignal.timeout(API_TIMEOUT),
   })
   if (!res.ok) throw new Error(`youtube-player-${res.status}`)
-  const json = await res.json()
+  return res.json()
+}
+
+/** Diagnóstico interno: quais clientes o IP do Render consegue usar? */
+export async function probeInnertubeClients(id) {
+  const out = []
+  for (const client of INNERTUBE_CLIENTS) {
+    try {
+      const json = await innertubeJson(id, client)
+      const formats = Array.isArray(json?.streamingData?.adaptiveFormats) ? json.streamingData.adaptiveFormats : []
+      out.push({
+        name: client.name,
+        status: json?.playabilityStatus?.status,
+        reason: String(json?.playabilityStatus?.reason || '').slice(0, 90),
+        formats: formats.length,
+        has720: formats.some((f) => /720/i.test(String(f?.qualityLabel || '')) && /avc1/.test(String(f?.mimeType || ''))),
+      })
+    } catch (error) {
+      out.push({ name: client.name, error: String(error?.message || error).slice(0, 90) })
+    }
+  }
+  return out
+}
+
+async function innertubePlayer(id) {
+  let lastError = new Error('youtube-no-client')
+  for (const client of INNERTUBE_CLIENTS) {
+    try {
+      const meta = await innertubePlayerWithClient(id, client)
+      console.log('[download:resolve]', `youtube-player/${client.name} → 720p`)
+      return meta
+    } catch (error) {
+      lastError = error
+      console.warn('[download:resolve]', `youtube-player/${client.name}: ${String(error?.message || error).slice(0, 100)}`)
+    }
+  }
+  throw lastError
+}
+
+async function innertubePlayerWithClient(id, client) {
+  const json = await innertubeJson(id, client)
   if (String(json?.playabilityStatus?.status || '') !== 'OK') {
     throw new Error(`youtube-playability-${json?.playabilityStatus?.status || 'unknown'}`)
   }

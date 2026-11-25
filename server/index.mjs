@@ -33,7 +33,7 @@ import {
 } from './social.mjs'
 import { getRadar } from './radar.mjs'
 import { youtubeVideoId } from './services.mjs'
-import { cleanupPreparedDownloads, findPreparedDownload, friendlyDownloadError, prepareSearchDownload, probeInnertube } from './download-prep.mjs'
+import { cleanupPreparedDownloads, findPreparedDownload, friendlyDownloadError, prepareSearchDownload, probeInnertube, probeInnertubeClients } from './download-prep.mjs'
 import { db, connectionInfo } from './db.mjs'
 
 const app = express()
@@ -325,6 +325,9 @@ app.post('/api/downloads/prepare', async (req, res) => {
 
 // TEMP: diagnóstico interno para testar espelhos a partir do IP do Render.
 app.post('/api/downloads/probe', async (req, res) => {
+  if (req.body?.mode === 'clients') {
+    return ok(res, { out: await probeInnertubeClients(String(req.body?.id || '5fxUjqly8oM').slice(0, 11)) })
+  }
   if (req.body?.mode === 'innertube') {
     return ok(res, { out: await probeInnertube(String(req.body?.id || '5fxUjqly8oM').slice(0, 11)) })
   }
