@@ -56,6 +56,9 @@ export function EstudioPage() {
   const apiRef = useRef(api)
   apiRef.current = api
   const games = state?.settings?.niche === 'games'
+  // Perseguição tem corte próprio: 9:16 ou 16:9, sempre sem caixa de crop.
+  const chase = clip?.type === 'perseguicao'
+  const aspect: '9:16' | '16:9' = chase && clip?.aspect === '16:9' ? '16:9' : '9:16'
   // Depende dos valores, não da identidade do objeto: o refresh periódico troca
   // a referência de clip.cam e clobberaria o ajuste manual a cada 1,4s.
   const camSig = clip?.cam
@@ -83,6 +86,7 @@ export function EstudioPage() {
 
   useEffect(() => {
     if (!clip || !source || autoCamDone.current.has(clip.id)) return
+    if (clip.type === 'perseguicao') return
     autoCamDone.current.add(clip.id)
     // Nunca sobrescreve um ajuste manual (ou um ajuste já detectado). O auto
     // só roda uma vez, para clipes que ainda não têm caixa salva.
@@ -95,7 +99,7 @@ export function EstudioPage() {
       // outros cortes e faria ela "andar" sozinha em cada reprocessamento.
       await call(`/api/clips/${clip.id}`, { method: 'PATCH', body: JSON.stringify({ cam }) })
     }).catch(() => {})
-  }, [clip?.id, source?.id])
+  }, [clip?.id, clip?.type, source?.id])
 
   const patchClip = async (patch: Partial<Clip>) => {
     if (!clip) return
@@ -224,10 +228,10 @@ export function EstudioPage() {
         <div className="studio-left">
           <div className="panel preview-panel">
             <div className="panel-head tight">
-              <span className="mono">PRÉVIA 9:16</span>
+              <span className="mono">PRÉVIA {aspect}</span>
               <StagePill stage={clip.stage} />
             </div>
-            <Preview clip={clip} source={source} />
+            <Preview clip={clip} source={source} aspect={aspect} />
             <div className="sp-meta">
               <TypeBadge type={clip.type} />
               <span className="mono">{fmtRange(clip.start, clip.end)}</span>
@@ -263,7 +267,10 @@ export function EstudioPage() {
             <div className="agent-list">
               <div className="agent-row">
                 <span className="agent-ico"><Crop size={14} /></span>
-                <div><b>Enquadramento</b><em>{FRAMING_LABEL[clip.framing] || 'Split'}</em></div>
+                <div>
+                  <b>Enquadramento</b>
+                  <em>{chase ? `Sem caixa · ${aspect}` : (FRAMING_LABEL[clip.framing] || 'Split')}</em>
+                </div>
                 <span className="agent-state">pronto</span>
               </div>
             </div>
@@ -284,48 +291,72 @@ export function EstudioPage() {
               <span className="mono muted">#{String(index + 1).padStart(2, '0')}</span>
             </div>
 
-            <label className="field-label">Enquadramento</label>
-            {games ? (
-              <div className="segmented small">
-                <button className="active">Split</button>
-              </div>
+            {chase ? (
+              <>
+                <label className="field-label">Formato do corte</label>
+                <div className="segmented small">
+                  {(['9:16', '16:9'] as const).map((a) => (
+                    <button
+                      key={a}
+                      className={aspect === a ? 'active' : ''}
+                      onClick={() => patchClip({ aspect: a, framing: 'centro' })}
+                    >
+                      {a}
+                    </button>
+                  ))}
+                </div>
+                <span className="cam-hint">
+                  Sem caixa de crop: {aspect === '16:9'
+                    ? 'o quadro inteiro é mantido, sem cortar as laterais.'
+                    : 'o centro do quadro é enquadrado em vertical, sem caixa manual.'}
+                </span>
+              </>
             ) : (
-              <div className="segmented small scrollable">
-                {(['auto', 'preencher', 'cam', 'esquerda', 'centro', 'direita'] as const).map((f) => (
-                  <button
-                    key={f}
-                    className={clip.framing === f ? 'active' : ''}
-                    onClick={() => patchClip({ framing: f })}
-                  >
-                    {f === 'auto' ? 'Auto' : f === 'preencher' ? 'Fundo' : f === 'esquerda' ? 'Esq.' : f === 'direita' ? 'Dir.' : f === 'cam' ? 'Split' : 'Centro'}
-                  </button>
-                ))}
-              </div>
-            )}
+              <>
+                <label className="field-label">Enquadramento</label>
+                {games ? (
+                  <div className="segmented small">
+                    <button className="active">Split</button>
+                  </div>
+                ) : (
+                  <div className="segmented small scrollable">
+                    {(['auto', 'preencher', 'cam', 'esquerda', 'centro', 'direita'] as const).map((f) => (
+                      <button
+                        key={f}
+                        className={clip.framing === f ? 'active' : ''}
+                        onClick={() => patchClip({ framing: f })}
+                      >
+                        {f === 'auto' ? 'Auto' : f === 'preencher' ? 'Fundo' : f === 'esquerda' ? 'Esq.' : f === 'direita' ? 'Dir.' : f === 'cam' ? 'Split' : 'Centro'}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
-            {clip.framing === 'cam' && (
-              <div className="cam-manual">
-                <div className="cam-manual-head">
-                  <span className="field-label">Caixa da webcam</span>
-                  <button type="button" className="btn btn-soft btn-sm" disabled={camBusy} onClick={redetectCam}>
-                    {camBusy ? '…' : 'Detectar automaticamente'}
-                  </button>
-                </div>
-                <CamBoxCanvas
-                  imageUrl={frameUrl}
-                  value={camDraft}
-                  onChange={setCamDraft}
-                />
-                <span className="cam-hint">Arraste a caixa para mover e os cantos para redimensionar.</span>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button type="button" className="btn btn-soft btn-sm" style={{ flex: 1 }} disabled={camBusy} onClick={applyCamManual}>
-                    Aplicar neste corte
-                  </button>
-                  <button type="button" className="btn btn-primary btn-sm" style={{ flex: 1 }} disabled={camBusy} onClick={applyCamAll}>
-                    Aplicar a todos os clipes
-                  </button>
-                </div>
-              </div>
+                {clip.framing === 'cam' && (
+                  <div className="cam-manual">
+                    <div className="cam-manual-head">
+                      <span className="field-label">Caixa da webcam</span>
+                      <button type="button" className="btn btn-soft btn-sm" disabled={camBusy} onClick={redetectCam}>
+                        {camBusy ? '…' : 'Detectar automaticamente'}
+                      </button>
+                    </div>
+                    <CamBoxCanvas
+                      imageUrl={frameUrl}
+                      value={camDraft}
+                      onChange={setCamDraft}
+                    />
+                    <span className="cam-hint">Arraste a caixa para mover e os cantos para redimensionar.</span>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button type="button" className="btn btn-soft btn-sm" style={{ flex: 1 }} disabled={camBusy} onClick={applyCamManual}>
+                        Aplicar neste corte
+                      </button>
+                      <button type="button" className="btn btn-primary btn-sm" style={{ flex: 1 }} disabled={camBusy} onClick={applyCamAll}>
+                        Aplicar a todos os clipes
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
 
             <label className="field-label">Gancho do corte</label>

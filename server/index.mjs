@@ -970,9 +970,12 @@ app.patch('/api/clips/:id', (req, res) => {
   const state = getState()
   const clip = findClip(req.params.id)
   if (!clip) return fail(res, 404, 'Corte não encontrado.')
-  const allowed = ['hook', 'type', 'start', 'end', 'stage', 'framing', 'hashtags', 'description', 'captionLines', 'contextCaption']
+  const allowed = ['hook', 'type', 'start', 'end', 'stage', 'framing', 'hashtags', 'description', 'captionLines', 'contextCaption', 'aspect']
   for (const key of allowed) {
     if (req.body[key] !== undefined) clip[key] = req.body[key]
+  }
+  if (clip.type === 'perseguicao') {
+    clip.aspect = clip.aspect === '16:9' ? '16:9' : '9:16'
   }
   if (typeof clip.contextCaption === 'string') clip.contextCaption = clip.contextCaption.slice(0, 180)
   if (req.body.cam) {
@@ -989,7 +992,7 @@ app.patch('/api/clips/:id', (req, res) => {
       y: +num(req.body.cam.y, 0, 1 - h, 0.5).toFixed(4),
     }
   }
-  if (state.settings?.niche === 'games') clip.framing = 'cam'
+  if (state.settings?.niche === 'games' && clip.type !== 'perseguicao') clip.framing = 'cam'
   if (req.body.stage) {
     addActivity('agent', `Corte "${clip.hook}" marcado como ${clip.stage}`)
   }

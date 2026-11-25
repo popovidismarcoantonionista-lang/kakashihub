@@ -82,8 +82,14 @@ export const OUTPUT_SIZES = {
   '4k': { width: 2160, height: 3840 },
 }
 
-function renderSize() {
+function renderSize(aspect = '9:16') {
   const key = String(getState().settings?.resolution || '4k')
+  if (aspect === '16:9') {
+    const requested = key === '4k' ? { width: 3840, height: 2160 }
+      : key === '1080p' ? { width: 1920, height: 1080 }
+        : { width: 1280, height: 720 }
+    return LIGHT_RENDER ? { width: 1280, height: 720 } : requested
+  }
   const requested = OUTPUT_SIZES[key] || OUTPUT_SIZES['4k']
   return LIGHT_RENDER ? { width: 720, height: 1280 } : requested
 }
@@ -1933,8 +1939,11 @@ export async function runRender(clipId, opts = {}) {
   try {
     updateJob(job, { progress: 8, step: 'Preparando o corte' })
     const out = path.join(EXPORTS, `${clip.id}.mp4`)
-    const size = renderSize()
-    const gta = clip.niche === 'gta' || getState().settings?.niche === 'gta'
+    // Perseguição tem corte dedicado: 9:16 ou 16:9, sempre sem caixa de crop.
+    const chase = clip.type === 'perseguicao'
+    const aspect = chase && clip.aspect === '16:9' ? '16:9' : '9:16'
+    const size = renderSize(aspect)
+    const gta = !chase && (clip.niche === 'gta' || getState().settings?.niche === 'gta')
     // Texto no vídeo só se o usuário ligar explicitamente nas configurações.
     // O estilo XRacing liga a legenda contextual junto, mas continua desligado
     // por padrão (settings.xracing = false).
@@ -1949,7 +1958,7 @@ export async function runRender(clipId, opts = {}) {
       : ''
     updateJob(job, { progress: 22, step: 'Calculando o enquadramento' })
     let cam = clip.cam || source?.cam || null
-    const wantsSplit = gta || clip.framing === 'cam' || clip.framing === 'auto' || !clip.framing
+    const wantsSplit = !chase && (gta || clip.framing === 'cam' || clip.framing === 'auto' || !clip.framing)
     if (!cam && wantsSplit) {
       updateJob(job, { progress: 26, step: 'Localizando a webcam' })
       const spanSec = Math.max(1, clip.end - clip.start)
@@ -1963,6 +1972,8 @@ export async function runRender(clipId, opts = {}) {
     if (gta) clip.framing = 'cam'
     // Sem webcam detectada, o estilo pede o fundo desfocado em vez do crop seco.
     if (wantBgBlur && !split) clip.framing = 'preencher'
+    // Mesmo com blur/fundo ligado nos settings, perseguição não usa caixa nem split.
+    if (chase) clip.framing = 'centro'
     let frac = 0.5
     if (!split) {
       if (clip.framing === 'auto') {
@@ -1985,7 +1996,11 @@ export async function runRender(clipId, opts = {}) {
       : []
     let vf = ''
     let filterComplex = null
-    if (split) {
+    if (chase && aspect === '16:9') {
+      // Sem crop e sem caixa: mantém o quadro inteiro e só completa com barra
+      // preta quando a proporção do vídeo não é exatamente 16:9.
+      vf = `scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1`
+    } else if (split) {
       const cw = Math.min(width, evenRound(cam.w * width))
       const ch = Math.min(height, evenRound(cam.h * height))
       const cx = Math.min(width - cw, evenFloor(cam.x * width))
@@ -2030,7 +2045,7 @@ export async function runRender(clipId, opts = {}) {
     }
     updateJob(job, {
       progress: 34,
-      step: gta ? `Split GTA · ${sizeLabel(size)}` : split ? `Split · ${sizeLabel(size)}` : `9:16 · ${sizeLabel(size)}`,
+      step: chase ? `${aspect} · ${sizeLabel(size)}` : gta ? `Split GTA · ${sizeLabel(size)}` : split ? `Split · ${sizeLabel(size)}` : `9:16 · ${sizeLabel(size)}`,
     })
     const ass = wantCaptions ? buildCaptionAss(clip, duration, outW, outH, gta, wantWatermark, contextText) : null
     const assFile = ass ? path.join(EXPORTS, `${clip.id}.captions.ass`) : null
@@ -2193,7 +2208,7 @@ export async function runRender(clipId, opts = {}) {
     clip.stage = 'renderizado'
     clip.renderedAt = new Date().toISOString()
     clip.framingBias = frac
-    addActivity('render', `Corte "${clip.hook}" renderizado em 9:16 · ${sizeLabel(size)}`)
+    addActivity('render', `Corte "${clip.hook}" renderizado em ${aspect} · ${sizeLabel(size)}`)
     save()
     await flushStore()
     updateJob(job, { progress: 99, step: 'Corte finalizado' })

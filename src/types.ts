@@ -68,6 +68,8 @@ export interface Clip {
   stage: 'rascunho' | 'aprovado' | 'renderizado'
   framing: 'auto' | 'preencher' | 'esquerda' | 'centro' | 'direita' | 'cam'
   framingBias?: number
+  // Usado só em cortes de perseguição: 9:16 ou 16:9, ambos sem caixa de crop.
+  aspect?: '9:16' | '16:9'
   cam?: CamBox
   cover: string
   hashtags: string[]

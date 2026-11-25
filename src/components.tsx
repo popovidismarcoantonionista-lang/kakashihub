@@ -114,7 +114,13 @@ export function ClipPlayer({ clip, source }: { clip: Clip; source?: Source }) {
   )
 }
 
-export function Preview({ clip, source, compact = false }: { clip: Clip; source?: Source; compact?: boolean }) {
+export function Preview({ clip, source, compact = false, aspect = '9:16' }: {
+  clip: Clip
+  source?: Source
+  compact?: boolean
+  aspect?: '9:16' | '16:9'
+}) {
+  const wide = aspect === '16:9'
   const duration = Math.max(1, clip.end - clip.start)
   const rendered = Boolean(clip.renderedUrl)
   const liveSrc = clip.media || null
@@ -128,14 +134,14 @@ export function Preview({ clip, source, compact = false }: { clip: Clip; source?
   const [elapsed, setElapsed] = useState(0)
   const [guide, setGuide] = useState(false)
   const [natAspect, setNatAspect] = useState(16 / 9)
-  const cam = clip.framing === 'cam'
+  const cam = clip.framing === 'cam' && clip.type !== 'perseguicao'
     ? (clip.cam || source?.cam || (clip.niche === 'games'
       ? { x: 0.71, y: 0.26, w: 0.27, h: 0.4 }
       : { x: 0.68, y: 0.02, w: 0.3, h: 0.36 }))
     : null
   // O vídeo renderizado já vem com o split GTA queimado. Dividir de novo
   // mostraria o quadro inteiro em cada metade (3 telas na prévia).
-  const split = Boolean(cam && src && !rendered)
+  const split = Boolean(cam && src && !rendered && !wide)
 
   useEffect(() => {
     setElapsed(0)
@@ -225,7 +231,7 @@ export function Preview({ clip, source, compact = false }: { clip: Clip; source?
 
   return (
     <div className={`preview ${compact ? 'preview-compact' : ''}`}>
-      <div className={`pv-frame ${playing ? 'is-playing' : ''}`}>
+      <div className={`pv-frame ${wide ? 'wide' : ''} ${playing ? 'is-playing' : ''}`}>
         {src && split && panes ? (
           <div className="pv-split" onClick={toggle}>
             <div className="pv-pane">
@@ -270,7 +276,7 @@ export function Preview({ clip, source, compact = false }: { clip: Clip; source?
         )}
         <div className="pv-shade" />
         <div className="pv-top">
-          <span className="chip chip-glass"><Frame size={11} /> 9:16</span>
+          <span className="chip chip-glass"><Frame size={11} /> {wide ? '16:9' : '9:16'}</span>
           <span className="chip chip-glass mono">{fmtTime(plain ? elapsed : from + elapsed)}</span>
         </div>
         {guide && (
