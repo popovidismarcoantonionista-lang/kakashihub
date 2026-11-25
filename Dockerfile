@@ -16,15 +16,19 @@ ENV NODE_ENV=production \
     FUGA_COOKIES=/app/cookies.txt \
     YOUTUBE_API_KEY="" \
     YT_POT_ENABLED=false \
-    XRACING_MODEL=base \
+    XRACING_MODEL=tiny \
+    XRACING_MAX_AUDIO_SEC=600 \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
     HF_HOME=/app/.cache/huggingface
 # Transcrição local do motor XRacing: sem API paga e sem enviar áudio para fora.
-# O modelo já entra na imagem para o upload não pagar o download no Render free.
+# tiny + int8 + 1 thread cabem no free do Render (o modelo base derrubava o
+# serviço por OOM). O modelo entra na imagem para não baixar no upload.
 RUN pip3 install --no-cache-dir --break-system-packages \
       "yt-dlp[default,curl-cffi]==2026.11.17.232707.dev0" \
       "yt-dlp-ejs==0.8.0" \
       "faster-whisper==1.2.1" \
-  && python3 -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8')"
+  && OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python3 -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8', cpu_threads=1, num_workers=1)"
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 COPY --from=build /app/dist ./dist

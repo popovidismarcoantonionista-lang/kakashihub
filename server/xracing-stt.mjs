@@ -37,8 +37,11 @@ export async function transcribeXracing(videoPath) {
   if (!fs.existsSync(TRANSCRIBE_SCRIPT)) throw new Error('transcriber-missing')
   const wav = path.join(os.tmpdir(), `xracing-${process.pid}-${Date.now()}.wav`)
   try {
+    // O free do Render não aguenta transcrever um vídeo longo inteiro. O
+    // padrão cobre 10 min (de onde vêm os cortes); ajuste por XRACING_MAX_AUDIO_SEC.
+    const maxAudio = Math.min(3600, Math.max(30, Number(process.env.XRACING_MAX_AUDIO_SEC) || 600))
     await exec(FFMPEG_BIN, [
-      '-y', '-v', 'error', '-i', videoPath,
+      '-y', '-v', 'error', '-i', videoPath, '-t', String(maxAudio),
       '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wav,
     ], 1000 * 60 * 4)
     const stdout = await exec(PYTHON, [TRANSCRIBE_SCRIPT, wav], 1000 * 60 * 12)

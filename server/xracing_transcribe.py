@@ -2,10 +2,17 @@
 
 Roda no mesmo serviço do pipeline (sem API paga). Recebe um WAV mono 16 kHz
 e escreve no stdout um JSON com as palavras e seus timestamps absolutos.
-O modelo vem de XRACING_MODEL (padrão: base) e é baixado no build da imagem.
+O modelo vem de XRACING_MODEL (padrão: tiny) e é baixado no build da imagem.
+O free do Render tem ~512 MB: uma thread e o modelo tiny evitam o OOM que
+o modelo base causava durante a transcrição.
 """
-import json
 import os
+
+# Tem de ser definido antes de importar faster_whisper/ctranslate2.
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+
+import json
 import sys
 
 from faster_whisper import WhisperModel
@@ -15,9 +22,15 @@ if not wav or not os.path.isfile(wav):
     print(json.dumps({"error": "wav-not-found"}))
     sys.exit(2)
 
-model_name = os.environ.get("XRACING_MODEL", "base").strip() or "base"
+model_name = os.environ.get("XRACING_MODEL", "tiny").strip() or "tiny"
 try:
-    model = WhisperModel(model_name, device="cpu", compute_type="int8")
+    model = WhisperModel(
+        model_name,
+        device="cpu",
+        compute_type="int8",
+        cpu_threads=1,
+        num_workers=1,
+    )
     segments, _info = model.transcribe(
         wav,
         language="pt",
