@@ -2247,17 +2247,17 @@ export async function runRender(clipId, opts = {}) {
       }
 
       if (replay) {
-        const zw = evenRound(outW * replay.zoom)
-        const zh = evenRound(outH * replay.zoom)
-        const zx = evenFloor((zw - outW) / 2)
-        const zy = evenFloor((zh - outH) / 2)
         baseFc = baseFc.replace(/\[vout\]\s*$/, '[vall]')
         baseFc += ';[vall]split=2[vmain][vrep]'
         // A entrada foi lida com `-t outDuration` para conter o replay também.
         // Sem este trim o ramo principal duraria 37s e o replay sairia do arquivo.
         baseFc += `;[vmain]trim=0:${duration},setpts=PTS-STARTPTS,fps=30,format=yuv420p[mtime]`
         baseFc += `;[vrep]trim=${rstart}:${rend},setpts=(PTS-STARTPTS)/${replay.speed}`
-        baseFc += `,scale=${zw}:${zh}:flags=bicubic,crop=${outW}:${outH}:${zx}:${zy},setsar=1,fps=30,format=yuv420p[rtime]`
+        // Crop antes do zoom: escalar para 1,3x e só depois recortar alocava um
+        // frame maior que o final (ex.: 936x1664) e derrubava o Render free por
+        // OOM no concat. Recortar primeiro e depois voltar ao tamanho final mantém
+        // o mesmo enquadrado com menos memória.
+        baseFc += `,crop=${evenFloor(outW / replay.zoom)}:${evenFloor(outH / replay.zoom)},scale=${outW}:${outH}:flags=fast_bilinear,setsar=1,fps=30,format=yuv420p[rtime]`
         baseFc += ';[mtime][rtime]concat=n=2:v=1:a=0[vcat]'
       }
       let outLabel = replay ? 'vcat' : 'vout'
