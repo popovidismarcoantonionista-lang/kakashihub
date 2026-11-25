@@ -52,6 +52,11 @@ type ProviderFormat = { url: string; clen: string | number; qualityLabel?: strin
 const UPLOAD_CHUNK = 2 * 1024 * 1024
 const SOURCE_CHUNK = 512 * 1024
 const PARALLEL_RANGES = 4
+// Alguns vídeos oferecem "720p60" com mais de 400 MB. Isso não é um download
+// razoável e faz o botão parecer travado. Preferimos a faixa 720p normal e,
+// quando ela não existe, a melhor faixa abaixo desse limite.
+const MAX_VIDEO_BYTES = 180 * 1024 * 1024
+const DOWNLOAD_TIMEOUT_MS = 12 * 60 * 1000
 const PROXY_HOSTS = [
   'yt-comp2.chocolatemoo53.com',
   'yt-comp3.chocolatemoo53.com',
@@ -90,9 +95,16 @@ function pickProviderFormats(json: any) {
   // Sempre preferimos 720p. Se o vídeo não oferece 720p, usamos a melhor faixa
   // H264 disponível em vez de falhar o download.
   const hd = videos.filter((f) => /720/i.test(String(f.qualityLabel || '')))
-  const pool = hd.length ? hd : videos
+  const preferred = hd.length ? hd : videos
+  // Começa pelas faixas HD; se a única opção HD for gigante, cai para a melhor
+  // faixa menor em vez de baixar centenas de MB sem necessidade.
+  const cappedHd = preferred.filter((f) => Number(f.clen) <= MAX_VIDEO_BYTES)
+  const cappedAll = videos.filter((f) => Number(f.clen) <= MAX_VIDEO_BYTES)
+  const pool = cappedHd.length ? cappedHd : (cappedAll.length ? cappedAll : preferred)
   const video = pool
-    .sort((a, b) => qualityOf(b) - qualityOf(a) || Number(b.clen) - Number(a.clen))[0]
+    .sort((a, b) => qualityOf(b) - qualityOf(a)
+      || Number(/60/i.test(String(a.qualityLabel || ''))) - Number(/60/i.test(String(b.qualityLabel || '')))
+      || Number(a.clen) - Number(b.clen))[0]
   const audio = formats
     .filter((f) => String(f.type || '').startsWith('audio/mp4')
       && /mp4a\.40\.2/.test(String(f.type || ''))
@@ -102,10 +114,16 @@ function pickProviderFormats(json: any) {
   return { video, audio }
 }
 
-async function uploadPart(session: DownloadSession, part: 'video' | 'audio', format: ProviderFormat) {
+async function uploadPart(
+  session: DownloadSession,
+  part: 'video' | 'audio',
+  format: ProviderFormat,
+  onProgress?: (received: number) => void,
+) {
   // O proxy do provedor devolve 502 em transferências longas. Baixamos em faixas
   // pequenas com retry; cada faixa é enviada ao Render assim que fecha um bloco.
   const expected = Number(format.clen)
+  const deadline = Date.now() + DOWNLOAD_TIMEOUT_MS
   let received = 0
   let pending: Uint8Array[] = []
   let pendingSize = 0
@@ -135,6 +153,7 @@ async function uploadPart(session: DownloadSession, part: 'video' | 'audio', for
   const fetchRange = async (start: number, end: number, hostOffset: number) => {
     const want = end - start + 1
     for (let attempt = 0; attempt < 10; attempt += 1) {
+      if (Date.now() > deadline) throw new Error('O download demorou demais. Tente de novo.')
       try {
         const url = useProxy
           ? (() => {
@@ -166,11 +185,13 @@ async function uploadPart(session: DownloadSession, part: 'video' | 'audio', for
       group.push(fetchRange(start, end, i))
     }
     const results = await Promise.all(group)
+    if (Date.now() > deadline) throw new Error('O download demorou demais. Tente de novo.')
     for (const bytes of results) {
       if (!bytes) throw new Error('O provedor não entregou o arquivo. Tente de novo.')
       pending.push(bytes)
       pendingSize += bytes.length
       received += bytes.length
+      onProgress?.(received)
       if (pendingSize >= UPLOAD_CHUNK) await flush()
     }
   }
@@ -178,14 +199,27 @@ async function uploadPart(session: DownloadSession, part: 'video' | 'audio', for
   if (received !== expected) throw new Error('O arquivo veio incompleto do provedor. Tente de novo.')
 }
 
-async function requestPreparedDownload(url: string, title: string): Promise<PreparedDownload> {
+async function requestPreparedDownload(
+  url: string,
+  title: string,
+  onProgress?: (percent: number) => void,
+): Promise<PreparedDownload> {
   const session = await requestDownloadSession(url, title)
   const endpoint = `${session.provider}/api/v1/videos/${encodeURIComponent(session.videoId)}?local=true`
-  const res = await fetch(endpoint, { headers: { Accept: 'application/json' } })
+  const res = await fetch(endpoint, {
+    headers: { Accept: 'application/json' },
+    signal: AbortSignal.timeout(20000),
+  })
   if (!res.ok) throw new Error('O provedor não respondeu. Tente de novo em instantes.')
   const { video, audio } = pickProviderFormats(await res.json())
-  await uploadPart(session, 'video', video)
-  await uploadPart(session, 'audio', audio)
+  const total = Number(video.clen) + Number(audio.clen)
+  let doneBytes = 0
+  const report = (percent: number) => onProgress?.(Math.max(0, Math.min(100, Math.round(percent * 100))))
+  await uploadPart(session, 'video', video, (received) => report((doneBytes + received) / total))
+  doneBytes = Number(video.clen)
+  report(doneBytes / total)
+  await uploadPart(session, 'audio', audio, (received) => report((doneBytes + received) / total))
+  report(1)
   const done = await fetch(`/api/downloads/${session.id}/finalize`, {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
@@ -411,6 +445,7 @@ export function VideosPage() {
   const [findError, setFindError] = useState('')
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [downloadingIds, setDownloadingIds] = useState<string[]>([])
+  const [downloadProgress, setDownloadProgress] = useState(0)
 
   useEffect(() => {
     let alive = true
@@ -508,11 +543,12 @@ export function VideosPage() {
     if (!items.length) return
     setFindError('')
     setDownloadingIds(items.map((item) => item.id))
+    setDownloadProgress(0)
     let failed = 0
     let reason = ''
     for (const item of items) {
       try {
-        await triggerDownload(await requestPreparedDownload(item.url, item.title))
+        await triggerDownload(await requestPreparedDownload(item.url, item.title, setDownloadProgress))
       } catch (error: any) {
         failed += 1
         reason = String(error?.message || '').trim()
@@ -522,6 +558,7 @@ export function VideosPage() {
       await new Promise((resolve) => setTimeout(resolve, 1500))
     }
     setDownloadingIds([])
+    setDownloadProgress(0)
     if (failed) {
       setFindError(reason || `${failed} vídeo(s) não puderam ser baixados. Tente de novo em instantes.`)
     }
@@ -640,7 +677,7 @@ export function VideosPage() {
             </button>
             <button className="btn btn-primary btn-sm" onClick={downloadSelected} disabled={downloadingIds.length > 0}>
               {downloadingIds.length > 0 ? <Logo size={13} className="btn-spin" /> : <Download size={14} />}
-              {downloadingIds.length > 0 ? 'Baixando…' : 'Baixar selecionados'}
+              {downloadingIds.length > 0 ? `Baixando… ${downloadProgress}%` : 'Baixar selecionados'}
             </button>
           </div>
         )}
@@ -672,7 +709,7 @@ export function VideosPage() {
                     onClick={() => { void downloadFound([item]) }}
                   >
                     {downloadingIds.includes(item.id) ? <Logo size={13} className="btn-spin" /> : <Download size={14} />}
-                    {downloadingIds.includes(item.id) ? 'Baixando…' : 'Baixar'}
+                    {downloadingIds.includes(item.id) ? `Baixando… ${downloadProgress}%` : 'Baixar'}
                   </button>
                 </article>
               ))}
