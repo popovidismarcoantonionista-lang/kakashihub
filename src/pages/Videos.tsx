@@ -42,20 +42,23 @@ type FoundVideo = {
 // envia o arquivo manualmente pelo botão "Enviar vídeo".
 const COBALT_BROWSER = 'https://rue-cobalt.xenon.zone/'
 
-async function requestCobaltDownload(url: string): Promise<string> {
-  const res = await fetch(COBALT_BROWSER, {
-    method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      url,
-      videoQuality: '720',
-      downloadMode: 'auto',
-      youtubeVideoCodec: 'h264',
-      youtubeVideoContainer: 'mp4',
-      alwaysProxy: false,
-      disableMetadata: false,
-    }),
+type CobaltDownload = { url: string; filename?: string }
+
+async function requestCobaltDownload(url: string): Promise<CobaltDownload> {
+  const headers = { Accept: 'application/json', 'Content-Type': 'application/json' }
+  const fullBody = JSON.stringify({
+    url,
+    videoQuality: '720',
+    downloadMode: 'auto',
+    youtubeVideoCodec: 'h264',
+    youtubeVideoContainer: 'mp4',
+    alwaysProxy: false,
+    disableMetadata: false,
   })
+  let res = await fetch(COBALT_BROWSER, { method: 'POST', headers, body: fullBody })
+  // Algumas instâncias públicas recusam campos opcionais sem aviso; o body
+  // mínimo sempre funciona e mantém o fluxo vivo.
+  if (!res.ok) res = await fetch(COBALT_BROWSER, { method: 'POST', headers, body: JSON.stringify({ url }) })
   if (!res.ok) throw new Error('Não foi possível preparar o download.')
   const json = await res.json()
   if (json?.status === 'error') {
@@ -65,20 +68,29 @@ async function requestCobaltDownload(url: string): Promise<string> {
   if (json?.status === 'tunnel' || json?.status === 'redirect') mediaUrl = json.url || ''
   else if (json?.status === 'local-processing' && Array.isArray(json.tunnel)) mediaUrl = json.tunnel[0] || ''
   else if (json?.status === 'picker' && Array.isArray(json.picker)) {
-    mediaUrl = json.picker.find((item: any) => item?.type === 'video' && item?.url)?.url || ''
+    const picked = json.picker.find((item: any) => item?.type === 'video' && item?.url)
+    mediaUrl = picked?.url || ''
   }
   if (!/^https?:\/\//i.test(mediaUrl)) throw new Error('Este vídeo não está disponível para download.')
-  return mediaUrl
+  return { url: mediaUrl, filename: String(json?.filename || '') }
 }
 
-function triggerDownload(mediaUrl: string) {
+async function triggerDownload(download: CobaltDownload) {
+  // Baixar via blob evita o arquivo de 0 bytes que acontecia quando o link do
+  // tunnel era aberto em nova aba (pop-up bloqueado / download múltiplo negado).
+  const res = await fetch(download.url)
+  if (!res.ok) throw new Error('Não foi possível baixar o vídeo.')
+  const blob = await res.blob()
+  if (blob.size < 1024) throw new Error('O vídeo veio vazio. Tente de novo em instantes.')
+  const objectUrl = URL.createObjectURL(blob)
+  const name = download.filename || `video-${Date.now()}.mp4`
   const a = document.createElement('a')
-  a.href = mediaUrl
-  a.target = '_blank'
-  a.rel = 'noopener'
+  a.href = objectUrl
+  a.download = name
   document.body.appendChild(a)
   a.click()
   a.remove()
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 30000)
 }
 
 const FIND_PRESETS = [
@@ -359,13 +371,14 @@ export function VideosPage() {
     let failed = 0
     for (const item of items) {
       try {
-        const mediaUrl = await requestCobaltDownload(item.url)
-        triggerDownload(mediaUrl)
+        const media = await requestCobaltDownload(item.url)
+        await triggerDownload(media)
       } catch {
         failed += 1
       }
-      // A instância pública limita a 20 pedidos por minuto.
-      await new Promise((resolve) => setTimeout(resolve, 500))
+      // A instância pública limita a 20 pedidos por minuto e o navegador pode
+      // bloquear downloads automáticos muito próximos uns dos outros.
+      await new Promise((resolve) => setTimeout(resolve, 1500))
     }
     setDownloadingIds([])
     if (failed) {
