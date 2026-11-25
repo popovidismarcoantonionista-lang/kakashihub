@@ -41,8 +41,13 @@ type FoundVideo = {
 // aberto e devolve um link de download; a gente só abre esse link e o usuário
 // envia o arquivo manualmente pelo botão "Enviar vídeo".
 const COBALT_BROWSER = 'https://rue-cobalt.xenon.zone/'
+// Segundo resolvedor free, sem chave/cookie. O Cobalt é prioritário (baixa via
+// blob, com validação de tamanho); quando ele devolve tunnel vazio, usamos o
+// GenDownload. O stream dele não tem CORS, então o download é feito abrindo o
+// link — o servidor manda Content-Disposition: attachment.
+const GENDOWNLOAD_API = 'https://gendownload.com/api/extract'
 
-type CobaltDownload = { url: string; filename?: string }
+type CobaltDownload = { url: string; filename?: string; via?: 'blob' | 'link' }
 
 async function requestCobaltDownload(url: string): Promise<CobaltDownload> {
   const headers = { Accept: 'application/json', 'Content-Type': 'application/json' }
@@ -72,10 +77,43 @@ async function requestCobaltDownload(url: string): Promise<CobaltDownload> {
     mediaUrl = picked?.url || ''
   }
   if (!/^https?:\/\//i.test(mediaUrl)) throw new Error('Este vídeo não está disponível para download.')
-  return { url: mediaUrl, filename: String(json?.filename || '') }
+  return { url: mediaUrl, filename: String(json?.filename || ''), via: 'blob' }
+}
+
+async function requestGenDownload(url: string): Promise<CobaltDownload> {
+  const res = await fetch(GENDOWNLOAD_API, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  })
+  if (!res.ok) throw new Error('O segundo provedor free não respondeu.')
+  const json = await res.json()
+  const formats = Array.isArray(json?.formats) ? json.formats : []
+  const videos = formats.filter((f: any) => f?.type === 'video' && /^https?:\/\//i.test(String(f?.url || '')))
+  // Preferimos MP4 progressivo com áudio; a ordem da API costuma ser melhor quality first.
+  const picked = videos.find((f: any) => /720|480/i.test(String(f?.label))) || videos[0]
+  if (!picked) throw new Error('Este vídeo não está disponível nos provedores free.')
+  const title = String(json?.title || 'video').replace(/[\\/:*?"<>|]/g, '').trim() || 'video'
+  return {
+    url: String(picked.url),
+    filename: `${title}${String(picked.ext || 'mp4') === 'mp4' ? '.mp4' : `.${picked.ext}`}`,
+    via: 'link',
+  }
 }
 
 async function triggerDownload(download: CobaltDownload) {
+  if (download.via === 'link') {
+    // O stream do GenDownload não permite fetch cross-origin. O navegador
+    // baixa normalmente porque a resposta vem com Content-Disposition.
+    const a = document.createElement('a')
+    a.href = download.url
+    a.target = '_blank'
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    return
+  }
   // Baixar via blob evita o arquivo de 0 bytes que acontecia quando o link do
   // tunnel era aberto em nova aba (pop-up bloqueado / download múltiplo negado).
   const res = await fetch(download.url)
@@ -374,8 +412,19 @@ export function VideosPage() {
     let reason = ''
     for (const item of items) {
       try {
-        const media = await requestCobaltDownload(item.url)
-        await triggerDownload(media)
+        let media: CobaltDownload | null = null
+        try {
+          media = await requestCobaltDownload(item.url)
+          await triggerDownload(media)
+        } catch (cobaltError: any) {
+          // Tunnel vazio ou instância instável: tenta o segundo provedor free.
+          try {
+            const fallback = await requestGenDownload(item.url)
+            await triggerDownload(fallback)
+          } catch {
+            throw cobaltError
+          }
+        }
       } catch (error: any) {
         failed += 1
         reason = String(error?.message || '').trim()
