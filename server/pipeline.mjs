@@ -1781,7 +1781,13 @@ export async function runIngest(sourceId, url, opts = {}) {
     source.analyzedAt = new Date().toISOString()
     addActivity('agent', `${created.length} cortes encontrados em "${source.title}"`)
     save()
-    await flushStore()
+    // Os cortes e o arquivo já estão prontos. Se o Postgres cair só neste
+    // flush, não transforme a importação concluída em erro para o usuário.
+    try {
+      await flushStore()
+    } catch (error) {
+      console.warn('[ingest-flush]', String(error?.message || error).slice(0, 200))
+    }
     updateJob(job, { progress: 99, step: 'Cortes prontos para revisão' })
     finishJob(job)
     return created
