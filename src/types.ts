@@ -76,6 +76,13 @@ export interface Clip {
   captionLines: CaptionLine[]
   description: string
   contextCaption?: string
+  // Dados do motor automático estilo XRacing (gerados no upload).
+  style?: 'xracing'
+  replay?: { start: number; end: number; speed: number; zoom: number }
+  peak?: { start: number; end: number }
+  bleeps?: Array<{ start: number; end: number }>
+  captionBlocks?: string[]
+  xracingAt?: string
   createdAt: string
   renderedUrl?: string
   renderedAt?: string

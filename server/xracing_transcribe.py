@@ -1,0 +1,45 @@
+"""Transcrição local usada pelo motor XRacing.
+
+Roda no mesmo serviço do pipeline (sem API paga). Recebe um WAV mono 16 kHz
+e escreve no stdout um JSON com as palavras e seus timestamps absolutos.
+O modelo vem de XRACING_MODEL (padrão: base) e é baixado no build da imagem.
+"""
+import json
+import os
+import sys
+
+from faster_whisper import WhisperModel
+
+wav = sys.argv[1] if len(sys.argv) > 1 else ""
+if not wav or not os.path.isfile(wav):
+    print(json.dumps({"error": "wav-not-found"}))
+    sys.exit(2)
+
+model_name = os.environ.get("XRACING_MODEL", "base").strip() or "base"
+try:
+    model = WhisperModel(model_name, device="cpu", compute_type="int8")
+    segments, _info = model.transcribe(
+        wav,
+        language="pt",
+        beam_size=1,
+        word_timestamps=True,
+        vad_filter=True,
+        vad_parameters={"min_silence_duration_ms": 400},
+        condition_on_previous_text=False,
+    )
+    words = []
+    for seg in segments:
+        for word in seg.words or []:
+            text = (word.word or "").strip()
+            if not text:
+                continue
+            words.append({
+                "w": text,
+                "s": round(float(word.start), 2),
+                "e": round(float(word.end), 2),
+                "p": round(float(word.probability), 2),
+            })
+    print(json.dumps({"words": words}, ensure_ascii=False))
+except Exception as exc:  # diagnóstico fica no log; o front nunca vê este texto
+    print(json.dumps({"error": str(exc)[:400]}, ensure_ascii=False))
+    sys.exit(1)

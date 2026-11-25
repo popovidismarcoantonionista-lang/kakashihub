@@ -356,7 +356,7 @@ export function IAPage() {
               />
             </div>
             <div className="option-row">
-              <div><b>Estilo XRacing</b><em>Legenda do que aconteceu, visível 15–30s</em></div>
+              <div><b>Estilo XRacing</b><em>Corte automático no upload: replay 0,5x com zoom, legenda verde e bipes</em></div>
               <Switch
                 checked={Boolean(settings?.xracing)}
                 label="Estilo XRacing"

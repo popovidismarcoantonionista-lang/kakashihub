@@ -970,7 +970,11 @@ app.patch('/api/clips/:id', (req, res) => {
   const state = getState()
   const clip = findClip(req.params.id)
   if (!clip) return fail(res, 404, 'Corte não encontrado.')
-  const allowed = ['hook', 'type', 'start', 'end', 'stage', 'framing', 'hashtags', 'description', 'captionLines', 'contextCaption', 'aspect']
+  const allowed = [
+    'hook', 'type', 'start', 'end', 'stage', 'framing', 'hashtags', 'description',
+    'captionLines', 'contextCaption', 'aspect',
+    'style', 'replay', 'bleeps', 'peak', 'captionBlocks', 'xracingAt',
+  ]
   for (const key of allowed) {
     if (req.body[key] !== undefined) clip[key] = req.body[key]
   }
@@ -978,6 +982,36 @@ app.patch('/api/clips/:id', (req, res) => {
     clip.aspect = clip.aspect === '16:9' ? '16:9' : '9:16'
   }
   if (typeof clip.contextCaption === 'string') clip.contextCaption = clip.contextCaption.slice(0, 180)
+  // Números vindo do Estúdio precisam ser sanitizados antes de virarem ffmpeg.
+  const num = (v) => {
+    const n = Number(v)
+    return Number.isFinite(n) ? Math.round(n * 100) / 100 : null
+  }
+  if (clip.replay) {
+    const start = num(clip.replay.start)
+    const end = num(clip.replay.end)
+    if (start === null || end === null || end - start < 0.5) delete clip.replay
+    else clip.replay = {
+      start, end,
+      speed: Math.min(0.9, Math.max(0.5, num(clip.replay.speed) ?? 0.5)),
+      zoom: Math.min(2, Math.max(1, num(clip.replay.zoom) ?? 1.3)),
+    }
+  }
+  if (Array.isArray(clip.bleeps)) {
+    clip.bleeps = clip.bleeps
+      .map((b) => ({ start: num(b?.start), end: num(b?.end) }))
+      .filter((b) => b.start !== null && b.end !== null && b.end > b.start)
+      .slice(0, 60)
+  }
+  if (clip.peak) {
+    const start = num(clip.peak.start)
+    const end = num(clip.peak.end)
+    if (start === null || end === null) delete clip.peak
+    else clip.peak = { start, end }
+  }
+  if (Array.isArray(clip.captionBlocks)) {
+    clip.captionBlocks = clip.captionBlocks.slice(0, 3).map((line) => String(line || '').slice(0, 120))
+  }
   if (req.body.cam) {
     const num = (v, lo, hi, d) => {
       const n = Number(v)

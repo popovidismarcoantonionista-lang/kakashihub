@@ -11,3 +11,4 @@ downloader/downloads/
 .vercel
 .env*
 /.swc
+.netlify/

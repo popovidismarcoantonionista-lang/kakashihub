@@ -291,6 +291,8 @@ export function EstudioPage() {
               <span className="mono muted">#{String(index + 1).padStart(2, '0')}</span>
             </div>
 
+            {clip.style === 'xracing' && <XracingEditor clip={clip} patchClip={patchClip} />}
+
             {chase ? (
               <>
                 <label className="field-label">Formato do corte</label>
@@ -476,6 +478,104 @@ export function EstudioPage() {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+/** Ajustes finos do corte gerado pelo motor XRacing (tudo em segundos da fonte). */
+function XracingEditor({
+  clip, patchClip,
+}: {
+  clip: Clip
+  patchClip: (patch: Partial<Clip>) => Promise<void>
+}) {
+  const [start, setStart] = useState('')
+  const [end, setEnd] = useState('')
+  const [speed, setSpeed] = useState('0.5')
+  const [zoom, setZoom] = useState('1.3')
+  const [bleeps, setBleeps] = useState('')
+
+  const replay = clip.replay
+  const bleepSig = (clip.bleeps || []).map((b) => `${b.start}-${b.end}`).join(', ')
+  const signature = `${replay?.start}|${replay?.end}|${replay?.speed}|${replay?.zoom}|${bleepSig}`
+  useEffect(() => {
+    setStart(replay ? String(replay.start) : '')
+    setEnd(replay ? String(replay.end) : '')
+    setSpeed(String(replay?.speed ?? 0.5))
+    setZoom(String(replay?.zoom ?? 1.3))
+    setBleeps(bleepSig)
+  }, [signature])
+
+  const num = (v: string) => {
+    const n = Number(v)
+    return Number.isFinite(n) ? Math.round(n * 100) / 100 : null
+  }
+  const commitReplay = () => {
+    const s = num(start)
+    const e = num(end)
+    if (s === null || e === null || e - s < 0.5) return
+    void patchClip({
+      replay: {
+        start: s, end: e,
+        speed: Math.min(0.9, Math.max(0.5, num(speed) ?? 0.5)),
+        zoom: Math.min(2, Math.max(1, num(zoom) ?? 1.3)),
+      },
+    })
+  }
+  const commitBleeps = () => {
+    const next = bleeps.split(',').map((part) => {
+      const [a, b] = part.split('-').map((x) => Number(x.trim()))
+      return Number.isFinite(a) && Number.isFinite(b) && b > a
+        ? { start: Math.round(a * 100) / 100, end: Math.round(b * 100) / 100 }
+        : null
+    }).filter((b): b is { start: number; end: number } => Boolean(b)).slice(0, 60)
+    void patchClip({ bleeps: next })
+  }
+
+  return (
+    <div className="trim-box">
+      <div className="trim-head"><Clapperboard size={13} /><b>Motor XRacing</b></div>
+      <span className="fine">Replay do pico em câmera lenta com zoom, bipes e legenda verde.</span>
+
+      <label className="field-label">Replay (segundos da fonte)</label>
+      <div className="trim-row">
+        <label>
+          <span className="mono">DE</span>
+          <input className="input" type="number" step="0.5" value={start} onChange={(e) => setStart(e.target.value)} onBlur={commitReplay} />
+        </label>
+        <label>
+          <span className="mono">ATÉ</span>
+          <input className="input" type="number" step="0.5" value={end} onChange={(e) => setEnd(e.target.value)} onBlur={commitReplay} />
+        </label>
+      </div>
+      <div className="trim-row">
+        <label>
+          <span className="mono">VELOCIDADE</span>
+          <select className="input" value={speed} disabled={!replay} onChange={(e) => { setSpeed(e.target.value); void patchClip({ replay: { ...(replay || { start: 0, end: 0 }), speed: Number(e.target.value) } }) }}>
+            <option value="0.5">0,5x</option>
+            <option value="0.75">0,75x</option>
+          </select>
+        </label>
+        <label>
+          <span className="mono">ZOOM</span>
+          <select className="input" value={zoom} disabled={!replay} onChange={(e) => { setZoom(e.target.value); void patchClip({ replay: { ...(replay || { start: 0, end: 0 }), zoom: Number(e.target.value) } }) }}>
+            <option value="1">1,0x</option>
+            <option value="1.3">1,3x</option>
+            <option value="1.6">1,6x</option>
+          </select>
+        </label>
+      </div>
+
+      <label className="field-label">Bipes (intervalos: 139.11-139.77, 153.97-154.73)</label>
+      <textarea
+        className="hook-input"
+        rows={2}
+        value={bleeps}
+        placeholder="Sem palavrões detectados"
+        onChange={(e) => setBleeps(e.target.value)}
+        onBlur={commitBleeps}
+      />
+      <span className="cam-hint">Legenda: caixa alta, verde, até 3 linhas e 15–30s na tela. Edite em “Legenda da ocorrência”.</span>
     </div>
   )
 }

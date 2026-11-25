@@ -25,6 +25,8 @@ import {
 import { ensureLocalMedia, mediaPathFromUrl, storeLocalFile } from './media-store.mjs'
 import { beginLiveRecording, endLiveRecording, heavyWorkActive, waitForLiveRecording } from './work-gate.mjs'
 import { INVIDIOUS_URL, INVIDIOUS_URLS, cobaltResolve, hasCobalt, hasYtdlpApi, hasInvidious, invidiousInfo, ydlInfo, youtubeVideoId } from './services.mjs'
+import { analyzeXracing, wordsToCues } from './xracing-engine.mjs'
+import { transcribeXracing } from './xracing-stt.mjs'
 
 const PYTHON = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -1591,6 +1593,23 @@ export async function runIngest(sourceId, url, opts = {}) {
       const subFile = await findSubFile(sourceId)
       if (subFile) cues = parseVtt(fs.readFileSync(subFile, 'utf8'))
     }
+    // Motor XRacing: ao enviar um vídeo local, transcreve no próprio Render e
+    // monta corte principal + replay + legenda + bipes. Se o modelo não estiver
+    // disponível, o ingest continua igual (a análise antiga não quebra).
+    let xracingEdit = null
+    if (getState().settings?.xracing === true && localFile) {
+      updateJob(job, { progress: 72, step: 'Transcrevendo o áudio · estilo XRacing' })
+      try {
+        const words = await transcribeXracing(videoPath)
+        if (words.length >= 6) {
+          cues = wordsToCues(words)
+          xracingEdit = analyzeXracing(words, source.duration || 0, getState().settings || {})
+          if (xracingEdit) addActivity('agent', `Motor XRacing preparou o corte de "${source.title}"`)
+        }
+      } catch (error) {
+        console.warn('[xracing] transcrição indisponível:', String(error?.message || error).slice(0, 200))
+      }
+    }
     updateJob(job, {
       progress: cues.length ? 76 : 74,
       step: cues.length ? `Transcrição pronta · ${cues.length} falas` : 'Sem transcrição. Lendo o áudio',
@@ -1615,6 +1634,23 @@ export async function runIngest(sourceId, url, opts = {}) {
       windows = spreadWindows(source.duration, settings.clipMin, settings.clipMax)
     }
     if (!windows.length) throw new Error('Não encontramos momentos suficientes neste vídeo.')
+
+    if (xracingEdit) {
+      // O corte do motor entra primeiro; os outros momentos detectados ficam
+      // apenas se não coincidirem com o flagrante principal.
+      const main = {
+        start: xracingEdit.start,
+        end: xracingEdit.end,
+        score: 97,
+        type: 'momento',
+        cues: cues.filter((c) => c.end > xracingEdit.start && c.start < xracingEdit.end),
+      }
+      const rest = windows.filter((w) => {
+        const overlap = Math.min(w.end, main.end) - Math.max(w.start, main.start)
+        return overlap < (main.end - main.start) * 0.5
+      })
+      windows = [main, ...rest].slice(0, 8)
+    }
 
     updateJob(job, { progress: 88, step: 'Enquadrando os cortes em 9:16' })
     const created = []
@@ -1654,6 +1690,15 @@ export async function runIngest(sourceId, url, opts = {}) {
           : [],
         description: (w.cues.length ? w.cues.map((c) => c.text).join(' ') : (meta.description || '')).slice(0, 220),
         createdAt: new Date().toISOString(),
+      }
+      if (i === 0 && xracingEdit) {
+        clip.style = 'xracing'
+        clip.replay = xracingEdit.replay
+        clip.peak = xracingEdit.peak
+        clip.bleeps = xracingEdit.bleeps
+        clip.contextCaption = xracingEdit.caption
+        clip.captionBlocks = xracingEdit.captionLines
+        clip.xracingAt = xracingEdit.generatedAt
       }
       state.clips.push(clip)
       created.push(clip)
@@ -1851,7 +1896,50 @@ function buildCaptionChunks(clip, duration, gta = false, forcedText = '') {
   return chunks.filter((c) => c.words.length && c.end > c.start).slice(0, 160)
 }
 
-function buildCaptionAss(clip, duration, outW, outH, gta = false, watermark = false, contextText = '') {
+function buildCaptionAss(clip, duration, outW, outH, gta = false, watermark = false, contextText = '', green = false) {
+  // Legenda verde estilo XRacing: uma frase curta, em caixa alta, até 3 linhas,
+  // visível por 15–28s. Não usa a animação palavra por palavra dos outros estilos.
+  if (green) {
+    const text = cleanContextText(contextText || clip?.contextCaption || clip?.hook).toUpperCase()
+    if (!text) return null
+    const words = splitCaptionWords(text)
+    const perLine = Math.max(1, Math.ceil(words.length / 3))
+    const lines = []
+    for (let i = 0; i < words.length; i += perLine) lines.push(words.slice(i, i + perLine).join(' '))
+    const body = lines.slice(0, 3).map(assEscape).join('\\N')
+    const fontSize = Math.max(34, Math.round(outH * 0.042))
+    const marginV = Math.max(80, Math.round(outH * 0.2))
+    const outline = Math.max(3, Math.round(fontSize * 0.13))
+    const shown = Math.max(15, Math.min(28, words.length))
+    const head = [
+      '[Script Info]',
+      'ScriptType: v4.00+',
+      `PlayResX: ${outW}`,
+      `PlayResY: ${outH}`,
+      'ScaledBorderAndShadow: yes',
+      '',
+      '[V4+ Styles]',
+      'Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding',
+      // ASS usa AABBGGRR: &H0000E676 = #76E600 (verde claro).
+      `Style: Green,DejaVu Sans,${fontSize},&H0000E676,&H000000FF,&H00000000,&HCC000000,-1,0,0,0,100,100,0,0,3,${outline + 5},0,2,60,60,${marginV},1`,
+      '',
+      '[Events]',
+      'Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text',
+    ]
+    const events = [`Dialogue: 0,${assTime(0.4)},${assTime(Math.max(0.5, Math.min(duration, 0.4 + shown)))},Green,,0,0,0,,${body}`]
+    if (gta && watermark) {
+      const project = getState().project || {}
+      const name = String(project.name || project.handle || '').replace(/^@/, '').trim()
+      if (name) {
+        const wmSize = Math.max(24, Math.round(outH * 0.032))
+        const wmX = outW - Math.max(20, Math.round(outW * 0.05))
+        const wmY = Math.round(outH * 0.175)
+        const wmBorder = Math.max(3, Math.round(wmSize * 0.18))
+        events.push(`Dialogue: 0,0:00:00.00,${assTime(duration)},Default,,0,0,0,,{\\an9\\pos(${wmX},${wmY})\\fs${wmSize}\\c&H00FFFFFF&\\3c&H00000000&\\bord${wmBorder}}${assEscape(name.toUpperCase().slice(0, 28))}`)
+      }
+    }
+    return head.concat(events).join('\n') + '\n'
+  }
   const contextual = Boolean(cleanContextText(contextText))
   const chunks = buildCaptionChunks(clip, duration, gta, contextText)
   if (!chunks.length) return null
@@ -1949,6 +2037,7 @@ export async function runRender(clipId, opts = {}) {
     // por padrão (settings.xracing = false).
     const renderSettings = getState().settings || {}
     const xracing = renderSettings.xracing === true
+    const xracingStyle = xracing && (clip.style === 'xracing' || Boolean(clip.replay))
     const wantCaptions = renderSettings.captions === true || xracing
     const wantWatermark = renderSettings.watermark === true
     const wantBgBlur = renderSettings.bgBlur === true || xracing
@@ -1956,6 +2045,28 @@ export async function runRender(clipId, opts = {}) {
     const contextText = xracing
       ? (cleanContextText(clip.contextCaption) || parseCreditCaption(source?.description, from) || cleanContextText(clip.hook))
       : ''
+
+    // Dados gerados pelo motor XRacing. Tudo em segundos absolutos da fonte;
+    // o replay é duplicado no final do corte em 0.5x com zoom central.
+    let replay = null
+    if (xracingStyle && clip.replay && Number.isFinite(Number(clip.replay.start)) && Number.isFinite(Number(clip.replay.end))) {
+      const rs = Math.max(from, Number(clip.replay.start))
+      const re = Math.min(from + duration, Number(clip.replay.end))
+      if (re - rs >= 0.5) {
+        // atempo só aceita 0.5–2.0; 0.5x é o mais devagar que dá para ir sem
+        // artefatos, e é exatamente o velocidade do replay do XRacing.
+        const speed = Math.min(0.9, Math.max(0.5, Number(clip.replay.speed) || 0.5))
+        const zoom = Math.min(2, Math.max(1, Number(clip.replay.zoom) || 1.3))
+        replay = { start: rs, end: re, speed, zoom }
+      }
+    }
+    const replayLen = replay ? (replay.end - replay.start) / replay.speed : 0
+    const outDuration = duration + replayLen
+    const bleeps = xracingStyle && Array.isArray(clip.bleeps)
+      ? clip.bleeps
+        .map((b) => ({ start: Number(b?.start), end: Number(b?.end) }))
+        .filter((b) => Number.isFinite(b.start) && Number.isFinite(b.end) && b.end > b.start)
+      : []
     updateJob(job, { progress: 22, step: 'Calculando o enquadramento' })
     let cam = clip.cam || source?.cam || null
     const wantsSplit = !chase && (gta || clip.framing === 'cam' || clip.framing === 'auto' || !clip.framing)
@@ -2043,11 +2154,45 @@ export async function runRender(clipId, opts = {}) {
       filterComplex = faceFc + (filterComplex ? filterComplex.replace(/\[0:v\]/g, '[fblurred]') : `[fblurred]${vf}[vout]`)
       vf = ''
     }
+    const renderStep = chase ? `${aspect} · ${sizeLabel(size)}` : gta ? `Split GTA · ${sizeLabel(size)}` : split ? `Split · ${sizeLabel(size)}` : `9:16 · ${sizeLabel(size)}`
     updateJob(job, {
       progress: 34,
-      step: chase ? `${aspect} · ${sizeLabel(size)}` : gta ? `Split GTA · ${sizeLabel(size)}` : split ? `Split · ${sizeLabel(size)}` : `9:16 · ${sizeLabel(size)}`,
+      step: replay ? `${renderStep} · replay ${replay.speed}x` : renderStep,
     })
-    const ass = wantCaptions ? buildCaptionAss(clip, duration, outW, outH, gta, wantWatermark, contextText) : null
+    // O replay é feito a partir do próprio trecho já decodificado: uma cópia
+    // vai direto, a outra é recortada no pico, desacelerada e ampliada. Assim
+    // não abrimos o arquivo duas vezes e não mexemos nos índices de input.
+    const rstart = replay ? Math.round((replay.start - from) * 100) / 100 : 0
+    const rend = replay ? Math.round((replay.end - from) * 100) / 100 : 0
+    let audioGraph = ''
+    if (replay) {
+      const bleepOn = (r) => r
+        .map((b) => {
+          const s = Math.max(0, Math.round((b.start - from) * 100) / 100)
+          const e = Math.min(duration, Math.round((b.end - from) * 100) / 100)
+          return e > s ? `volume=0:enable='between(t,${s},${e})'` : ''
+        })
+        .filter(Boolean)
+      const bleepReplay = bleeps
+        .map((b) => {
+          const s = Math.max(0, Math.round(((b.start - replay.start) / replay.speed) * 100) / 100)
+          const e = Math.min(replayLen, Math.round(((b.end - replay.start) / replay.speed) * 100) / 100)
+          return e > s ? `volume=0:enable='between(t,${s},${e})'` : ''
+        })
+        .filter(Boolean)
+      const mainBleeps = bleepOn(bleeps).join(',')
+      const loud = LIGHT_RENDER ? '' : ',loudnorm=I=-14:TP=-1.5:LRA=11'
+      audioGraph = `;[0:a]asplit=2[amain][arep];`
+        + `[amain]atrim=0:${duration},asetpts=PTS-STARTPTS${mainBleeps ? `,${mainBleeps}` : ''}[a0];`
+        + `[arep]atrim=${rstart}:${rend},asetpts=PTS-STARTPTS,atempo=${replay.speed}`
+        + `${bleepReplay.length ? `,${bleepReplay.join(',')}` : ''},apad,atrim=0:${replayLen}[a1];`
+        + `[a0][a1]concat=n=2:v=0:a=1${loud}[aout]`
+    }
+    const audioMap = replay ? ['-map', '[aout]'] : ['-map', '0:a?']
+    const withAudio = (graph) => replay ? `${graph}${audioGraph}` : graph
+    const ass = wantCaptions
+      ? buildCaptionAss(clip, outDuration, outW, outH, gta, wantWatermark, contextText, xracingStyle)
+      : null
     const assFile = ass ? path.join(EXPORTS, `${clip.id}.captions.ass`) : null
     if (assFile) fs.writeFileSync(assFile, ass, 'utf8')
 
@@ -2085,7 +2230,7 @@ export async function runRender(clipId, opts = {}) {
 
     try {
       const assName = assFile ? path.basename(assFile).replace(/'/g, "\\'") : null
-      const logoInputArgs = logoFile ? ['-loop', '1', '-t', String(duration), '-i', logoFile] : []
+      const logoInputArgs = logoFile ? ['-loop', '1', '-t', String(outDuration), '-i', logoFile] : []
       const videoInputIdx = 0
       const logoInputIdx = 1
 
@@ -2101,8 +2246,22 @@ export async function runRender(clipId, opts = {}) {
         baseFc += `,drawbox=x=0:y=${bandY + Math.round(bandH * 0.25)}:w=${outW}:h=${Math.round(bandH * 0.5)}:color=black@0.18:t=fill[vout]`
       }
 
-      let outLabel = 'vout'
-      let fc = baseFc
+      if (replay) {
+        const zw = evenRound(outW * replay.zoom)
+        const zh = evenRound(outH * replay.zoom)
+        const zx = evenFloor((zw - outW) / 2)
+        const zy = evenFloor((zh - outH) / 2)
+        baseFc = baseFc.replace(/\[vout\]\s*$/, '[vall]')
+        baseFc += ';[vall]split=2[vmain][vrep]'
+        // A entrada foi lida com `-t outDuration` para conter o replay também.
+        // Sem este trim o ramo principal duraria 37s e o replay sairia do arquivo.
+        baseFc += `;[vmain]trim=0:${duration},setpts=PTS-STARTPTS,fps=30,format=yuv420p[mtime]`
+        baseFc += `;[vrep]trim=${rstart}:${rend},setpts=(PTS-STARTPTS)/${replay.speed}`
+        baseFc += `,scale=${zw}:${zh}:flags=bicubic,crop=${outW}:${outH}:${zx}:${zy},setsar=1,fps=30,format=yuv420p[rtime]`
+        baseFc += ';[mtime][rtime]concat=n=2:v=1:a=0[vcat]'
+      }
+      let outLabel = replay ? 'vcat' : 'vout'
+      let fc = withAudio(baseFc)
       if (logoFile) {
         const lw = Math.max(24, Math.round(outW * Math.max(0.05, Math.min(0.8, Number(projectLogo.w) || 0.28))))
         const opacity = Math.max(0.1, Math.min(1, Number(projectLogo.opacity) || 1))
@@ -2110,22 +2269,24 @@ export async function runRender(clipId, opts = {}) {
         const cy = Math.round(outH * Math.max(0, Math.min(1, Number(projectLogo.y) || 0.88)))
         const overlayX = `max(0,min(main_w-overlay_w,${cx}-overlay_w/2))`
         const overlayY = `max(0,min(main_h-overlay_h,${cy}-overlay_h/2))`
-        fc = fc.replace(/\[vout\]\s*$/, '[vbase]')
+        // O grafo de áudio vem depois do vídeo, então o rótulo não está no fim
+        // da string: substitui a primeira ocorrência, que é a saída do vídeo.
+        fc = fc.replace(`[${outLabel}]`, '[vbase]')
         fc += `;[${logoInputIdx}:v]format=rgba,scale=${lw}:-1,colorchannelmixer=aa=${opacity}[logo]`
         fc += `;[vbase][logo]overlay=${overlayX}:${overlayY}[vlogo]`
         outLabel = 'vlogo'
       }
       if (assName) {
-        fc = fc.replace(new RegExp(`\\[${outLabel}\\]\\s*$`), '[vpre]')
+        fc = fc.replace(`[${outLabel}]`, '[vpre]')
         fc += `;[vpre]subtitles='${assName}'[vout]`
         outLabel = 'vout'
       }
 
-      const outArgs = ['-filter_complex', fc, '-map', `[${outLabel}]`, '-map', `${videoInputIdx}:a?`]
+      const outArgs = ['-filter_complex', fc, '-map', `[${outLabel}]`, ...audioMap]
       const ffmpegArgs = (args, withLogo = Boolean(logoFile)) => [
         '-y', '-hide_banner', '-loglevel', 'error',
         ...(LIGHT_RENDER ? ['-threads', '1', '-filter_threads', '1', '-filter_complex_threads', '1'] : []),
-        '-ss', String(from), '-t', String(duration), '-i', src,
+        '-ss', String(from), '-t', String(replay ? outDuration : duration), '-i', src,
         ...(withLogo ? logoInputArgs : []),
         ...args,
         '-c:v', 'libx264',
@@ -2135,9 +2296,12 @@ export async function runRender(clipId, opts = {}) {
         '-pix_fmt', 'yuv420p',
         ...(LIGHT_RENDER ? ['-r', '30'] : []),
         '-c:a', 'aac', '-b:a', '160k', '-ar', '48000',
-        ...(LIGHT_RENDER ? [] : ['-af', 'loudnorm=I=-14:TP=-1.5:LRA=11']),
+        // No replay o loudnorm já está dentro do grafo de áudio; usar -af junto
+        // com o map do concat conflita e derruba o render.
+        ...(LIGHT_RENDER || replay ? [] : ['-af', 'loudnorm=I=-14:TP=-1.5:LRA=11']),
         '-max_muxing_queue_size', '256',
-        '-movflags', '+faststart', '-shortest',
+        '-movflags', '+faststart',
+        ...(replay ? ['-t', String(outDuration)] : ['-shortest']),
         path.basename(out),
       ]
       const ffmpegTimeout = 1000 * 60 * (size.height >= 2000 ? 40 : size.height >= 1000 ? 25 : 15)
@@ -2150,7 +2314,7 @@ export async function runRender(clipId, opts = {}) {
         if (captionFilterIssue) {
           console.error('[render-captions-fallback]', msg.slice(0, 240))
           let plainFc = baseFc
-          let plainLabel = 'vout'
+          let plainLabel = replay ? 'vcat' : 'vout'
           if (logoFile) {
             const lw = Math.max(24, Math.round(outW * Math.max(0.05, Math.min(0.8, Number(projectLogo.w) || 0.28))))
             const opacity = Math.max(0.1, Math.min(1, Number(projectLogo.opacity) || 1))
@@ -2158,29 +2322,30 @@ export async function runRender(clipId, opts = {}) {
             const cy = Math.round(outH * Math.max(0, Math.min(1, Number(projectLogo.y) || 0.88)))
             const overlayX = `max(0,min(main_w-overlay_w,${cx}-overlay_w/2))`
             const overlayY = `max(0,min(main_h-overlay_h,${cy}-overlay_h/2))`
-            plainFc = plainFc.replace(/\[vout\]\s*$/, '[vbase]')
+            plainFc = plainFc.replace(new RegExp(`\\[${plainLabel}\\]\\s*$`), '[vbase]')
             plainFc += `;[${logoInputIdx}:v]format=rgba,scale=${lw}:-1,colorchannelmixer=aa=${opacity}[logo]`
             plainFc += `;[vbase][logo]overlay=${overlayX}:${overlayY}[vlogo]`
             plainLabel = 'vlogo'
           }
-          const plainArgs = ['-filter_complex', plainFc, '-map', `[${plainLabel}]`, '-map', `${videoInputIdx}:a?`]
+          const plainArgs = ['-filter_complex', withAudio(plainFc), '-map', `[${plainLabel}]`, ...audioMap]
           await run(FFMPEG_BIN, ffmpegArgs(plainArgs, Boolean(logoFile)), { cwd: EXPORTS, timeout: ffmpegTimeout })
         } else if (logoFile) {
           console.error('[render-logo-fallback]', msg.slice(0, 240))
           // fallback: render without logo
           let noLogoFc = baseFc
-          let noLogoLabel = 'vout'
+          let noLogoLabel = replay ? 'vcat' : 'vout'
           if (assName) {
-            noLogoFc = noLogoFc.replace(/\[vout\]\s*$/, '[vpre]')
+            noLogoFc = noLogoFc.replace(new RegExp(`\\[${noLogoLabel}\\]\\s*$`), '[vpre]')
             noLogoFc += `;[vpre]subtitles='${assName}'[vout]`
             noLogoLabel = 'vout'
           }
-          const noLogoArgs = ['-filter_complex', noLogoFc, '-map', `[${noLogoLabel}]`, '-map', `${videoInputIdx}:a?`]
+          const noLogoArgs = ['-filter_complex', withAudio(noLogoFc), '-map', `[${noLogoLabel}]`, ...audioMap]
           try {
             await run(FFMPEG_BIN, ffmpegArgs(noLogoArgs, false), { cwd: EXPORTS, timeout: ffmpegTimeout })
           } catch {
             // final fallback: no logo, no subs
-            const plainArgs = ['-filter_complex', baseFc, '-map', '[vout]', '-map', `${videoInputIdx}:a?`]
+            const finalLabel = replay ? 'vcat' : 'vout'
+            const plainArgs = ['-filter_complex', withAudio(baseFc), '-map', `[${finalLabel}]`, ...audioMap]
             await run(FFMPEG_BIN, ffmpegArgs(plainArgs, false), { cwd: EXPORTS, timeout: ffmpegTimeout })
           }
         } else {
@@ -2284,6 +2449,29 @@ export async function runTrim(clipId, startInput, endInput, opts = {}) {
         .filter((line) => line.text && line.t < length && line.t > -6)
         .map((line) => ({ ...line, t: Math.max(0, line.t) }))
         .slice(0, 60)
+    }
+    // Reancora os dados do motor XRacing. Tudo é absoluto na fonte; após o
+    // recorte manual vira `tempo antigo - start`, descartando o que ficou de fora.
+    const shift = (t) => Math.round((Number(t) - start) * 10) / 10
+    const inside = (r) => Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > 0 && r.start < length
+    if (clip.replay) {
+      const r = { ...clip.replay, start: shift(clip.replay.start), end: shift(clip.replay.end) }
+      r.start = Math.max(0, r.start)
+      r.end = Math.min(length, r.end)
+      if (r.end - r.start < 0.5 || r.end <= 0 || r.start >= length) delete clip.replay
+      else clip.replay = r
+    }
+    if (Array.isArray(clip.bleeps)) {
+      clip.bleeps = clip.bleeps
+        .map((b) => ({ start: shift(b?.start), end: shift(b?.end) }))
+        .filter(inside)
+        .map((b) => ({ start: Math.max(0, b.start), end: Math.min(length, b.end) }))
+        .slice(0, 60)
+    }
+    if (clip.peak) {
+      const p = { start: shift(clip.peak.start), end: shift(clip.peak.end) }
+      if (!inside(p)) delete clip.peak
+      else clip.peak = { start: Math.max(0, p.start), end: Math.min(length, p.end) }
     }
     clip.cut = { start: Math.round(start * 10) / 10, end: Math.round(end * 10) / 10 }
     clip.renderedUrl = undefined
