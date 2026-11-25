@@ -461,7 +461,7 @@ function classify(text, cfg = NICHES.fuga) {
 
 function cleanHook(text) {
   let t = text.replace(/\s+/g, ' ').trim().replace(/^[,.!?…-]+|[,.!?…-]+$/g, '')
-  if (!t) return null
+  if (!t || !isPortugueseCaptionText(t)) return null
   if (t.length > 68) {
     t = t.slice(0, 68)
     const cut = t.lastIndexOf(' ')
@@ -1752,8 +1752,10 @@ export async function runIngest(sourceId, url, opts = {}) {
         clip.replay = xracingEdit.replay
         clip.peak = xracingEdit.peak
         clip.bleeps = xracingEdit.bleeps
-        clip.contextCaption = xracingEdit.caption
-        clip.captionBlocks = xracingEdit.captionLines
+        clip.contextCaption = isPortugueseCaptionText(xracingEdit.caption) ? xracingEdit.caption : ''
+        clip.captionBlocks = Array.isArray(xracingEdit.captionLines)
+          ? xracingEdit.captionLines.filter((line) => isPortugueseCaptionText(line?.text))
+          : []
         clip.xracingAt = xracingEdit.generatedAt
       }
       state.clips.push(clip)
@@ -1859,10 +1861,12 @@ function cleanContextText(raw) {
 // Descrições de vídeos estrangeiros viravam legenda ao cair no fallback do
 // estilo XRacing. Só aceita frases claramente em português.
 function isPortugueseCaptionText(text) {
-  const t = String(text || '').toLowerCase()
-  const en = (t.match(/\b(?:the|and|you|with|this|that|was|were|for|from|his|her|their|into|sponsored|subscribe|video)\b/g) || []).length
-  const pt = (t.match(/\b(?:que|com|para|por|n[aã]o|dos|das|foi|moto|motoca|motorista|faixa|carro|quase|jogou|atropel\w*|desvio|caiu|ocorreu|enquadro|persegui\w*)\b/g) || []).length
-  return pt >= en
+  const t = ` ${String(text || '').toLowerCase().replace(/[^\p{L}\s]/gu, ' ')} `
+  // Palavras de função e marcadores do contexto do canal. O Whisper às vezes
+  // inventa frases em inglês ("Starting another job here") em trechos de ruído.
+  const en = (t.match(/\b(?:the|and|you|with|this|that|was|were|for|from|his|her|their|into|sponsored|subscribe|video|starting|another|job|here|going|get|now|look|okay|yeah|we|are|is|it|in|on|at|to|of|my|your|they|what|how|do|does|did|have|has|had|can|will|just|right|good|nice|welcome|please|thanks|let|its|i)\b/g) || []).length
+  const pt = (t.match(/\b(?:que|com|para|por|n[aã]o|dos|das|foi|moto|motoca|motorista|faixa|carro|quase|jogou|atropel\w*|desvio|caiu|ocorreu|enquadro|persegui\w*|o|a|os|as|e|em|de|do|da|na|no|se|ele|ela|est[aá]|estou|vai|vim|vinha|olha|olhe|pessoal|galera|bom|boa|tudo|mesmo|mais|muito|bem|apagou|farol|acelerou)\b/g) || []).length
+  return pt > 0 && pt >= en
 }
 
 // Os compilados estilo XRacing já descrevem a ocorrência na descrição:
@@ -1916,7 +1920,7 @@ function buildCaptionChunks(clip, duration, gta = false, forcedText = '') {
   const lines = Array.isArray(clip?.captionLines) ? clip.captionLines : []
   const raw = lines
     .map((line) => ({ t: Number(line?.t), text: String(line?.text || '').replace(/\s+/g, ' ').trim() }))
-    .filter((line) => line.text && Number.isFinite(line.t))
+    .filter((line) => line.text && Number.isFinite(line.t) && isPortugueseCaptionText(line.text))
     .sort((a, b) => a.t - b.t)
   const cues = []
   if (raw.length) {
@@ -1931,7 +1935,7 @@ function buildCaptionChunks(clip, duration, gta = false, forcedText = '') {
     }
   } else {
     const fallback = String(clip?.hook || clip?.description || '').replace(/\s+/g, ' ').trim()
-    if (!fallback) return []
+    if (!fallback || !isPortugueseCaptionText(fallback)) return []
     const words = fallback.split(/\s+/).filter(Boolean)
     const chunkSize = 4
     let t = 0.2
