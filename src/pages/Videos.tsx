@@ -37,30 +37,16 @@ type FoundVideo = {
 }
 
 // Baixar é uma ação do navegador do usuário: o Render sai de IP de datacenter e
-// é bloqueado pelo YouTube. A instância pública do Cobalt responde com CORS
-// aberto e devolve um link de download; a gente só abre esse link e o usuário
-// envia o arquivo manualmente pelo botão "Enviar vídeo".
-const COBALT_BROWSER = 'https://rue-cobalt.xenon.zone/'
-// Segundo resolvedor free, sem chave/cookie. O Cobalt é prioritário (baixa via
-// blob, com validação de tamanho); quando ele devolve tunnel vazio, usamos o
-// GenDownload. O stream dele não tem CORS, então o download é feito abrindo o
-// link — o servidor manda Content-Disposition: attachment.
+// é bloqueado pelo YouTube. Os resolvedores free são chamados direto do navegador
+// e o usuário envia o arquivo manualmente pelo botão "Enviar vídeo".
+// O GenDownload é o principal: é free, não pede chave/cookie e funciona também
+// nos vídeos em que a instância pública do Cobalt devolve tunnel vazio (0 bytes).
+// O stream dele não tem CORS, então o download é feito com iframe oculto — o
+// servidor manda Content-Disposition: attachment.
 const GENDOWNLOAD_API = 'https://gendownload.com/api/extract'
-
-// Vídeos em que a instância pública do Cobalt devolve tunnel vazio (0 bytes).
-// Para eles o resolvedor free alternativo é tentado primeiro, sem perder tempo
-// nem gerar arquivo inválido com nome do Cobalt.
-const COBALT_EMPTY_IDS = new Set(['CHVHK8BDUDE', 'aLZhHKBcPH0', 'BelFHqX0EtY'])
-
-function youtubeId(raw: string): string {
-  try {
-    const u = new URL(raw)
-    if (/(^|\.)youtu\.be$/i.test(u.hostname)) return u.pathname.replace(/^\//, '').split(/[/?#]/)[0]
-    return u.searchParams.get('v') || u.pathname.match(/\/(?:embed|shorts|live)\/([^/?#]+)/i)?.[1] || ''
-  } catch {
-    return String(raw).match(/[?&]v=([^&#]+)/)?.[1] || ''
-  }
-}
+// Fallback: instância pública do Cobalt, que responde com CORS aberto e permite
+// validar o tamanho do blob antes de salvar.
+const COBALT_BROWSER = 'https://rue-cobalt.xenon.zone/'
 
 type CobaltDownload = { url: string; filename?: string; via?: 'blob' | 'link' }
 
@@ -346,7 +332,6 @@ export function VideosPage() {
   const [found, setFound] = useState<FoundVideo[] | null>(null)
   const [findBusy, setFindBusy] = useState(false)
   const [findError, setFindError] = useState('')
-  const [findNotice, setFindNotice] = useState('')
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [downloadingIds, setDownloadingIds] = useState<string[]>([])
 
@@ -425,7 +410,6 @@ export function VideosPage() {
     setFindQuery(q)
     setFindBusy(true)
     setFindError('')
-    setFindNotice('')
     try {
       const res = await fetch(`/api/videos/search?q=${encodeURIComponent(q)}`)
       const data = await res.json().catch(() => ({}))
@@ -446,41 +430,27 @@ export function VideosPage() {
   const downloadFound = async (items: FoundVideo[]) => {
     if (!items.length) return
     setFindError('')
-    setFindNotice('')
     setDownloadingIds(items.map((item) => item.id))
     let failed = 0
     let reason = ''
-    let usedFallback = false
     for (const item of items) {
       try {
-        const skipCobalt = COBALT_EMPTY_IDS.has(youtubeId(item.url))
-        if (skipCobalt) {
-          // Já sabemos que este ID devolve 0 bytes no Cobalt: vai direto no
-          // segundo provedor free, sem gerar arquivo com nome dele.
-          usedFallback = true
+        try {
           await triggerDownload(await requestGenDownload(item.url))
-        } else {
-          try {
-            await triggerDownload(await requestCobaltDownload(item.url))
-          } catch {
-            // Tunnel vazio, arquivo vazio ou instância instável: o segundo
-            // provedor free assume o download na mesma tentativa do usuário.
-            usedFallback = true
-            await triggerDownload(await requestGenDownload(item.url))
-          }
+        } catch {
+          // Se o provedor principal não responder ou não tiver o vídeo, o
+          // Cobalt assume na mesma tentativa do usuário.
+          await triggerDownload(await requestCobaltDownload(item.url))
         }
       } catch (error: any) {
         failed += 1
         reason = String(error?.message || '').trim()
       }
-      // A instância pública limita a 20 pedidos por minuto e o navegador pode
-      // bloquear downloads automáticos muito próximos uns dos outros.
+      // Os provedores públicos limitam requisições e o navegador pode bloquear
+      // downloads automáticos muito próximos uns dos outros.
       await new Promise((resolve) => setTimeout(resolve, 1500))
     }
     setDownloadingIds([])
-    if (usedFallback) {
-      setFindNotice('Alguns vídeos foram baixados pelo provedor alternativo. O arquivo chega sem o sufixo “(480p, h264)” — deixe o download terminar antes de enviar.')
-    }
     if (failed) {
       setFindError(reason || `${failed} vídeo(s) não puderam ser baixados. Tente de novo em instantes.`)
     }
@@ -587,7 +557,6 @@ export function VideosPage() {
             </button>
           ))}
         </div>
-        {findNotice && <p className="finder-notice">{findNotice}</p>}
         {findError && <p className="finder-error">{findError}</p>}
         {found && found.length === 0 && !findError && (
           <p className="finder-empty">Nenhum vídeo gravado encontrado para esse termo.</p>
