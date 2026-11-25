@@ -34,6 +34,11 @@ const INNERTUBE_CLIENTS = [
   { name: 'TV_EMBEDDED', ua: UA, client: { clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', clientVersion: '2.0', hl: 'en', gl: 'US' }, thirdParty: { embedUrl: 'https://www.youtube.com/' } },
   { name: 'WEB_EMBEDDED', ua: UA, client: { clientName: 'WEB_EMBEDDED_PLAYER', clientVersion: '1.20250310.01.00', hl: 'en', gl: 'US' }, thirdParty: { embedUrl: 'https://www.youtube.com/' } },
   { name: 'ANDROID_EMBEDDED', ua: ANDROID_UA, client: { clientName: 'ANDROID_EMBEDDED_PLAYER', clientVersion: '19.44.38', androidSdkVersion: 30, hl: 'en', gl: 'US' }, thirdParty: { embedUrl: 'https://www.youtube.com/' } },
+  { name: 'ANDROID_VR', ua: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip', client: { clientName: 'ANDROID_VR', clientVersion: '1.60.19', androidSdkVersion: 32, osName: 'Android', osVersion: '12', hl: 'en', gl: 'US' } },
+  { name: 'VISIONOS', ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15', client: { clientName: 'VISIONOS', clientVersion: '1.0.0', hl: 'en', gl: 'US' } },
+  { name: 'IOS_WEBKEY', ua: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_1 like Mac OS X;)', client: { clientName: 'IOS', clientVersion: '20.10.4', deviceMake: 'Apple', deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.3.1.22D72', hl: 'en', gl: 'US' }, headers: { 'x-youtube-client-name': '5', 'x-youtube-client-version': '20.10.4' } },
+  { name: 'WEB_SAFARI', ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15', client: { clientName: 'WEB', clientVersion: '2.20250312.04.00', hl: 'en', gl: 'US' } },
+  { name: 'TV_SAMSUNG', ua: 'Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.0) AppleWebKit/537.36 (KHTML, like Gecko) 6.0/6.0 TV Safari/537.36', client: { clientName: 'TVHTML5_SAMSUNG', clientVersion: '6.0100', deviceModel: 'SmartTV', hl: 'en', gl: 'US' } },
 ]
 const STREAM_HEADERS = {
   'user-agent': UA,
@@ -95,7 +100,7 @@ async function innertubeJson(id, client) {
   if (client.thirdParty) context.thirdParty = client.thirdParty
   const res = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'user-agent': client.ua },
+    headers: { 'content-type': 'application/json', 'user-agent': client.ua, ...(client.headers || {}) },
     body: JSON.stringify({ context, videoId: id, contentCheckOk: true, racyCheckOk: true }),
     signal: AbortSignal.timeout(API_TIMEOUT),
   })
