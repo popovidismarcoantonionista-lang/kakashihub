@@ -118,15 +118,15 @@ async function requestGenDownload(url: string): Promise<CobaltDownload> {
 
 async function triggerDownload(download: CobaltDownload) {
   if (download.via === 'link') {
-    // O stream do GenDownload não permite fetch cross-origin. O navegador
-    // baixa normalmente porque a resposta vem com Content-Disposition.
-    const a = document.createElement('a')
-    a.href = download.url
-    a.target = '_blank'
-    a.rel = 'noopener'
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
+    // O stream do GenDownload não permite fetch cross-origin. Um iframe oculto
+    // dispara o download pelo Content-Disposition sem abrir aba, sem sair da
+    // página e sem depender de pop-up (que alguns navegadores bloqueiam).
+    const frame = document.createElement('iframe')
+    frame.style.display = 'none'
+    frame.referrerPolicy = 'no-referrer'
+    frame.src = download.url
+    document.body.appendChild(frame)
+    setTimeout(() => frame.remove(), 60000)
     return
   }
   // Baixar via blob evita o arquivo de 0 bytes que acontecia quando o link do
