@@ -51,6 +51,7 @@ type ProviderFormat = { url: string; clen: string | number; qualityLabel?: strin
 
 const UPLOAD_CHUNK = 2 * 1024 * 1024
 const SOURCE_CHUNK = 512 * 1024
+const PARALLEL_RANGES = 4
 const PROXY_HOSTS = [
   'yt-comp2.chocolatemoo53.com',
   'yt-comp3.chocolatemoo53.com',
@@ -129,17 +130,16 @@ async function uploadPart(session: DownloadSession, part: 'video' | 'audio', for
     try { return new URL(format.url).host } catch { return '' }
   })()
   const useProxy = /chocolatemoo53\.com$/i.test(sourceHost)
-  for (let start = 0; start < expected; start += SOURCE_CHUNK) {
-    const end = Math.min(start + SOURCE_CHUNK - 1, expected - 1)
+  // Quatro faixas em paralelo, cada uma começando num host diferente, reduz
+  // muito o tempo de arquivos grandes sem perder a ordem dos bytes enviados.
+  const fetchRange = async (start: number, end: number, hostOffset: number) => {
     const want = end - start + 1
-    let bytes: Uint8Array | null = null
-    for (let attempt = 0; attempt < 10 && !bytes; attempt += 1) {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
       try {
-        // Cada host do proxy tem limites diferentes; alternamos entre eles.
         const url = useProxy
           ? (() => {
             const parsed = new URL(format.url)
-            parsed.host = PROXY_HOSTS[attempt % PROXY_HOSTS.length]
+            parsed.host = PROXY_HOSTS[(attempt + hostOffset) % PROXY_HOSTS.length]
             return parsed.href
           })()
           : format.url
@@ -149,17 +149,30 @@ async function uploadPart(session: DownloadSession, part: 'video' | 'audio', for
         })
         const body = new Uint8Array(await res.arrayBuffer())
         const wholeSingleChunk = res.status === 200 && expected <= SOURCE_CHUNK && body.length === want
-        if ((res.status === 206 || wholeSingleChunk) && body.length === want) bytes = body
+        if ((res.status === 206 || wholeSingleChunk) && body.length === want) return body
       } catch {
         // O 502 é intermitente; tentamos de novo em outro host do provedor.
       }
-      if (!bytes) await new Promise((resolve) => setTimeout(resolve, 200))
+      await new Promise((resolve) => setTimeout(resolve, 200))
     }
-    if (!bytes) throw new Error('O provedor não entregou o arquivo. Tente de novo.')
-    pending.push(bytes)
-    pendingSize += bytes.length
-    received += bytes.length
-    if (pendingSize >= UPLOAD_CHUNK) await flush()
+    return null
+  }
+  const chunks = Math.ceil(expected / SOURCE_CHUNK)
+  for (let base = 0; base < chunks; base += PARALLEL_RANGES) {
+    const group: Promise<Uint8Array | null>[] = []
+    for (let i = 0; i < PARALLEL_RANGES && base + i < chunks; i += 1) {
+      const start = (base + i) * SOURCE_CHUNK
+      const end = Math.min(start + SOURCE_CHUNK - 1, expected - 1)
+      group.push(fetchRange(start, end, i))
+    }
+    const results = await Promise.all(group)
+    for (const bytes of results) {
+      if (!bytes) throw new Error('O provedor não entregou o arquivo. Tente de novo.')
+      pending.push(bytes)
+      pendingSize += bytes.length
+      received += bytes.length
+      if (pendingSize >= UPLOAD_CHUNK) await flush()
+    }
   }
   await flush()
   if (received !== expected) throw new Error('O arquivo veio incompleto do provedor. Tente de novo.')
@@ -833,7 +846,9 @@ export function VideosPage() {
                   {source.error && (
                     <div className="src-error"><AlertTriangle size={13} /> {source.error}</div>
                   )}
-                  {null}
+                  {isLive && !source.error && source.liveEndNote && (
+                    <div className="src-note">{source.liveEndNote}</div>
+                  )}
                   {isLive && camEditFor === source.id && <LiveCamEditor source={source} />}
                   <div className="src-actions">
                     <button className="btn btn-soft btn-sm" onClick={() => openStudio(source)} disabled={!clips.length}>

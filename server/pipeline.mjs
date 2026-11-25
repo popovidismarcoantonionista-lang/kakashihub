@@ -2485,8 +2485,8 @@ export function liveCaptureConfig() {
 
 const LIVE_TEXT = {
   offline: 'Essa fonte não está ao vivo agora. Cole o link de uma transmissão em andamento…',
-  gone: 'A transmissão saiu do ar. O monitoramento foi encerrado…',
-  noStream: 'Não foi possível acessar a transmissão. Verifique se é pública e sem restrição de idade/região…',
+  gone: 'A transmissão terminou. O monitoramento foi encerrado.',
+  noStream: 'A transmissão não está mais disponível. O monitoramento foi encerrado.',
   recordFail: 'Falha ao acompanhar a transmissão. Ela pode ter proteção ou instabilidade…',
   streamBlocked: 'A live está no ar, mas o servidor não conseguiu acessar o stream. Configure um resolvedor de mídia no Render…',
   browserClosed: 'A captura no navegador foi interrompida. Deixe a aba do estúdio aberta para continuar…',
@@ -2511,6 +2511,8 @@ export function stopLive(sourceId) {
   // Atualiza já para a UI refletir no próximo refresh; o workflow termina em seguida.
   source.status = 'pronto'
   source.progress = 100
+  source.error = null
+  source.liveEndNote = 'Monitoramento encerrado. Os cortes capturados já estão no acervo.'
   source.liveEndedAt = new Date().toISOString()
   const stop = liveStops.get(sourceId)
   if (stop) {
@@ -2936,6 +2938,24 @@ function finishLiveStep(source, job, error = null) {
   return { continue: false, status: source.status }
 }
 
+/** Fim natural da live: encerra sem marcar erro e mostra só uma nota neutra. */
+function finishLiveEnded(source, job) {
+  const clips = Number(source.liveMade) || 0
+  source.status = 'pronto'
+  source.progress = 100
+  source.error = null
+  source.liveLastError = null
+  source.liveEndNote = clips
+    ? 'A transmissão terminou. Os cortes capturados já estão no acervo.'
+    : 'A transmissão terminou. O monitoramento foi encerrado.'
+  source.liveEndedAt = new Date().toISOString()
+  source.liveStopRequested = true
+  save()
+  finishJob(job)
+  addActivity('agent', `Live encerrada · ${clips} cortes de "${source.title}"`)
+  return { continue: false, status: source.status }
+}
+
 /** Recebe vídeo e áudio .ts capturados no navegador e monta uma janela muxada. */
 export async function queueBrowserLiveWindow(sourceId, video, audio, captions = []) {
   if (!Buffer.isBuffer(video) || !Buffer.isBuffer(audio)) throw new Error('janela inválida')
@@ -2978,33 +2998,54 @@ export function takeBrowserLiveWindow(sourceId) {
 
 /** Processa uma janela já gravada (servidor ou navegador) e atualiza a fonte. */
 /**
- * A captura da live costuma começar com o mesmo quadro repetido por ~1-2s
- * (o relay still não tem mídia nova). Isso virava "vídeo travado com áudio
- * andando" no início de todo corte. Medimos esse pre-roll em baixa resolução
- * e descartamos antes de recortar o clipe.
+ * A captura da live costuma começar com o mesmo quadro repetido por vários
+ * segundos (o relay ainda não tem mídia nova). Isso virava "vídeo travado com
+ * áudio andando" no início de todo corte. Medimos esse pre-roll em baixa
+ * resolução e descartamos antes de recortar o clipe.
  */
 async function liveLeadingFreeze(file) {
   try {
     const w = 160
     const h = 90
+    const fps = 5
     const { stdout } = await run(FFMPEG_BIN, [
-      '-v', 'error', '-t', '5', '-i', file,
-      '-vf', `scale=${w}:${h},fps=10,setsar=1`,
+      '-v', 'error', '-t', '12', '-i', file,
+      '-vf', `scale=${w}:${h},fps=${fps},setsar=1`,
       '-pix_fmt', 'gray', '-f', 'rawvideo', '-',
     ], { timeout: 1000 * 30, encoding: 'buffer' })
     const buf = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout || '')
     const frameSize = w * h
     const frames = Math.floor(buf.length / frameSize)
-    if (frames < 4) return 0
+    if (frames < 3) return 0
     const first = buf.subarray(0, frameSize)
     for (let i = 1; i < frames; i += 1) {
       if (!buf.subarray(i * frameSize, (i + 1) * frameSize).equals(first)) {
-        return Math.max(0, (i - 1) / 10)
+        return Math.max(0, (i - 1) / fps)
       }
     }
     return 0
   } catch {
     return 0
+  }
+}
+
+/** Com -c copy o ffmpeg volta ao keyframe anterior ao -ss. Alinhamos o início
+ *  do corte ao primeiro keyframe depois da trava para não arrastar os quadros
+ *  congelados do pre-roll. */
+async function keyframeAtOrAfter(file, time) {
+  try {
+    const { stdout } = await run(FFPROBE_BIN, [
+      '-v', 'error', '-select_streams', 'v:0', '-skip_frame', 'nokey',
+      '-show_entries', 'frame=best_effort_timestamp_time', '-of', 'csv=p=0', file,
+    ], { timeout: 1000 * 30 })
+    const times = String(stdout || '').split(/[\r\n]+/).map(Number).filter(Number.isFinite).sort((a, b) => a - b)
+    if (!times.length) return time
+    const base = times[0]
+    const relative = times.map((t) => Math.max(0, t - base))
+    const next = relative.find((t) => t >= time - 0.05)
+    return next === undefined ? time : next
+  } catch {
+    return time
   }
 }
 
@@ -3056,7 +3097,8 @@ async function processLiveWindowFile(sourceId, win, job) {
   const maxSpan = Math.max(6, Math.min(max, usable - 0.5))
   const minSpan = Math.max(6, Math.min(min, maxSpan))
   const spanLen = Math.min(maxSpan, Math.max(minSpan, Math.min(20, usable - 0.5)))
-  const spanStart = Math.max(0, Math.min(duration - spanLen, Math.max(lead + 0.1, 0.5)))
+  const cutStart = await keyframeAtOrAfter(winFile, Math.max(lead + 0.1, 0.5))
+  const spanStart = Math.max(0, Math.min(duration - spanLen, cutStart))
   const span = duration >= 6 ? { start: spanStart, end: Math.min(duration, spanStart + spanLen) } : null
   const lastEnd = Number(source.liveLastEnd) || -999
   if (span && session + span.start >= lastEnd + 6) {
@@ -3213,6 +3255,7 @@ export async function captureLiveWindow(sourceId) {
       source.liveMisses = 0
       source.liveLastEnd = priorDuration > 0 ? priorDuration : -999
       source.liveReady = true
+      source.liveEndNote = null
       source.liveMetadataSource = metaSource || 'probe'
       // Só consideramos "confirmada pela API" quando a Data API realmente
       // respondeu is_live; isso evita encerrar uma live só porque o resolvedor
@@ -3251,7 +3294,7 @@ export async function captureLiveWindow(sourceId) {
     // acabou. Enquanto ela disser que está no ar, falha de stream NÃO encerra.
     if (source.liveApiLive === true) {
       const stillLive = await refreshYouTubeLiveConfirmation(source)
-      if (stillLive === false) return finishLiveStep(source, job, LIVE_TEXT.gone)
+      if (stillLive === false) return finishLiveEnded(source, job)
     }
     let streamError = ''
     const parts = await liveStreamParts(source.url).catch((error) => {
@@ -3272,7 +3315,7 @@ export async function captureLiveWindow(sourceId) {
           save()
           return { continue: true }
         }
-        return finishLiveStep(source, job, LIVE_TEXT.noStream)
+        return finishLiveEnded(source, job)
       }
       updateJob(job, { step: 'Reconectando na transmissão' })
       save()
@@ -3307,6 +3350,10 @@ export async function captureLiveWindow(sourceId) {
     console.error('[live]', raw)
     // Guarda o erro bruto no estado para diagnóstico (`/api/state`).
     source.liveLastError = raw.slice(0, 300)
+    if ([LIVE_TEXT.gone, LIVE_TEXT.noStream].includes(raw)
+      || /live stream.*(?:has )?ended|broadcast.*ended|not currently live|channel is offline/i.test(raw)) {
+      return finishLiveEnded(source, job)
+    }
     let message = LIVE_TEXT.failed
     if ([LIVE_TEXT.offline, LIVE_TEXT.gone, LIVE_TEXT.noStream, LIVE_TEXT.recordFail, LIVE_TEXT.streamBlocked, LIVE_TEXT.failed].includes(raw)) message = raw
     else if (isBlocked(error)) message = FRIENDLY[0]

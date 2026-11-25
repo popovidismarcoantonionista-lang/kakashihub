@@ -346,7 +346,7 @@ app.post('/api/downloads/:id/finalize', async (req, res) => {
       filename: final.filename,
     })
   } catch (err) {
-    console.error('[download:finalize]', String(err?.message || err).slice(0, 200))
+    console.error('[download:finalize]', String(err?.stack || err?.message || err).slice(0, 900))
     fail(res, 422, 'Não foi possível montar o download agora. Tente de novo em instantes.')
   }
 })

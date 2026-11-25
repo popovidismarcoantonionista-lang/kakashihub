@@ -58,18 +58,23 @@ export function cleanupPreparedDownloads() {
       .map((entry) => {
         const dir = path.join(DOWNLOADS, entry.name)
         let createdAt = fs.statSync(dir).mtimeMs
+        let status = 'pending'
         try {
           const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'))
           if (Number.isFinite(meta?.createdAt)) createdAt = Number(meta.createdAt)
+          if (meta?.status) status = String(meta.status)
         } catch {}
-        return { dir, createdAt }
+        return { dir, createdAt, status }
       })
       .sort((a, b) => a.createdAt - b.createdAt)
     const now = Date.now()
     const keepFrom = Math.max(0, entries.length - MAX_FILES)
     for (let i = 0; i < entries.length; i += 1) {
       const item = entries[i]
-      if (now - item.createdAt > TTL || i < keepFrom) {
+      // Sessões pending podem levar vários minutos (proxy lento); só expiram
+      // por inatividade. Concluídas também respeitam o limite de arquivos.
+      const expired = now - item.createdAt > TTL
+      if (expired || (item.status !== 'pending' && i < keepFrom)) {
         fs.rmSync(item.dir, { recursive: true, force: true })
       }
     }
@@ -117,6 +122,8 @@ export function appendDownloadPart(id, part, buffer) {
   if (buffer.length > 8 * 1024 * 1024) throw new Error('download-parte-grande')
   const target = path.join(sessionDir(id), `${part}.part`)
   fs.appendFileSync(target, buffer)
+  // Cada upload reinicia o TTL, para um download longo não ser apagado no meio.
+  fs.writeFileSync(metaPath(id), JSON.stringify({ ...meta, createdAt: Date.now() }))
   return { ok: true, size: fs.statSync(target).size }
 }
 

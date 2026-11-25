@@ -36,6 +36,7 @@ export interface Source {
   liveStartedAt?: string
   liveCheckedAt?: string
   liveEndedAt?: string
+  liveEndNote?: string | null
   lastClipAt?: string
   liveId?: string
   liveChannel?: string
