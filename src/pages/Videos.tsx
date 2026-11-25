@@ -50,6 +50,7 @@ type PreparedDownload = { url: string }
 type ProviderFormat = { url: string; clen: string | number; qualityLabel?: string }
 
 const UPLOAD_CHUNK = 2 * 1024 * 1024
+const SOURCE_CHUNK = 1024 * 1024
 
 async function requestDownloadSession(url: string, title: string): Promise<DownloadSession> {
   const res = await fetch('/api/downloads/prepare', {
@@ -95,10 +96,9 @@ function pickProviderFormats(json: any) {
 }
 
 async function uploadPart(session: DownloadSession, part: 'video' | 'audio', format: ProviderFormat) {
-  const res = await fetch(format.url, { mode: 'cors' })
-  if (!res.ok || !res.body) throw new Error('O provedor não entregou o arquivo. Tente de novo.')
+  // O proxy do provedor devolve 502 em transferências longas. Baixamos em faixas
+  // pequenas com retry; cada faixa é enviada ao Render assim que fecha um bloco.
   const expected = Number(format.clen)
-  const reader = res.body.getReader()
   let received = 0
   let pending: Uint8Array[] = []
   let pendingSize = 0
@@ -119,13 +119,28 @@ async function uploadPart(session: DownloadSession, part: 'video' | 'audio', for
     pending = []
     pendingSize = 0
   }
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (!value) continue
-    pending.push(value)
-    pendingSize += value.length
-    received += value.length
+  for (let start = 0; start < expected; start += SOURCE_CHUNK) {
+    const end = Math.min(start + SOURCE_CHUNK - 1, expected - 1)
+    const want = end - start + 1
+    let bytes: Uint8Array | null = null
+    for (let attempt = 0; attempt < 5 && !bytes; attempt += 1) {
+      try {
+        const res = await fetch(format.url, {
+          headers: { Range: `bytes=${start}-${end}` },
+          signal: AbortSignal.timeout(20000),
+        })
+        const body = new Uint8Array(await res.arrayBuffer())
+        const wholeSingleChunk = res.status === 200 && expected <= SOURCE_CHUNK && body.length === want
+        if ((res.status === 206 || wholeSingleChunk) && body.length === want) bytes = body
+      } catch {
+        // O 502 é intermitente; tentamos de novo com um pequeno intervalo.
+      }
+      if (!bytes) await new Promise((resolve) => setTimeout(resolve, 300))
+    }
+    if (!bytes) throw new Error('O provedor não entregou o arquivo. Tente de novo.')
+    pending.push(bytes)
+    pendingSize += bytes.length
+    received += bytes.length
     if (pendingSize >= UPLOAD_CHUNK) await flush()
   }
   await flush()
