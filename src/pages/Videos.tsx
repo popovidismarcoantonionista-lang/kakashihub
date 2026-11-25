@@ -50,7 +50,13 @@ type PreparedDownload = { url: string }
 type ProviderFormat = { url: string; clen: string | number; qualityLabel?: string }
 
 const UPLOAD_CHUNK = 2 * 1024 * 1024
-const SOURCE_CHUNK = 1024 * 1024
+const SOURCE_CHUNK = 512 * 1024
+const PROXY_HOSTS = [
+  'yt-comp2.chocolatemoo53.com',
+  'yt-comp3.chocolatemoo53.com',
+  'yt-comp6.chocolatemoo53.com',
+  'yt.chocolatemoo53.com',
+]
 
 async function requestDownloadSession(url: string, title: string): Promise<DownloadSession> {
   const res = await fetch('/api/downloads/prepare', {
@@ -119,23 +125,35 @@ async function uploadPart(session: DownloadSession, part: 'video' | 'audio', for
     pending = []
     pendingSize = 0
   }
+  const sourceHost = (() => {
+    try { return new URL(format.url).host } catch { return '' }
+  })()
+  const useProxy = /chocolatemoo53\.com$/i.test(sourceHost)
   for (let start = 0; start < expected; start += SOURCE_CHUNK) {
     const end = Math.min(start + SOURCE_CHUNK - 1, expected - 1)
     const want = end - start + 1
     let bytes: Uint8Array | null = null
-    for (let attempt = 0; attempt < 5 && !bytes; attempt += 1) {
+    for (let attempt = 0; attempt < 10 && !bytes; attempt += 1) {
       try {
-        const res = await fetch(format.url, {
+        // Cada host do proxy tem limites diferentes; alternamos entre eles.
+        const url = useProxy
+          ? (() => {
+            const parsed = new URL(format.url)
+            parsed.host = PROXY_HOSTS[attempt % PROXY_HOSTS.length]
+            return parsed.href
+          })()
+          : format.url
+        const res = await fetch(url, {
           headers: { Range: `bytes=${start}-${end}` },
-          signal: AbortSignal.timeout(20000),
+          signal: AbortSignal.timeout(12000),
         })
         const body = new Uint8Array(await res.arrayBuffer())
         const wholeSingleChunk = res.status === 200 && expected <= SOURCE_CHUNK && body.length === want
         if ((res.status === 206 || wholeSingleChunk) && body.length === want) bytes = body
       } catch {
-        // O 502 é intermitente; tentamos de novo com um pequeno intervalo.
+        // O 502 é intermitente; tentamos de novo em outro host do provedor.
       }
-      if (!bytes) await new Promise((resolve) => setTimeout(resolve, 300))
+      if (!bytes) await new Promise((resolve) => setTimeout(resolve, 200))
     }
     if (!bytes) throw new Error('O provedor não entregou o arquivo. Tente de novo.')
     pending.push(bytes)
