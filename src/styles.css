@@ -602,8 +602,9 @@ h1, h2, h3 { font-weight: 600; }
   border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(224, 49, 49, 0.06);
 }
 .finder-bulk > span { flex: 1; font-size: 10px; color: var(--text-2); }
-.finder-error, .finder-empty { margin: 12px 0 0; font-size: 10.5px; color: var(--text-3); }
+.finder-error, .finder-empty, .finder-notice { margin: 12px 0 0; font-size: 10.5px; color: var(--text-3); }
 .finder-error { color: #ffb3bb; }
+.finder-notice { color: #ffd8a8; line-height: 1.5; }
 
 .running-panel { padding: 14px 18px; margin-bottom: 16px; }
 .running-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }

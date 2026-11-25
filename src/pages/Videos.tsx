@@ -47,6 +47,21 @@ const COBALT_BROWSER = 'https://rue-cobalt.xenon.zone/'
 // link — o servidor manda Content-Disposition: attachment.
 const GENDOWNLOAD_API = 'https://gendownload.com/api/extract'
 
+// Vídeos em que a instância pública do Cobalt devolve tunnel vazio (0 bytes).
+// Para eles o resolvedor free alternativo é tentado primeiro, sem perder tempo
+// nem gerar arquivo inválido com nome do Cobalt.
+const COBALT_EMPTY_IDS = new Set(['CHVHK8BDUDE', 'aLZhHKBcPH0', 'BelFHqX0EtY'])
+
+function youtubeId(raw: string): string {
+  try {
+    const u = new URL(raw)
+    if (/(^|\.)youtu\.be$/i.test(u.hostname)) return u.pathname.replace(/^\//, '').split(/[/?#]/)[0]
+    return u.searchParams.get('v') || u.pathname.match(/\/(?:embed|shorts|live)\/([^/?#]+)/i)?.[1] || ''
+  } catch {
+    return String(raw).match(/[?&]v=([^&#]+)/)?.[1] || ''
+  }
+}
+
 type CobaltDownload = { url: string; filename?: string; via?: 'blob' | 'link' }
 
 async function requestCobaltDownload(url: string): Promise<CobaltDownload> {
@@ -329,6 +344,7 @@ export function VideosPage() {
   const [found, setFound] = useState<FoundVideo[] | null>(null)
   const [findBusy, setFindBusy] = useState(false)
   const [findError, setFindError] = useState('')
+  const [findNotice, setFindNotice] = useState('')
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [downloadingIds, setDownloadingIds] = useState<string[]>([])
 
@@ -407,6 +423,7 @@ export function VideosPage() {
     setFindQuery(q)
     setFindBusy(true)
     setFindError('')
+    setFindNotice('')
     try {
       const res = await fetch(`/api/videos/search?q=${encodeURIComponent(q)}`)
       const data = await res.json().catch(() => ({}))
@@ -427,22 +444,27 @@ export function VideosPage() {
   const downloadFound = async (items: FoundVideo[]) => {
     if (!items.length) return
     setFindError('')
+    setFindNotice('')
     setDownloadingIds(items.map((item) => item.id))
     let failed = 0
     let reason = ''
+    let usedFallback = false
     for (const item of items) {
       try {
-        let media: CobaltDownload | null = null
-        try {
-          media = await requestCobaltDownload(item.url)
-          await triggerDownload(media)
-        } catch (cobaltError: any) {
-          // Tunnel vazio ou instância instável: tenta o segundo provedor free.
+        const skipCobalt = COBALT_EMPTY_IDS.has(youtubeId(item.url))
+        if (skipCobalt) {
+          // Já sabemos que este ID devolve 0 bytes no Cobalt: vai direto no
+          // segundo provedor free, sem gerar arquivo com nome dele.
+          usedFallback = true
+          await triggerDownload(await requestGenDownload(item.url))
+        } else {
           try {
-            const fallback = await requestGenDownload(item.url)
-            await triggerDownload(fallback)
+            await triggerDownload(await requestCobaltDownload(item.url))
           } catch {
-            throw cobaltError
+            // Tunnel vazio, arquivo vazio ou instância instável: o segundo
+            // provedor free assume o download na mesma tentativa do usuário.
+            usedFallback = true
+            await triggerDownload(await requestGenDownload(item.url))
           }
         }
       } catch (error: any) {
@@ -454,6 +476,9 @@ export function VideosPage() {
       await new Promise((resolve) => setTimeout(resolve, 1500))
     }
     setDownloadingIds([])
+    if (usedFallback) {
+      setFindNotice('Alguns vídeos foram baixados pelo provedor alternativo. O arquivo chega sem o sufixo “(480p, h264)” — deixe o download terminar antes de enviar.')
+    }
     if (failed) {
       setFindError(reason || `${failed} vídeo(s) não puderam ser baixados. Tente de novo em instantes.`)
     }
@@ -560,6 +585,7 @@ export function VideosPage() {
             </button>
           ))}
         </div>
+        {findNotice && <p className="finder-notice">{findNotice}</p>}
         {findError && <p className="finder-error">{findError}</p>}
         {found && found.length === 0 && !findError && (
           <p className="finder-empty">Nenhum vídeo gravado encontrado para esse termo.</p>
