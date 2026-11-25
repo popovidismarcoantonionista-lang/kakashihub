@@ -36,44 +36,47 @@ type FoundVideo = {
   url: string
 }
 
-// Baixar é uma ação do navegador do usuário: o Render sai de IP de datacenter e
-// é bloqueado pelo YouTube. O GenDownload é free, não pede chave/cookie e é o
-// único provedor usado pela busca; o usuário envia o arquivo manualmente pelo
-// botão "Enviar vídeo".
-// O stream dele não tem CORS, então o download é feito com iframe oculto — o
-// servidor manda Content-Disposition: attachment.
-const GENDOWNLOAD_API = 'https://gendownload.com/api/extract'
+// Baixar continua usando somente o GenDownload, agora com o último trecho no
+// Render: ele resolve o vídeo, baixa o arquivo e serve com Content-Length real.
+// Assim o Chrome mostra MB/total em vez de "?" e o usuário envia o arquivo
+// manualmente pelo botão "Enviar vídeo". Nenhuma URL do provedor vai ao front.
+type PreparedDownload = {
+  id: string
+  status: 'preparando' | 'pronto' | 'erro'
+}
 
-type FreeDownload = { url: string }
-
-async function requestGenDownload(url: string): Promise<FreeDownload> {
-  const res = await fetch(GENDOWNLOAD_API, {
+async function prepareDownload(url: string): Promise<PreparedDownload> {
+  const res = await fetch('/api/downloads', {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     body: JSON.stringify({ url }),
   })
-  if (!res.ok) throw new Error('O provedor de download não respondeu.')
-  const json = await res.json()
-  const formats = Array.isArray(json?.formats) ? json.formats : []
-  const videos = formats.filter((f: any) => f?.type === 'video' && /^https?:\/\//i.test(String(f?.url || '')))
-  // Preferimos MP4 progressivo em 720p; se não houver, pegamos o primeiro vídeo.
-  const picked = videos.find((f: any) => /720/i.test(String(f?.label))) || videos[0]
-  if (!picked) throw new Error('Este vídeo não está disponível para download.')
-  return { url: String(picked.url) }
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || !data?.id) throw new Error('Não foi possível preparar este download.')
+  return data as PreparedDownload
 }
 
-async function triggerDownload(download: FreeDownload) {
-  // O stream do GenDownload não permite fetch cross-origin. Um iframe oculto
-  // dispara o download pelo Content-Disposition sem abrir aba, sem sair da
-  // página e sem depender de pop-up (que alguns navegadores bloqueiam).
+async function waitForPreparedDownload(id: string): Promise<void> {
+  const deadline = Date.now() + 8 * 60 * 1000
+  for (;;) {
+    if (Date.now() > deadline) throw new Error('O download está demorando mais que o esperado. Tente novamente.')
+    const res = await fetch(`/api/downloads/${encodeURIComponent(id)}`, { cache: 'no-store' })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error('Não foi possível acompanhar o download.')
+    if (data?.status === 'pronto') return
+    if (data?.status === 'erro') throw new Error('Este vídeo não pôde ser baixado. Tente novamente.')
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+  }
+}
+
+function triggerDownload(download: PreparedDownload) {
+  // O arquivo já está no nosso domínio, então o download sai sem abrir aba e
+  // sem depender de pop-up. Manter o iframe vivo evita abortar a transferência.
   const frame = document.createElement('iframe')
   frame.style.display = 'none'
   frame.referrerPolicy = 'no-referrer'
-  frame.src = download.url
+  frame.src = `/api/downloads/${encodeURIComponent(download.id)}/file`
   document.body.appendChild(frame)
-  // Não remover o iframe enquanto o download corre: o stream é lento e
-  // removê-lo antes do fim aborta a transferência e o navegador retoma.
-  // Ele some sozinho quando a página é recarregada/fechada.
 }
 
 const FIND_PRESETS = [
@@ -375,7 +378,9 @@ export function VideosPage() {
     let reason = ''
     for (const item of items) {
       try {
-        await triggerDownload(await requestGenDownload(item.url))
+        const prepared = await prepareDownload(item.url)
+        await waitForPreparedDownload(prepared.id)
+        triggerDownload(prepared)
       } catch (error: any) {
         failed += 1
         reason = String(error?.message || '').trim()
@@ -503,7 +508,7 @@ export function VideosPage() {
             </button>
             <button className="btn btn-primary btn-sm" onClick={downloadSelected} disabled={downloadingIds.length > 0}>
               {downloadingIds.length > 0 ? <Logo size={13} className="btn-spin" /> : <Download size={14} />}
-              {downloadingIds.length > 0 ? 'Baixando…' : 'Baixar selecionados'}
+              {downloadingIds.length > 0 ? 'Preparando…' : 'Baixar selecionados'}
             </button>
           </div>
         )}
@@ -535,7 +540,7 @@ export function VideosPage() {
                     onClick={() => { void downloadFound([item]) }}
                   >
                     {downloadingIds.includes(item.id) ? <Logo size={13} className="btn-spin" /> : <Download size={14} />}
-                    {downloadingIds.includes(item.id) ? 'Baixando…' : 'Baixar'}
+                    {downloadingIds.includes(item.id) ? 'Preparando…' : 'Baixar'}
                   </button>
                 </article>
               ))}
