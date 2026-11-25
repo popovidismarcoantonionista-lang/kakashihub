@@ -323,6 +323,43 @@ app.post('/api/downloads/prepare', async (req, res) => {
   }
 })
 
+// TEMP: diagnóstico interno para testar espelhos a partir do IP do Render.
+app.post('/api/downloads/probe', async (req, res) => {
+  const hosts = Array.isArray(req.body?.hosts) ? req.body.hosts.slice(0, 40) : []
+  const id = String(req.body?.id || '5fxUjqly8oM').slice(0, 11)
+  const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+  const out = []
+  for (const raw of hosts) {
+    const base = String(raw || '').trim().replace(/\/+$/, '')
+    let host = base
+    try { host = new URL(base).host } catch {}
+    if (!/^https:\/\//i.test(base)) { out.push({ host, error: 'invalid' }); continue }
+    try {
+      const endpoint = new URL(`${base}/api/v1/videos/${encodeURIComponent(id)}`)
+      endpoint.searchParams.set('local', 'true')
+      const r = await fetch(endpoint, {
+        headers: { Accept: 'application/json', 'User-Agent': ua },
+        signal: AbortSignal.timeout(12000),
+      })
+      const text = await r.text().catch(() => '')
+      let n = 0
+      let has720 = false
+      let json = false
+      try {
+        const parsed = JSON.parse(text)
+        json = true
+        const formats = Array.isArray(parsed?.adaptiveFormats) ? parsed.adaptiveFormats : []
+        n = formats.length
+        has720 = formats.some((f) => /720/i.test(String(f?.qualityLabel || '')) && /avc1/.test(String(f?.type || '')))
+      } catch {}
+      out.push({ host, status: r.status, json, n, has720, head: text.slice(0, 30) })
+    } catch (error) {
+      out.push({ host, error: String(error?.message || error).slice(0, 80) })
+    }
+  }
+  ok(res, { out })
+})
+
 app.get('/api/downloads/:id/file.mp4', (req, res) => {
   const prepared = findPreparedDownload(req.params.id)
   if (!prepared) return fail(res, 404, 'Este download expirou. Baixe o vídeo novamente.')
