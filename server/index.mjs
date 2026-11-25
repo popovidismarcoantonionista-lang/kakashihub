@@ -94,8 +94,10 @@ function uploadTitle(raw) {
 app.use('/covers', express.static(COVERS, { maxAge: 0 }))
 app.use('/media', express.static(MEDIA, { maxAge: 0 }))
 
-function ok(res, data = {}) { res.json(data) }
-function fail(res, status, message, extra) { res.status(status).json({ error: message, ...(extra || {}) }) }
+// O proxy do Netlify guardava respostas GET por alguns segundos (Age: 3) e o
+// painel podia mostrar progresso antigo até o usuário dar F5.
+function ok(res, data = {}) { res.set('Cache-Control', 'no-store'); res.json(data) }
+function fail(res, status, message, extra) { res.set('Cache-Control', 'no-store'); res.status(status).json({ error: message, ...(extra || {}) }) }
 
 async function servePrivateMedia(req, res, next, prefix) {
   try {
@@ -515,15 +517,8 @@ app.post('/api/sources/upload-token', async (req, res) => {
           tokenPayload: JSON.stringify({ sourceId: source.id }),
         }
       },
-      onUploadCompleted: async ({ blob, tokenPayload }) => {
-        let payload
-        try { payload = JSON.parse(tokenPayload || '{}') } catch { throw new Error('Dados de conclusão inválidos.') }
-        const source = findSource(String(payload.sourceId || ''))
-        if (!source?.uploading || blob.pathname !== `media/src/${source.id}.mp4`) {
-          throw new Error('O arquivo enviado não corresponde à fonte ativa.')
-        }
-        if (finishSourceUpload(source, blob.pathname)) await startSourceIngest(source)
-      },
+      // Sem callbackUrl pública o aviso do Blob só sujava o log do Render.
+      // O navegador chama /api/sources/upload-complete depois do upload.
     })
     ok(res, result)
   } catch (error) {

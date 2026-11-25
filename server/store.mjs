@@ -603,8 +603,19 @@ export function createJob(kind, extra = {}) {
 export function updateJob(job, patch) {
   Object.assign(job, patch)
   if (patch.step) job.log = [...(job.log || []), { at: new Date().toISOString(), text: patch.step }]
+  // A página de vídeos mostra source.progress, não o progresso do job. Sem
+  // espelhar aqui, a transcrição longa parecia travada em 68% no painel.
+  if (Number.isFinite(Number(patch.progress)) && job.kind === 'ingest' && job.sourceId) {
+    const source = stateScope().state.sources?.find((item) => item.id === job.sourceId)
+    if (source && source.status === 'processando') {
+      source.progress = Math.max(Number(source.progress) || 0, Number(patch.progress))
+    }
+  }
   const context = contextStorage.getStore()
-  if (context) queueJobWrite(context, job)
+  if (context) {
+    queueJobWrite(context, job)
+    if (patch.progress != null) save()
+  }
 }
 
 export function finishJob(job, error) {

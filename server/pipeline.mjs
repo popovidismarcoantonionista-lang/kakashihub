@@ -523,12 +523,18 @@ function detectFromCues(cues, min, max, cfg = NICHES.fuga) {
 }
 
 async function detectFromAudio(video, job) {
-  updateJob(job, { step: 'Lendo o áudio em busca de movimento' })
+  updateJob(job, { progress: 80, step: 'Lendo o áudio em busca de movimento' })
+  // O silencedetect só precisa da faixa de áudio. Sem -vn o ffmpeg decodificava
+  // o vídeo inteiro: 6,1s → 0,5s no teste local (6 min → ~30s no Render).
+  const ticker = setInterval(() => {
+    updateJob(job, { progress: Math.min(86, (Number(job.progress) || 80) + 1) })
+  }, 5000)
+  ticker.unref?.()
   try {
     const { stderr } = await run(FFMPEG_BIN, [
       '-hide_banner',
       ...(LIGHT_RENDER ? ['-threads', '1'] : []),
-      '-i', video, '-af', 'silencedetect=noise=-32dB:d=1.4', '-f', 'null', '-',
+      '-vn', '-i', video, '-af', 'silencedetect=noise=-32dB:d=1.4', '-f', 'null', '-',
     ], { timeout: 1000 * 60 * 8 })
     const starts = [...stderr.matchAll(/silence_start: ([\d.]+)/g)].map((m) => Number(m[1]))
     const ends = [...stderr.matchAll(/silence_end: ([\d.]+)/g)].map((m) => Number(m[1]))
@@ -556,6 +562,8 @@ async function detectFromAudio(video, job) {
     })
   } catch {
     return []
+  } finally {
+    clearInterval(ticker)
   }
 }
 
@@ -1619,7 +1627,12 @@ export async function runIngest(sourceId, url, opts = {}) {
     if (fs.existsSync(videoPath) && (xracingOn || cues.length === 0)) {
       updateJob(job, { progress: 72, step: xracingOn ? 'Transcrevendo o áudio · estilo XRacing' : 'Transcrevendo o áudio em português' })
       try {
-        words = await transcribeXracing(videoPath)
+        words = await transcribeXracing(videoPath, {
+          duration: source.duration || 0,
+          // Mantém o progresso andando enquanto o modelo trabalha: antes o
+          // painel ficava 12 min em 68% e parecia travado.
+          onTick: (elapsed) => updateJob(job, { progress: Math.min(79, 72 + Math.floor(elapsed / 8)) }),
+        })
         if (words.length >= 6) {
           if (xracingOn || !cues.length) cues = wordsToCues(words)
           if (xracingOn) {
@@ -1657,8 +1670,10 @@ export async function runIngest(sourceId, url, opts = {}) {
     const cfg = nicheConfig(state)
     let windows = cues.length > 4 ? detectFromCues(cues, settings.clipMin, settings.clipMax, cfg) : []
     if (!windows.length) windows = await detectFromAudio(videoPath, job)
-    if ((niche === 'games' || niche === 'gta') && windows.length < 3 && source.duration > 120) {
-      updateJob(job, { step: 'Sem transcrição. Marcando blocos para revisão' })
+    // Fallback para qualquer nicho: um vídeo sem falas reconhecíveis (ou com
+    // transcrição indisponível) nunca pode terminar o import em erro.
+    if (windows.length < 2 && source.duration > settings.clipMin * 2) {
+      updateJob(job, { step: 'Marcando blocos para revisão' })
       windows = spreadWindows(source.duration, settings.clipMin, settings.clipMax)
     }
     if (!windows.length) throw new Error('Não encontramos momentos suficientes neste vídeo.')
