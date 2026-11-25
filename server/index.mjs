@@ -960,7 +960,7 @@ app.delete('/api/clips/:id', async (req, res) => {
 app.post('/api/clips/:id/render', async (req, res) => {
   const clip = findClip(req.params.id)
   if (!clip) return fail(res, 404, 'Corte não encontrado.')
-  if (getJobs().some((j) => j.status === 'running' && j.clipId === clip.id)) {
+  if (getJobs().some((j) => ['running', 'pendente'].includes(j.status) && j.clipId === clip.id)) {
     return fail(res, 409, 'Este corte já está sendo renderizado.')
   }
   const { runId } = await startProcessJob('render', { clipId: clip.id }, { clipId: clip.id, sourceId: clip.sourceId })
@@ -972,7 +972,7 @@ app.post('/api/clips/:id/render', async (req, res) => {
 app.post('/api/clips/:id/trim', async (req, res) => {
   const clip = findClip(req.params.id)
   if (!clip) return fail(res, 404, 'Corte não encontrado.')
-  if (getJobs().some((j) => j.status === 'running' && j.clipId === clip.id)) {
+  if (getJobs().some((j) => ['running', 'pendente'].includes(j.status) && j.clipId === clip.id)) {
     return fail(res, 409, 'Este corte já está sendo processado.')
   }
   const { runId } = await startProcessJob('trim', {

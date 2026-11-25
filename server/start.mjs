@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import app from './index.mjs'
-import { withStore, closeOrphanWork, getState, save } from './store.mjs'
+import { withStore, closeOrphanWork, getState, save, sweepStaleJobs } from './store.mjs'
 import { startLiveWorkflow, resumePendingJobs } from './jobs.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -56,11 +56,14 @@ async function resumePendingWhenIdle() {
   await resumePendingJobs()
 }
 
+await withStore(() => sweepStaleJobs())
 await resumePendingWhenIdle()
 const resumeTimer = setInterval(() => {
-  resumePendingWhenIdle().catch((error) => {
-    console.error('[jobs] falha ao retomar trabalhos pendentes:', error?.message || error)
-  })
+  withStore(() => sweepStaleJobs())
+    .then(() => resumePendingWhenIdle())
+    .catch((error) => {
+      console.error('[jobs] falha ao retomar trabalhos pendentes:', error?.message || error)
+    })
 }, 15000)
 resumeTimer.unref?.()
 

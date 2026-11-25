@@ -622,10 +622,18 @@ export function finishJob(job, error) {
 export function closeOrphanWork() {
   const now = new Date().toISOString()
   const context = contextStorage.getStore()
+  const allJobs = stateScope().jobs
   const retryableKinds = new Set(['render', 'compile'])
-  for (const job of stateScope().jobs) {
+  for (const job of allJobs) {
     if (job.status === 'running') {
-      if (retryableKinds.has(job.kind)) {
+      // Se outro job para o mesmo alvo já concluiu depois deste começar, este
+      // ficou órfão na fila (nenhum log) e não deve ser reexecutado no boot.
+      const superseded = allJobs.some((other) => other.id !== job.id
+        && other.status === 'concluido'
+        && ((job.clipId && other.clipId === job.clipId)
+          || (job.compilationId && other.compilationId === job.compilationId))
+        && Date.parse(other.finishedAt || 0) > Date.parse(job.startedAt || 0))
+      if (retryableKinds.has(job.kind) && !superseded) {
         // Trabalho local (sem download externo): pode ser refeito no boot.
         Object.assign(job, {
           status: 'pendente',
@@ -636,7 +644,9 @@ export function closeOrphanWork() {
       } else {
         Object.assign(job, {
           status: 'erro',
-          error: 'Não foi possível concluir. Tente novamente.',
+          error: superseded
+            ? 'Trabalho substituído por uma execução mais recente.'
+            : 'Não foi possível concluir. Tente novamente.',
           finishedAt: now,
           retryPending: false,
         })
@@ -703,6 +713,39 @@ export function closeOrphanWork() {
     }
   }
   save()
+}
+
+//Jobs em fila sem nenhum passo executado podem ficar "running" para sempre se
+//o processo cair antes do setImmediate do background. Limpamos quando outro
+//job do mesmo alvo conclui (ou depois de 15 minutos sem log).
+export function sweepStaleJobs() {
+  const now = Date.now()
+  const allJobs = stateScope().jobs
+  const context = contextStorage.getStore()
+  let changed = false
+  for (const job of allJobs) {
+    if (job.status !== 'running' || (job.log || []).length) continue
+    const started = Date.parse(job.startedAt || '')
+    const aged = Number.isFinite(started) && now - started > 15 * 60 * 1000
+    const superseded = allJobs.some((other) => other.id !== job.id
+      && other.status === 'concluido'
+      && ((job.clipId && other.clipId === job.clipId)
+        || (job.compilationId && other.compilationId === job.compilationId))
+      && Date.parse(other.finishedAt || 0) > (Number.isFinite(started) ? started : 0))
+    if (!aged && !superseded) continue
+    Object.assign(job, {
+      status: 'erro',
+      error: superseded
+        ? 'Trabalho substituído por uma execução mais recente.'
+        : 'Não foi possível concluir. Tente novamente.',
+      finishedAt: new Date().toISOString(),
+      retryPending: false,
+    })
+    if (context) queueJobWrite(context, job)
+    changed = true
+  }
+  if (changed) save()
+  return changed
 }
 
 export function addActivity(kind, text) {
