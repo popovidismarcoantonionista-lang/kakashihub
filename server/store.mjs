@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { db } from './db.mjs'
 import { fugaJobs, fugaState } from './schema.mjs'
 import { seedState } from './seed.mjs'
+import { isPortugueseCaptionText, portugueseHookOrDefault } from './pt-text.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const ROOT = path.resolve(__dirname, '..')
@@ -168,7 +169,22 @@ function normalizeState(value) {
     state.project.logo = null
   }
   state.sources = Array.isArray(state.sources) ? state.sources : []
-  state.clips = Array.isArray(state.clips) ? state.clips : []
+  // Estados antigos podem guardar título/legenda em inglês alucinados pelo
+  // Whisper. Reescreve na leitura para o front e o render nunca mostrarem isso.
+  const lineText = (line) => (typeof line === 'string' ? line : isObject(line) ? line.text : '')
+  const ptLines = (lines) => (Array.isArray(lines) ? lines.filter((line) => isPortugueseCaptionText(lineText(line))) : lines)
+  state.clips = Array.isArray(state.clips) ? state.clips.map((clip) => {
+    if (!isObject(clip)) return clip
+    const hook = portugueseHookOrDefault(clip.hook, clip.type, clip.niche)
+    return {
+      ...clip,
+      hook,
+      description: isPortugueseCaptionText(clip.description) ? clip.description : hook,
+      contextCaption: isPortugueseCaptionText(clip.contextCaption) ? clip.contextCaption : '',
+      captionBlocks: ptLines(clip.captionBlocks),
+      captionLines: ptLines(clip.captionLines),
+    }
+  }) : []
   state.uploads = Array.isArray(state.uploads) ? state.uploads : []
   state.activity = Array.isArray(state.activity) ? state.activity : []
   state.compilations = Array.isArray(state.compilations) ? state.compilations : []

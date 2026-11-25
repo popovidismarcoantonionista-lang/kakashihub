@@ -27,6 +27,7 @@ import { beginLiveRecording, endLiveRecording, heavyWorkActive, waitForLiveRecor
 import { INVIDIOUS_URL, INVIDIOUS_URLS, cobaltResolve, hasCobalt, hasYtdlpApi, hasInvidious, invidiousInfo, ydlInfo, youtubeVideoId } from './services.mjs'
 import { analyzeXracing, avoidSkippableRanges, detectSkippableRanges, wordsToCues } from './xracing-engine.mjs'
 import { transcribeXracing } from './xracing-stt.mjs'
+import { isPortugueseCaptionText } from './pt-text.mjs'
 
 const PYTHON = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -1858,17 +1859,6 @@ function cleanContextText(raw) {
     .trim()
 }
 
-// Descrições de vídeos estrangeiros viravam legenda ao cair no fallback do
-// estilo XRacing. Só aceita frases claramente em português.
-function isPortugueseCaptionText(text) {
-  const t = ` ${String(text || '').toLowerCase().replace(/[^\p{L}\s]/gu, ' ')} `
-  // Palavras de função e marcadores do contexto do canal. O Whisper às vezes
-  // inventa frases em inglês ("Starting another job here") em trechos de ruído.
-  const en = (t.match(/\b(?:the|and|you|with|this|that|was|were|for|from|his|her|their|into|sponsored|subscribe|video|starting|another|job|here|going|get|now|look|okay|yeah|we|are|is|it|in|on|at|to|of|my|your|they|what|how|do|does|did|have|has|had|can|will|just|right|good|nice|welcome|please|thanks|let|its|i)\b/g) || []).length
-  const pt = (t.match(/\b(?:que|com|para|por|n[aã]o|dos|das|foi|moto|motoca|motorista|faixa|carro|quase|jogou|atropel\w*|desvio|caiu|ocorreu|enquadro|persegui\w*|o|a|os|as|e|em|de|do|da|na|no|se|ele|ela|est[aá]|estou|vai|vim|vinha|olha|olhe|pessoal|galera|bom|boa|tudo|mesmo|mais|muito|bem|apagou|farol|acelerou)\b/g) || []).length
-  return pt > 0 && pt >= en
-}
-
 // Os compilados estilo XRacing já descrevem a ocorrência na descrição:
 // "04:55 Cavalcante - DESVIO SUSPEITO NA OPERAÇÃO...". A frase após o nome
 // do canal é exatamente a legenda contextual que queremos queimar no corte.
@@ -1970,7 +1960,8 @@ function buildCaptionAss(clip, duration, outW, outH, gta = false, watermark = fa
   // Legenda verde estilo XRacing: uma frase curta, em caixa alta, até 3 linhas,
   // visível por 15–28s. Não usa a animação palavra por palavra dos outros estilos.
   if (green) {
-    const text = cleanContextText(contextText || clip?.contextCaption || clip?.hook).toUpperCase()
+    const sourceText = contextText || clip?.contextCaption || clip?.hook
+    const text = isPortugueseCaptionText(sourceText) ? cleanContextText(sourceText).toUpperCase() : ''
     if (!text) return null
     const words = splitCaptionWords(text)
     const perLine = Math.max(1, Math.ceil(words.length / 3))
@@ -2112,8 +2103,9 @@ export async function runRender(clipId, opts = {}) {
     const wantWatermark = renderSettings.watermark === true
     const wantBgBlur = renderSettings.bgBlur === true || xracing
     const wantFaceBlur = renderSettings.faceBlur === true
+    const ptContext = (value) => (isPortugueseCaptionText(value) ? cleanContextText(value) : '')
     const contextText = xracing
-      ? (cleanContextText(clip.contextCaption) || parseCreditCaption(source?.description, from) || cleanContextText(clip.hook))
+      ? (ptContext(clip.contextCaption) || ptContext(parseCreditCaption(source?.description, from)) || ptContext(clip.hook))
       : ''
 
     // Dados gerados pelo motor XRacing. Tudo em segundos absolutos da fonte;
