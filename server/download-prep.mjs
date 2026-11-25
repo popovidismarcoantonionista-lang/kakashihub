@@ -1,4 +1,4 @@
-// Prepara o download da busca com tamanho real: o leitor público devolve o
+// Prepara o download da busca com tamanho real: o player do YouTube devolve o
 // vídeo 720p e o áudio em faixas separadas; o ffmpeg junta os dois em um MP4
 // progressivo servido por /api/downloads/:id/file.mp4. A URL do CDN nunca é
 // devolvida ao navegador, e nenhum `?` aparece no link de download.
@@ -22,12 +22,27 @@ const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const LOCAL_FFMPEG = path.join(APP_ROOT, '.bin', 'ffmpeg')
 const FFMPEG_BIN = process.env.FFMPEG_BIN || (fs.existsSync(LOCAL_FFMPEG) ? LOCAL_FFMPEG : 'ffmpeg')
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+const INNERTUBE_KEY = process.env.YOUTUBE_INNERTUBE_KEY || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
+const INNERTUBE_UA = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip'
+const INNERTUBE_BODY = {
+  context: {
+    client: {
+      clientName: 'ANDROID',
+      clientVersion: '20.10.38',
+      androidSdkVersion: 30,
+      hl: 'en',
+      gl: 'US',
+    },
+  },
+  contentCheckOk: true,
+  racyCheckOk: true,
+}
 const STREAM_HEADERS = {
   'user-agent': UA,
   accept: '*/*',
   'accept-encoding': 'identity',
-  // O companion quebra com `bytes=0-1023`; o range aberto devolve o arquivo
-  // inteiro com Content-Length e Content-Range exatos.
+  // O companion do Invidious quebra com `bytes=0-1023`; o range aberto devolve
+  // o arquivo inteiro com Content-Length e Content-Range exatos.
   range: 'bytes=0-',
 }
 const API_TIMEOUT = 18000
@@ -73,7 +88,93 @@ function pickFormats(json) {
   return { video: videos[0] || null, audio: audios[0] || null }
 }
 
+// O player interno do YouTube funciona a partir de IP de datacenter e devolve
+// URLs diretas com contentLength. É a fonte principal; espelhos Invidious são
+// apenas fallback (quase todos bloqueiam IP de datacenter).
+async function innertubePlayer(id) {
+  const endpoint = new URL('https://www.youtube.com/youtubei/v1/player')
+  endpoint.searchParams.set('key', INNERTUBE_KEY)
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'user-agent': INNERTUBE_UA },
+    body: JSON.stringify({ ...INNERTUBE_BODY, videoId: id }),
+    signal: AbortSignal.timeout(API_TIMEOUT),
+  })
+  if (!res.ok) throw new Error(`youtube-player-${res.status}`)
+  const json = await res.json()
+  if (String(json?.playabilityStatus?.status || '') !== 'OK') {
+    throw new Error(`youtube-playability-${json?.playabilityStatus?.status || 'unknown'}`)
+  }
+  const adaptive = Array.isArray(json?.streamingData?.adaptiveFormats)
+    ? json.streamingData.adaptiveFormats : []
+  const httpsUrl = (fmt) => {
+    const url = String(fmt?.url || '')
+    return /^https:\/\//i.test(url) ? url : ''
+  }
+  const videos = adaptive.filter((fmt) => {
+    const type = String(fmt?.mimeType || '')
+    return type.startsWith('video/mp4')
+      && type.includes('avc1')
+      && /720/i.test(String(fmt?.qualityLabel || ''))
+      && Number(fmt?.contentLength) > 0
+      && httpsUrl(fmt)
+  }).sort((a, b) => Number(b.contentLength) - Number(a.contentLength))
+  const audios = adaptive.filter((fmt) => {
+    const type = String(fmt?.mimeType || '')
+    return type.startsWith('audio/mp4')
+      && type.includes('mp4a.40.2')
+      && Number(fmt?.contentLength) > 0
+      && httpsUrl(fmt)
+  }).sort((a, b) => Number(b.contentLength) - Number(a.contentLength))
+  if (!videos[0] || !audios[0]) throw new Error('youtube-no-format')
+  return {
+    base: 'youtube-player',
+    title: String(json?.videoDetails?.title || 'Vídeo do YouTube').slice(0, 120),
+    video: { url: httpsUrl(videos[0]), size: Number(videos[0].contentLength) },
+    audio: { url: httpsUrl(audios[0]), size: Number(audios[0].contentLength) },
+  }
+}
+
+/** Diagnóstico interno: o IP do Render consegue chamar o player e o CDN? */
+export async function probeInnertube(id) {
+  try {
+    const meta = await innertubePlayer(id)
+    const test = async (url) => {
+      try {
+        const r = await fetch(url, {
+          headers: { 'user-agent': INNERTUBE_UA, accept: '*/*', range: 'bytes=0-1023' },
+          signal: AbortSignal.timeout(20000),
+        })
+        await r.arrayBuffer().catch(() => {})
+        return {
+          status: r.status,
+          cl: r.headers.get('content-length'),
+          cr: r.headers.get('content-range'),
+          type: r.headers.get('content-type'),
+        }
+      } catch (error) {
+        return { error: String(error?.message || error).slice(0, 100) }
+      }
+    }
+    return {
+      ok: true,
+      title: meta.title,
+      video: { size: meta.video.size, ...(await test(meta.video.url)) },
+      audio: { size: meta.audio.size, ...(await test(meta.audio.url)) },
+    }
+  } catch (error) {
+    return { ok: false, error: String(error?.message || error).slice(0, 160) }
+  }
+}
+
 async function resolveFormats(id) {
+  try {
+    const fromYoutube = await innertubePlayer(id)
+    console.log('[download:resolve] youtube-player → 720p')
+    return fromYoutube
+  } catch (error) {
+    console.warn('[download:resolve] youtube-player:', String(error?.message || error).slice(0, 120))
+  }
   let lastError = new Error('invidious-unreachable')
   for (const base of HOSTS) {
     try {
@@ -108,17 +209,31 @@ async function resolveFormats(id) {
   throw lastError
 }
 
-async function saveStream(url, expected, dest) {
+async function fetchStream(url, headers) {
   const res = await fetch(url, {
-    headers: STREAM_HEADERS,
+    headers,
     redirect: 'follow',
     signal: AbortSignal.timeout(STREAM_TIMEOUT),
   })
-  if (!res.ok) throw new Error(`stream-${res.status}`)
-  if (!res.body) throw new Error('stream-empty')
+  if (!res.ok || !res.body) {
+    await res.body?.cancel().catch(() => {})
+    throw new Error(`stream-${res.status}`)
+  }
   const declared = Number(res.headers.get('content-length') || 0)
-  if (declared && declared !== expected) throw new Error('stream-size')
-  await streamPipeline(Readable.fromWeb(res.body), fs.createWriteStream(dest))
+  const total = Number(String(res.headers.get('content-range') || '').split('/').pop() || 0)
+  return { res, declared: total || declared }
+}
+
+async function saveStream(url, expected, dest) {
+  let opened
+  try {
+    opened = await fetchStream(url, STREAM_HEADERS)
+  } catch (error) {
+    // Alguns CDNs só respondem sem Range; nesse caso o Content-Length é o total.
+    opened = await fetchStream(url, { 'user-agent': UA, accept: '*/*', 'accept-encoding': 'identity' })
+  }
+  if (opened.declared && opened.declared !== expected) throw new Error('stream-size')
+  await streamPipeline(Readable.fromWeb(opened.res.body), fs.createWriteStream(dest))
   const saved = fs.statSync(dest).size
   if (saved !== expected) throw new Error('stream-size')
 }
