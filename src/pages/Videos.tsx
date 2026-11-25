@@ -81,7 +81,9 @@ async function triggerDownload(download: CobaltDownload) {
   const res = await fetch(download.url)
   if (!res.ok) throw new Error('Não foi possível baixar o vídeo.')
   const blob = await res.blob()
-  if (blob.size < 1024) throw new Error('O vídeo veio vazio. Tente de novo em instantes.')
+  if (blob.size < 1024) {
+    throw new Error('O provedor devolveu um arquivo vazio para este vídeo. Tente outro vídeo ou baixe direto no YouTube e use “Enviar vídeo”.')
+  }
   const objectUrl = URL.createObjectURL(blob)
   const name = download.filename || `video-${Date.now()}.mp4`
   const a = document.createElement('a')
@@ -369,12 +371,14 @@ export function VideosPage() {
     setFindError('')
     setDownloadingIds(items.map((item) => item.id))
     let failed = 0
+    let reason = ''
     for (const item of items) {
       try {
         const media = await requestCobaltDownload(item.url)
         await triggerDownload(media)
-      } catch {
+      } catch (error: any) {
         failed += 1
+        reason = String(error?.message || '').trim()
       }
       // A instância pública limita a 20 pedidos por minuto e o navegador pode
       // bloquear downloads automáticos muito próximos uns dos outros.
@@ -382,7 +386,7 @@ export function VideosPage() {
     }
     setDownloadingIds([])
     if (failed) {
-      setFindError(`${failed} vídeo(s) não puderam ser baixados. Tente de novo em instantes.`)
+      setFindError(reason || `${failed} vídeo(s) não puderam ser baixados. Tente de novo em instantes.`)
     }
   }
 
