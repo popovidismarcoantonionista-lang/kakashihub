@@ -2120,7 +2120,7 @@ export async function runRender(clipId, opts = {}) {
         '-pix_fmt', 'yuv420p',
         ...(LIGHT_RENDER ? ['-r', '30'] : []),
         '-c:a', 'aac', '-b:a', '160k', '-ar', '48000',
-        '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
+        ...(LIGHT_RENDER ? [] : ['-af', 'loudnorm=I=-14:TP=-1.5:LRA=11']),
         '-max_muxing_queue_size', '256',
         '-movflags', '+faststart', '-shortest',
         path.basename(out),
@@ -2351,7 +2351,7 @@ export async function runCompilation(compilationId, opts = {}) {
         '-c:v', 'libx264', '-preset', 'veryfast',
         '-crf', '20', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
-        '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',
+        ...(LIGHT_RENDER ? [] : ['-af', 'loudnorm=I=-16:TP=-1.5:LRA=11']),
         path.basename(seg),
       ], { cwd: work, timeout: 1000 * 60 * (LIGHT_RENDER ? 5 : 10) })
       parts.push(seg)

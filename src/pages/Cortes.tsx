@@ -140,10 +140,12 @@ export function CortesPage() {
                   <div className="longo-thumb">
                     <Cover src={comp.cover} alt={comp.title} />
                     <span className={`longo-badge ${comp.status}`}>
-                      {comp.status === 'pronto' ? 'PRONTO' : comp.status === 'erro' ? 'ATENÇÃO' : 'MONTANDO'}
+                      {comp.status === 'pronto' ? 'PRONTO'
+                        : comp.status === 'erro' ? 'ATENÇÃO'
+                          : comp.status === 'pendente' ? 'RETOMANDO' : 'MONTANDO'}
                     </span>
                     <span className="longo-dur mono">{fmtTime(comp.duration)}</span>
-                    {comp.status === 'processando' && (
+                    {['processando', 'pendente'].includes(comp.status) && (
                       <div className="longo-prog">
                         <ProgressBar value={comp.progress} animated />
                         <span className="mono">{comp.progress}%</span>
@@ -165,10 +167,13 @@ export function CortesPage() {
                           </a>
                         </>
                       ) : (
-                        <span className="longo-status mono">{comp.status === 'erro' ? 'TENTE DE NOVO' : 'EM PRODUÇÃO'}</span>
+                        <span className="longo-status mono">
+                          {comp.status === 'erro' ? 'TENTE DE NOVO'
+                            : comp.status === 'pendente' ? 'RETOMANDO' : 'EM PRODUÇÃO'}
+                        </span>
                       )}
                       <div className="grow" />
-                      {comp.status !== 'processando' && (
+                      {!['processando', 'pendente'].includes(comp.status) && (
                         <button className="btn btn-ghost btn-sm" onClick={() => openAdd(comp)}>
                           <Plus size={13} /> Adicionar cortes
                         </button>
@@ -176,7 +181,7 @@ export function CortesPage() {
                       <button
                         className="btn-icon danger"
                         onClick={() => removeLong(comp)}
-                        disabled={removingComp === comp.id || comp.status === 'processando'}
+                        disabled={removingComp === comp.id || ['processando', 'pendente'].includes(comp.status)}
                         aria-label="Remover vídeo longo"
                       >
                         {removingComp === comp.id ? <span className="spinner" /> : <Trash2 size={14} />}

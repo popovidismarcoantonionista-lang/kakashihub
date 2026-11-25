@@ -3,7 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import app from './index.mjs'
 import { withStore, closeOrphanWork, getState, save } from './store.mjs'
-import { startLiveWorkflow } from './jobs.mjs'
+import { startLiveWorkflow, resumePendingJobs } from './jobs.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DIST = path.join(ROOT, 'dist')
@@ -40,6 +40,29 @@ for (const id of resumeLiveIds) {
     console.error('[live] falha ao retomar monitoramento:', id, err?.message || err)
   }
 }
+
+async function liveActive() {
+  return withStore(() => getState().sources.some((source) => (
+    source.mode === 'live'
+    && ['ao-vivo', 'processando'].includes(source.status)
+    && !source.liveStopRequested
+    && !source.liveEndedAt
+    && !source.liveResumePending
+  )))
+}
+
+async function resumePendingWhenIdle() {
+  if (await liveActive()) return
+  await resumePendingJobs()
+}
+
+await resumePendingWhenIdle()
+const resumeTimer = setInterval(() => {
+  resumePendingWhenIdle().catch((error) => {
+    console.error('[jobs] falha ao retomar trabalhos pendentes:', error?.message || error)
+  })
+}, 15000)
+resumeTimer.unref?.()
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`[server] Kakashi Hub ouvindo em 0.0.0.0:${port}`)

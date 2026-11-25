@@ -11,10 +11,10 @@ services:
         value: production
       - key: PYTHON
         value: python3
+      # Lives são apenas Twitch/Kick e o download é manual no navegador;
+      # o provider de PO do YouTube só consumia RAM do Render free.
       - key: YT_POT_ENABLED
-        value: "true"
-      - key: BGUTIL_POT_URL
-        value: http://127.0.0.1:4416
+        value: "false"
       # YouTube Data API v3: confirma status/título/canal da live antes do yt-dlp.
       # Valores com sync:false devem ser preenchidos no painel do Render
       # (o Blueprint não promove novos secrets em serviços já existentes).

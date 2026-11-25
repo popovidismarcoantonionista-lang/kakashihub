@@ -4,7 +4,7 @@ import {
   scheduledUploadWorkflow,
 } from '../workflows/jobs.mjs'
 import { runBackground } from './background.mjs'
-import { createJob, flushStore, getState, save, saveJobs } from './store.mjs'
+import { createJob, flushStore, getJobs, getState, save, saveJobs, withStore } from './store.mjs'
 
 const JOB_TYPES = {
   analyze: 'ingest',
@@ -48,4 +48,40 @@ export async function startUploadWorkflow(uploadId) {
     save()
   }
   return runId
+}
+
+let resumingJobs = false
+
+// Render free reinicia o processo no meio de um render/compilação. Esses trabalhos
+// são locais (não dependem de download externo), então são refeitos no boot em vez
+// de virarem um erro genérico. Só entra na fila quando não há mais nada rodando.
+export async function resumePendingJobs() {
+  if (resumingJobs) return 0
+  resumingJobs = true
+  try {
+    const jobs = await withStore(() => getJobs())
+    const busy = jobs.some((job) => job.status === 'running'
+      && ['render', 'compile', 'ingest'].includes(job.kind))
+    if (busy) return 0
+    const pending = jobs.filter((job) => job.status === 'pendente'
+      && job.retryPending === true
+      && ['render', 'compile'].includes(job.kind))
+    for (const job of pending) {
+      const targetId = job.kind === 'compile' ? job.compilationId : job.clipId
+      if (!targetId) continue
+      const payload = job.kind === 'compile'
+        ? { compilationId: job.compilationId }
+        : { clipId: job.clipId }
+      await withStore(() => startProcessJob(job.kind, payload, {
+        id: job.id,
+        sourceId: job.sourceId,
+        clipId: job.clipId,
+        compilationId: job.compilationId,
+        retryPending: false,
+      }))
+    }
+    return pending.length
+  } finally {
+    resumingJobs = false
+  }
 }

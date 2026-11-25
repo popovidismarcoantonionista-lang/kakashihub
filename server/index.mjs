@@ -826,7 +826,9 @@ app.post('/api/compilations/:id/clips', async (req, res) => {
   const state = getState()
   const comp = (state.compilations || []).find((c) => c.id === req.params.id)
   if (!comp) return fail(res, 404, 'Vídeo longo não encontrado.')
-  if (comp.status === 'processando' || getJobs().some((j) => j.compilationId === comp.id && j.status === 'running')) {
+  const compBusy = ['processando', 'pendente'].includes(comp.status)
+    || getJobs().some((j) => j.compilationId === comp.id && ['running', 'pendente'].includes(j.status))
+  if (compBusy) {
     return fail(res, 409, 'Este vídeo longo ainda está sendo montado.')
   }
   const extra = Array.isArray(req.body?.clipIds)
@@ -858,7 +860,9 @@ app.delete('/api/compilations/:id', async (req, res) => {
   const state = getState()
   const comp = (state.compilations || []).find((c) => c.id === req.params.id)
   if (!comp) return fail(res, 404, 'Vídeo longo não encontrado.')
-  if (comp.status === 'processando' || getJobs().some((j) => j.compilationId === comp.id && j.status === 'running')) {
+  const compBusy = ['processando', 'pendente'].includes(comp.status)
+    || getJobs().some((j) => j.compilationId === comp.id && ['running', 'pendente'].includes(j.status))
+  if (compBusy) {
     return fail(res, 409, 'Este vídeo longo ainda está sendo montado.')
   }
   state.compilations = state.compilations.filter((c) => c.id !== comp.id)

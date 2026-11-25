@@ -551,6 +551,8 @@ export function getJobs() {
     kind: job.kind,
     sourceId: job.sourceId,
     clipId: job.clipId,
+    compilationId: job.compilationId,
+    retryPending: job.retryPending,
     status: job.status,
     progress: job.progress,
     step: job.step,
@@ -607,6 +609,7 @@ export function updateJob(job, patch) {
 
 export function finishJob(job, error) {
   job.status = error ? 'erro' : 'concluido'
+  job.retryPending = false
   job.error = error ? String(error.message || error) : null
   job.progress = error ? job.progress : 100
   job.finishedAt = new Date().toISOString()
@@ -619,13 +622,25 @@ export function finishJob(job, error) {
 export function closeOrphanWork() {
   const now = new Date().toISOString()
   const context = contextStorage.getStore()
+  const retryableKinds = new Set(['render', 'compile'])
   for (const job of stateScope().jobs) {
     if (job.status === 'running') {
-      Object.assign(job, {
-        status: 'erro',
-        error: 'Não foi possível concluir. Tente novamente.',
-        finishedAt: now,
-      })
+      if (retryableKinds.has(job.kind)) {
+        // Trabalho local (sem download externo): pode ser refeito no boot.
+        Object.assign(job, {
+          status: 'pendente',
+          error: null,
+          finishedAt: null,
+          retryPending: true,
+        })
+      } else {
+        Object.assign(job, {
+          status: 'erro',
+          error: 'Não foi possível concluir. Tente novamente.',
+          finishedAt: now,
+          retryPending: false,
+        })
+      }
       if (context) queueJobWrite(context, job)
     }
   }
@@ -662,13 +677,22 @@ export function closeOrphanWork() {
     if (clip.renderedUrl && !clip.mediaKey && !mediaFileExists(clip.renderedUrl)) clip.renderedUrl = undefined
     if (clip.media && !clip.mediaKey && !mediaFileExists(clip.media)) clip.media = undefined
   }
+  const pendingCompIds = new Set(
+    stateScope().jobs
+      .filter((job) => job.status === 'pendente' && job.retryPending && job.compilationId)
+      .map((job) => job.compilationId),
+  )
   for (const comp of state.compilations || []) {
     if (comp.status === 'processando') {
-      Object.assign(comp, {
-        status: 'erro',
-        error: 'Não foi possível concluir. Monte o vídeo novamente.',
-        progress: 0,
-      })
+      if (pendingCompIds.has(comp.id)) {
+        Object.assign(comp, { status: 'pendente', error: null })
+      } else {
+        Object.assign(comp, {
+          status: 'erro',
+          error: 'Não foi possível concluir. Monte o vídeo novamente.',
+          progress: 0,
+        })
+      }
     }
     if (comp.url && !comp.mediaKey && !mediaFileExists(comp.url)) {
       comp.url = ''
