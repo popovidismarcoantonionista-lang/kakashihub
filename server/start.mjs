@@ -3,7 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import app from './index.mjs'
 import { withStore, closeOrphanWork, getState, save, sweepStaleJobs } from './store.mjs'
-import { startLiveWorkflow, resumePendingJobs } from './jobs.mjs'
+import { startLiveWorkflow, resumePendingJobs, recoverLiveWorkflows } from './jobs.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DIST = path.join(ROOT, 'dist')
@@ -52,6 +52,9 @@ async function liveActive() {
 }
 
 async function resumePendingWhenIdle() {
+  // Antes de filar jobs pesados, verifica se alguma live ainda está no ar com
+  // o monitoramento parado silenciosamente e religa essa captura.
+  await recoverLiveWorkflows()
   if (await liveActive()) return
   await resumePendingJobs()
 }

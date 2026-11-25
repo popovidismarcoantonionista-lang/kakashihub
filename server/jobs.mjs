@@ -4,7 +4,7 @@ import {
   scheduledUploadWorkflow,
 } from '../workflows/jobs.mjs'
 import { runBackground } from './background.mjs'
-import { createJob, flushStore, getJobs, getState, save, saveJobs, withStore } from './store.mjs'
+import { createJob, finishJob, flushStore, getJob, getJobs, getState, save, saveJobs, withStore } from './store.mjs'
 
 const JOB_TYPES = {
   analyze: 'ingest',
@@ -48,6 +48,54 @@ export async function startUploadWorkflow(uploadId) {
     save()
   }
   return runId
+}
+
+// O workflow da live roda em memória. Se o processo cair ou a promise morrer
+// sem chamar finishLiveStep, a fonte continua "ao vivo" mas para de gerar
+// cortes. Este watchdog religa o monitoramento quando isso acontece.
+const LIVE_STALE_MS = 3 * 60 * 1000
+let recoveringLives = false
+
+export async function recoverLiveWorkflows() {
+  if (recoveringLives) return 0
+  recoveringLives = true
+  try {
+    const snapshot = await withStore(() => ({
+      sources: getState().sources.map((s) => ({ ...s })),
+      jobs: getJobs(),
+    }))
+    const restartIds = []
+    for (const source of snapshot.sources) {
+      if (source.mode !== 'live') continue
+      if (!['ao-vivo', 'processando'].includes(source.status)) continue
+      if (source.liveEndedAt || source.liveStopRequested) continue
+      const job = snapshot.jobs.find((item) => item.id === source.liveJobId)
+      const paused = /pausado durante o processamento/i.test(job?.step || '')
+      if (paused) continue
+      const checked = Date.parse(source.liveCheckedAt || source.liveStartedAt || 0)
+      const started = Date.parse(job?.startedAt || 0)
+      const freshJob = Number.isFinite(started) && Date.now() - started < LIVE_STALE_MS
+      const stale = job?.status !== 'running'
+        || (!freshJob && (!Number.isFinite(checked) || Date.now() - checked > LIVE_STALE_MS))
+      if (!stale) continue
+      await withStore(() => {
+        const old = getJob(source.liveJobId)
+        if (old && old.status === 'running') finishJob(old, new Error('Monitoramento reiniciado.'))
+        const current = getState().sources.find((item) => item.id === source.id)
+        if (current) {
+          current.liveJobId = ''
+          current.status = 'ao-vivo'
+          current.error = null
+          save()
+        }
+      })
+      restartIds.push(source.id)
+    }
+    for (const id of restartIds) await startLiveWorkflow(id)
+    return restartIds.length
+  } finally {
+    recoveringLives = false
+  }
 }
 
 let resumingJobs = false
