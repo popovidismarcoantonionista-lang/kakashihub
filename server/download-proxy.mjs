@@ -121,19 +121,21 @@ async function bufferStream(job, streamUrl) {
 
 async function prepare(job) {
   try {
-    const { streamUrl, title, ext } = await resolveGenDownload(job.sourceUrl)
     await runHeavyExclusive(async () => {
       beginHeavyWork()
       try {
         await waitForLiveRecording()
+        // O token do stream expira rápido: resolver depois do gate evita que
+        // uma fila de render ou uma janela da live queime o link antes do fetch.
+        const { streamUrl, title, ext } = await resolveGenDownload(job.sourceUrl)
         await bufferStream(job, streamUrl)
+        job.filename = safeFilename(title, ext)
       } finally {
         endHeavyWork()
       }
     })
     job.status = 'pronto'
     job.readyAt = Date.now()
-    job.filename = safeFilename(title, ext)
   } catch (error) {
     job.status = 'erro'
     job.errorAt = Date.now()
