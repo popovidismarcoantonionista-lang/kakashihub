@@ -149,6 +149,26 @@ const FIND_PRESETS = [
   { label: 'Soldado Henrique', query: 'soldado henriquee enquadro' },
   { label: 'Kesley', query: 'Kesley enquadro' },
   { label: 'Higor Muniz', query: 'Higor Muniz enquadro' },
+  // Canais de PM, Polícia Civil/Federal, PRF e Bombeiros confirmados na busca.
+  { label: 'PMESP Ocorrências', query: 'Polícia Militar do Estado de São Paulo ocorrência' },
+  { label: 'Polícia em Ação', query: 'Polícia Em Ação canal' },
+  { label: 'Soldado Madalhano', query: 'Soldado Madalhano' },
+  { label: 'TV PMERJ', query: 'TV PMERJ' },
+  { label: 'PMCE Ceará', query: 'policiamilitardoceara' },
+  { label: 'Realidade PMCE', query: 'Realidade Policial PMCE' },
+  { label: 'PMMG Minas', query: 'PMMG Polícia Militar de Minas Gerais' },
+  { label: 'Rotam Maringá', query: 'Rotam Maringá' },
+  { label: 'Polícia 24 Horas', query: 'Polícia 24 horas' },
+  { label: 'Linha de Combate', query: 'Linha de Combate PRF' },
+  { label: 'PRF Brasil', query: 'PRF Brasil' },
+  { label: 'Delegado da Cunha', query: 'Delegado da Cunha' },
+  { label: 'Sargento Fahur', query: 'Sargento Fahur Oficial' },
+  { label: 'PF na Tela', query: 'PFnaTela' },
+  { label: 'Cortes do Caveira01', query: 'Cortes do Caveira01' },
+  { label: 'Bombeiros MG', query: 'Bombeiros MG Oficial' },
+  { label: 'Bombeiros RJ', query: 'Corpo de Bombeiros Militar do Rio de Janeiro' },
+  { label: 'Bombeiro Pereira BM', query: 'Bombeiro Pereira BM' },
+  { label: 'Águia Sorocaba', query: 'Águia Sorocaba bombeiros' },
 ]
 
 function jobLabel(kind?: string) {
