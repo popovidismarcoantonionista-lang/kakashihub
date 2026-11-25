@@ -36,36 +36,27 @@ type FoundVideo = {
   url: string
 }
 
-// Baixar é uma ação do navegador do usuário: o Render sai de IP de datacenter e
-// é bloqueado pelo YouTube. O GenDownload é free, não pede chave/cookie e é o
-// único provedor usado pela busca; o usuário envia o arquivo manualmente pelo
-// botão "Enviar vídeo".
-// O stream dele não tem CORS, então o download é feito com iframe oculto — o
-// servidor manda Content-Disposition: attachment.
-const GENDOWNLOAD_API = 'https://gendownload.com/api/extract'
+// O download da busca é preparado no Render: o provedor devolve vídeo 720p e
+// áudio em faixas separadas, o ffmpeg junta os dois e o arquivo é servido com
+// Content-Length real. O front recebe só um caminho interno, sem URL do CDN e
+// sem query string; o envio para o estúdio continua manual.
+type PreparedDownload = { url: string }
 
-type FreeDownload = { url: string }
-
-async function requestGenDownload(url: string): Promise<FreeDownload> {
-  const res = await fetch(GENDOWNLOAD_API, {
+async function requestPreparedDownload(url: string): Promise<PreparedDownload> {
+  const res = await fetch('/api/downloads/prepare', {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     body: JSON.stringify({ url }),
   })
-  if (!res.ok) throw new Error('O provedor de download não respondeu.')
-  const json = await res.json()
-  const formats = Array.isArray(json?.formats) ? json.formats : []
-  const videos = formats.filter((f: any) => f?.type === 'video' && /^https?:\/\//i.test(String(f?.url || '')))
-  // Preferimos MP4 progressivo em 720p; se não houver, pegamos o primeiro vídeo.
-  const picked = videos.find((f: any) => /720/i.test(String(f?.label))) || videos[0]
-  if (!picked) throw new Error('Este vídeo não está disponível para download.')
-  return { url: String(picked.url) }
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data?.error || 'Não foi possível preparar o download.')
+  if (!data?.url) throw new Error('O download não ficou pronto. Tente de novo.')
+  return { url: String(data.url) }
 }
 
-async function triggerDownload(download: FreeDownload) {
-  // O stream do GenDownload não permite fetch cross-origin. Um iframe oculto
-  // dispara o download pelo Content-Disposition sem abrir aba, sem sair da
-  // página e sem depender de pop-up (que alguns navegadores bloqueiam).
+async function triggerDownload(download: PreparedDownload) {
+  // O iframe oculto dispara o download pelo Content-Disposition sem abrir aba,
+  // sem sair da página e sem depender de pop-up (bloqueado por alguns navegadores).
   const frame = document.createElement('iframe')
   frame.style.display = 'none'
   frame.referrerPolicy = 'no-referrer'
@@ -375,7 +366,7 @@ export function VideosPage() {
     let reason = ''
     for (const item of items) {
       try {
-        await triggerDownload(await requestGenDownload(item.url))
+        await triggerDownload(await requestPreparedDownload(item.url))
       } catch (error: any) {
         failed += 1
         reason = String(error?.message || '').trim()
@@ -540,7 +531,7 @@ export function VideosPage() {
                 </article>
               ))}
             </div>
-            <p className="finder-empty">Os arquivos baixam no seu navegador. Depois use “Enviar vídeo” para o estúdio cortar.</p>
+            <p className="finder-empty">Os arquivos são preparados em 720p e baixados no seu navegador. Depois use “Enviar vídeo” para o estúdio cortar.</p>
           </>
         )}
       </section>

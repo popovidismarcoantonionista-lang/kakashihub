@@ -32,6 +32,8 @@ import {
   oauthFinish, oauthStart, saveAppCredentials,
 } from './social.mjs'
 import { getRadar } from './radar.mjs'
+import { youtubeVideoId } from './services.mjs'
+import { cleanupPreparedDownloads, findPreparedDownload, friendlyDownloadError, prepareSearchDownload } from './download-prep.mjs'
 import { db, connectionInfo } from './db.mjs'
 
 const app = express()
@@ -299,6 +301,67 @@ app.get('/api/videos/search', async (req, res) => {
     console.error('[video search]', err?.message || err)
     fail(res, 422, 'Não foi possível buscar vídeos agora. Tente outro termo.')
   }
+})
+
+// O download da busca é preparado no Render (720p + áudio, tamanho real) e
+// servido por um caminho sem query string. A URL do provedor nunca vai ao front.
+app.post('/api/downloads/prepare', async (req, res) => {
+  const url = String(req.body?.url || '').trim()
+  if (!youtubeVideoId(url)) return fail(res, 400, 'Cole um link de vídeo do YouTube.')
+  try {
+    const prepared = await prepareSearchDownload(url)
+    ok(res, {
+      ok: true,
+      id: prepared.id,
+      url: `/api/downloads/${prepared.id}/file.mp4`,
+      size: prepared.size,
+      filename: prepared.filename,
+    })
+  } catch (err) {
+    console.error('[download:prepare]', String(err?.message || err).slice(0, 240))
+    fail(res, 422, friendlyDownloadError(err))
+  }
+})
+
+app.get('/api/downloads/:id/file.mp4', (req, res) => {
+  const prepared = findPreparedDownload(req.params.id)
+  if (!prepared) return fail(res, 404, 'Este download expirou. Baixe o vídeo novamente.')
+  const size = prepared.size
+  const disposition = `attachment; filename="${prepared.filename.replace(/["\\]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(prepared.filename)}`
+  res.set('Content-Type', 'video/mp4')
+    .set('Content-Disposition', disposition)
+    .set('Accept-Ranges', 'bytes')
+    .set('Cache-Control', 'no-store')
+    .set('X-Content-Type-Options', 'nosniff')
+
+  const range = String(req.headers.range || '')
+  const match = range.match(/^bytes=(\d*)-(\d*)$/)
+  let start = 0
+  let end = size - 1
+  if (range) {
+    if (!match) {
+      res.set('Content-Range', `bytes */${size}`)
+      return res.status(416).end()
+    }
+    if (match[1]) start = Number(match[1])
+    if (match[2]) end = Number(match[2])
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) {
+      res.set('Content-Range', `bytes */${size}`)
+      return res.status(416).end()
+    }
+    end = Math.min(end, size - 1)
+  }
+  const length = end - start + 1
+  res.status(range ? 206 : 200).set('Content-Length', String(length))
+  if (range) res.set('Content-Range', `bytes ${start}-${end}/${size}`)
+  if (req.method === 'HEAD') return res.end()
+  const stream = fs.createReadStream(prepared.file, { start, end })
+  stream.on('error', (error) => {
+    console.error('[download:read]', String(error?.message || error).slice(0, 200))
+    if (res.headersSent) return res.destroy()
+    fail(res, 500, 'Não foi possível enviar o arquivo agora.')
+  })
+  stream.pipe(res)
 })
 
 app.post('/api/sources', async (req, res) => {
