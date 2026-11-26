@@ -28,10 +28,8 @@ export function CortesPage() {
 
   const clips = state?.clips || []
   const comps = state?.compilations || []
-  const approved = clips.filter((c) => c.stage !== 'rascunho').length
   const avg = clips.length ? Math.round(clips.reduce((a, c) => a + (c.end - c.start), 0) / clips.length) : 0
   const best = clips.length ? Math.max(...clips.map((c) => c.score)) : 0
-  const pickedDuration = clips.filter((c) => picked.includes(c.id)).reduce((a, c) => a + (c.end - c.start), 0)
 
   const filtered = useMemo(() => {
     let list = clips.filter((c) => type === 'todos' || c.type === type)
@@ -101,7 +99,6 @@ export function CortesPage() {
   }
 
   const addCandidates = addTarget ? clips.filter((c) => !addTarget.clipIds.includes(c.id)) : []
-  const addDuration = clips.filter((c) => addPicked.includes(c.id)).reduce((a, c) => a + (c.end - c.start), 0)
 
   const typeCount = (t: ClipType) => clips.filter((c) => c.type === t).length
   const niche = state?.settings?.niche || 'fuga'

@@ -11,7 +11,9 @@ if (process.env.VERCEL) {
   process.exit(0)
 }
 
-if (!process.env.FUGA_SKIP_BUILD) {
+// Netlify já executa `npm run build` depois do install; rodar aqui de novo
+// apenas duplicava o build e atrasava o deploy.
+if (!process.env.FUGA_SKIP_BUILD && !process.env.NETLIFY) {
   const build = run(process.execPath, [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'), 'build'])
   if (build.status !== 0) process.exit(build.status || 1)
 }

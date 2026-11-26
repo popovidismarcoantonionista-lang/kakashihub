@@ -2,14 +2,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   Check, Clapperboard, Crop, Download, Play, Scissors,
 } from 'lucide-react'
-import { useApp } from '../store'
+import { friendlyMessage, useApp } from '../store'
 import { CamBoxCanvas } from '../CamBoxCanvas'
 import { navigate, useRoute } from '../router'
 import { Preview } from '../components'
 import { Dot, EmptyState, Logo, PageHead, ProgressBar, ScoreRing, Select, StagePill, TypeBadge } from '../ui'
 import { fmtRange, fmtTime } from '../lib/format'
 import { detectCamBoxAuto } from '../lib/camBox'
-import type { CamBox, Clip, Source } from '../types'
+import type { CamBox, Clip } from '../types'
 
 const FRAMING_LABEL: Record<string, string> = {
   auto: '9:16 automático',
@@ -109,6 +109,7 @@ export function EstudioPage() {
       setSavedFlash(true)
       setTimeout(() => setSavedFlash(false), 1400)
     } catch (e: any) {
+      window.alert(friendlyMessage(e?.message))
     }
   }
 
@@ -122,7 +123,9 @@ export function EstudioPage() {
       })
       setSavedFlash(true)
       setTimeout(() => setSavedFlash(false), 1400)
-    } catch {} finally {
+    } catch (e: any) {
+      window.alert(friendlyMessage(e?.message))
+    } finally {
       setCamBusy(false)
     }
   }
@@ -141,7 +144,9 @@ export function EstudioPage() {
       })
       setSavedFlash(true)
       setTimeout(() => setSavedFlash(false), 1400)
-    } catch {} finally {
+    } catch (e: any) {
+      window.alert(friendlyMessage(e?.message))
+    } finally {
       setCamBusy(false)
     }
   }
@@ -155,7 +160,9 @@ export function EstudioPage() {
         setCamDraft(cam)
         await api(`/api/clips/${clip.id}`, { method: 'PATCH', body: JSON.stringify({ cam }) })
       }
-    } catch {} finally {
+    } catch (e: any) {
+      window.alert(friendlyMessage(e?.message))
+    } finally {
       setCamBusy(false)
     }
   }
@@ -525,6 +532,7 @@ function XracingEditor({
       },
     })
   }
+  const replayBase = replay || { start: 0, end: 0, speed: 0.5, zoom: 1.3 }
   const commitBleeps = () => {
     const next = bleeps.split(',').map((part) => {
       const [a, b] = part.split('-').map((x) => Number(x.trim()))
@@ -554,14 +562,14 @@ function XracingEditor({
       <div className="trim-row">
         <label>
           <span className="mono">VELOCIDADE</span>
-          <select className="input" value={speed} disabled={!replay} onChange={(e) => { setSpeed(e.target.value); void patchClip({ replay: { ...(replay || { start: 0, end: 0 }), speed: Number(e.target.value) } }) }}>
+          <select className="input" value={speed} disabled={!replay} onChange={(e) => { setSpeed(e.target.value); void patchClip({ replay: { ...replayBase, speed: Number(e.target.value) } }) }}>
             <option value="0.5">0,5x</option>
             <option value="0.75">0,75x</option>
           </select>
         </label>
         <label>
           <span className="mono">ZOOM</span>
-          <select className="input" value={zoom} disabled={!replay} onChange={(e) => { setZoom(e.target.value); void patchClip({ replay: { ...(replay || { start: 0, end: 0 }), zoom: Number(e.target.value) } }) }}>
+          <select className="input" value={zoom} disabled={!replay} onChange={(e) => { setZoom(e.target.value); void patchClip({ replay: { ...replayBase, zoom: Number(e.target.value) } }) }}>
             <option value="1">1,0x</option>
             <option value="1.3">1,3x</option>
             <option value="1.6">1,6x</option>

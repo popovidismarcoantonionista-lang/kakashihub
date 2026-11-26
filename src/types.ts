@@ -124,7 +124,7 @@ export interface Compilation {
   aspect?: '9:16' | '16:9'
   clipIds: string[]
   duration: number
-  status: 'processando' | 'pronto' | 'erro'
+  status: 'processando' | 'pendente' | 'pronto' | 'erro'
   progress: number
   url: string
   cover: string

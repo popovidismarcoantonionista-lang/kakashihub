@@ -47,7 +47,19 @@ type DownloadSession = {
   url: string
 }
 type PreparedDownload = { url: string }
-type ProviderFormat = { url: string; clen: string | number; qualityLabel?: string }
+type ProviderFormat = {
+  url: string
+  type?: string
+  clen: string | number
+  qualityLabel?: string
+  itag?: string | number
+  audioTrack?: {
+    id?: string
+    displayName?: string
+    audioIsDefault?: boolean
+    isDefault?: boolean
+  }
+}
 
 const UPLOAD_CHUNK = 2 * 1024 * 1024
 const SOURCE_CHUNK = 512 * 1024
@@ -104,11 +116,27 @@ function pickProviderFormats(json: any) {
     .sort((a, b) => qualityOf(b) - qualityOf(a)
       || Number(/60/i.test(String(a.qualityLabel || ''))) - Number(/60/i.test(String(b.qualityLabel || '')))
       || Number(a.clen) - Number(b.clen))[0]
-  const audio = formats
+  const audioCandidates = formats
     .filter((f) => String(f.type || '').startsWith('audio/mp4')
       && /mp4a\.40\.2/.test(String(f.type || ''))
       && Number(f.clen) > 0 && /^https:/i.test(String(f.url || '')))
-    .sort((a, b) => Number(b.clen) - Number(a.clen))[0]
+  // O YouTube pode oferecer várias faixas AAC (original, dublada, narração).
+  // Ordenar só por tamanho escolhia a dublagem quando ela tinha bitrate maior.
+  // A faixa original é a marcada como padrão; o itag 140 é o AAC estéreo
+  // original quando o provedor não envia metadados de faixa.
+  const audioScore = (f: ProviderFormat) => {
+    const track = f.audioTrack || {}
+    const isDefault = track.audioIsDefault === true || track.isDefault === true
+    const isDub = /\b(?:dub|dubbed|dubl|traduz|translat|narration)\b/i
+      .test(`${track.displayName || ''} ${track.id || ''}`)
+    return (isDefault ? 1000 : 0)
+      - (isDub ? 2000 : 0)
+      + (String(f.itag) === '140' ? 10 : 0)
+  }
+  const audio = audioCandidates.slice()
+    .sort((a, b) => audioScore(b) - audioScore(a)
+      || audioCandidates.indexOf(a) - audioCandidates.indexOf(b)
+      || Number(b.clen) - Number(a.clen))[0]
   if (!video || !audio) throw new Error('Este vídeo não tem faixa H264 com áudio disponível.')
   return { video, audio }
 }
@@ -297,14 +325,6 @@ function platformName(source: Source) {
   return 'Live'
 }
 
-function friendlyLiveError(message: string) {
-  const raw = String(message || '')
-  if (/hls|manifesto|espelho n[aã]o devolveu/i.test(raw)) return 'Reconectando a captura da live para gerar os cortes…'
-  if (/captura no navegador indispon/i.test(raw)) return 'Reconectando a captura da live para gerar os cortes…'
-  if (/timeout|timed? ?out/i.test(raw)) return 'A conexão com a live demorou. Tentando de novo…'
-  return 'Ajustando a captura da live. Os cortes voltam em instantes.'
-}
-
 function audioPercent(level?: number | null): number {
   if (level == null || !Number.isFinite(level)) return 0
   return Math.max(0, Math.min(100, Math.round(((level + 60) / 60) * 100)))
@@ -330,7 +350,6 @@ function LiveAudioMeter({ level, silent }: { level?: number | null; silent?: boo
 
 function liveEmbed(source: Source): string | null {
   const host = window.location.hostname
-  const origin = window.location.origin
   if (source.platform === 'twitch') {
     const login = source.liveChannel || source.url?.match(/twitch\.tv\/([^/?#]+)/i)?.[1] || ''
     if (!login || /^(videos|directory|downloads|search)$/i.test(login)) return null
@@ -425,7 +444,7 @@ function LiveCamEditor({ source }: { source: Source }) {
 }
 
 export function VideosPage() {
-  const { state, api, refresh, setIngestOpen, setIngestTab } = useApp()
+  const { state, api, setIngestOpen, setIngestTab } = useApp()
   const [liveActing, setLiveActing] = useState('')
   const [watching, setWatching] = useState<Source | null>(null)
   const [liveWatching, setLiveWatching] = useState<Source | null>(null)

@@ -666,12 +666,32 @@ export function finishJob(job, error) {
   if (context) queueJobWrite(context, job)
 }
 
+// Publicação de 25/11: o usuário pediu para parar os renders em andamento antes
+// de subir o lote de correções. Sem este marcador o boot transformava o render
+// interrompido em `pendente` e o watchdog voltava a rodá-lo com a build nova.
+const RENDER_STOP_MARKER = '2026-11-25-publicacao'
+
 // Um deploy/restart mata os processos em andamento. Sem isso, jobs ficam
 // "running" para sempre e o front continua atualizando em alta frequência.
 export function closeOrphanWork() {
   const now = new Date().toISOString()
   const context = contextStorage.getStore()
+  const state = getState()
   const allJobs = stateScope().jobs
+  if (state.renderStopMarker !== RENDER_STOP_MARKER) {
+    for (const job of allJobs) {
+      if (!['render', 'compile'].includes(job.kind)) continue
+      if (!['running', 'pendente'].includes(job.status)) continue
+      Object.assign(job, {
+        status: 'cancelado',
+        error: null,
+        retryPending: false,
+        finishedAt: now,
+      })
+      if (context) queueJobWrite(context, job)
+    }
+    state.renderStopMarker = RENDER_STOP_MARKER
+  }
   const retryableKinds = new Set(['render', 'compile', 'ingest', 'analyze'])
   for (const job of allJobs) {
     if (job.status === 'running') {
@@ -713,7 +733,6 @@ export function closeOrphanWork() {
       .filter((job) => job.status === 'pendente' && job.retryPending && job.sourceId)
       .map((job) => job.sourceId),
   )
-  const state = getState()
   for (const source of state.sources) {
     // Um deploy/restart não deve encerrar uma transmissão que ainda está no ar.
     // Guardamos a intenção de retomar e o start.mjs reinicia o workflow depois.

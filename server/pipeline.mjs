@@ -344,7 +344,18 @@ export async function fetchChannelVideos(raw) {
   } catch {
     throw new Error('channel-unavailable')
   }
-  const entries = (data.entries || []).filter((e) => e && e.id)
+  // `--flat-playlist` também devolve lives e estreias agendadas. O achador de
+  // fontes só pode oferecer vídeos gravados, então descartamos os dois estados
+  // antes de montar a lista (o /api/videos/search já faz o mesmo filtro).
+  const entries = (data.entries || []).filter((e) => {
+    if (!e || !e.id) return false
+    const status = String(e.live_status || e.broadcast || e.liveBroadcastContent || '').toLowerCase()
+    if (['is_live', 'live', 'is_upcoming', 'upcoming'].includes(status)) return false
+    // `--flat-playlist` nem sempre traz `live_status`. Vídeos gravados têm
+    // duração conhecida; lives/estreias vêm sem duração (ou com duração zerada).
+    const duration = Number(e.duration)
+    return Number.isFinite(duration) && duration > 0
+  })
   const videos = entries.map((e) => ({
     id: e.id,
     title: e.title || 'Vídeo sem título',
@@ -373,6 +384,34 @@ async function probe(file) {
     width: s.width || 1280,
     height: s.height || 720,
     duration: Number(s.duration) || Number(data.format?.duration) || 0,
+  }
+}
+
+// Um MP4 pode trazer mais de uma faixa de áudio (original + dublagem/narração).
+// Mapear `0:a?` manda todas para a saída e o player escolhe qualquer uma —
+// geralmente a errada. Escolhemos uma faixa explicitamente: a padrão, ou a
+// portuguesa, evitando faixas marcadas como dublagem/narração.
+async function pickAudioStreamSpec(file) {
+  try {
+    const { stdout } = await run(FFPROBE_BIN, [
+      '-v', 'error', '-select_streams', 'a',
+      '-show_entries', 'stream=index:stream_disposition=default:stream_tags=language,title,handler_name',
+      '-of', 'json', file,
+    ])
+    const streams = JSON.parse(stdout)?.streams || []
+    if (!streams.length) return '0:a?'
+    const score = (stream) => {
+      const tags = stream.tags || {}
+      const label = `${tags.language || ''} ${tags.title || ''} ${tags.handler_name || ''}`
+      return (stream.disposition?.default === 1 ? 1000 : 0)
+        + (/^(pt|por)/i.test(String(tags.language || '')) ? 100 : 0)
+        - (/\b(?:dub|dubbed|dubl|narration|traduz|translat)\b/i.test(label) ? 2000 : 0)
+    }
+    const best = streams.slice()
+      .sort((a, b) => score(b) - score(a) || Number(a.index) - Number(b.index))[0]
+    return `0:${best.index}`
+  } catch {
+    return '0:a?'
   }
 }
 
@@ -888,7 +927,7 @@ async function findSubFile(sourceId) {
   const files = fs.readdirSync(SRC_MEDIA).filter((f) => {
     if (!f.startsWith(sourceId) || !f.endsWith('.vtt')) return false
     const lang = f.slice(sourceId.length + 1, -4)
-    return /(^|[._-])pt([._-]|$)/i.test(lang) && !/(^|[._-])en(?:g|us)?([._-]|$)/i.test(lang)
+    return /^pt(?:[._-]|[A-Za-z]{2,}|$)/i.test(lang) && !/(^|[._-])en(?:g|us)?([._-]|$)/i.test(lang)
   })
   if (!files.length) return null
   files.sort((a, b) => {
@@ -1199,7 +1238,9 @@ async function downloadViaInvidious(url, destPath) {
   throw new Error('invidious-no-stream')
 }
 
-const YT_PLAYER_KEY = (process.env.YT_PLAYER_KEY || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8').trim()
+// Sem chave configurada este fallback não roda: os outros resolvedores
+// (yt-dlp, espelhos) continuam disponíveis e nenhuma chave fica no repositório.
+const YT_PLAYER_KEY = String(process.env.YT_PLAYER_KEY || '').trim()
 const YT_PLAYER_VERSION = (process.env.YT_PLAYER_CLIENT_VERSION || '21.46.528').trim()
 const YT_PLAYER_UA = `com.google.android.youtube/${YT_PLAYER_VERSION} (Linux; U; Android 11) gzip`
 
@@ -1212,6 +1253,7 @@ const YT_PLAYER_UA = `com.google.android.youtube/${YT_PLAYER_VERSION} (Linux; U;
 async function downloadViaPlayer(url, destPath) {
   const id = videoIdFromUrl(url)
   if (!id) throw new Error('player-sem-id')
+  if (!YT_PLAYER_KEY) throw new Error('player-sem-key')
   const res = await fetch(
     `https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(YT_PLAYER_KEY)}&prettyPrint=false`,
     {
@@ -2079,6 +2121,7 @@ export async function runRender(clipId, opts = {}) {
   const source = findSource(clip.sourceId)
   const src = liveLocal || await ensureLocalMedia(source?.mediaKey, sourceVideo(clip.sourceId), `${clip.sourceId}.mp4`)
   if (!src) throw new Error('Esta fonte ainda não tem vídeo. Conecte um link para renderizar de verdade.')
+  const audioSpec = await pickAudioStreamSpec(src)
   const from = liveLocal ? 0 : clip.start
   const duration = Math.max(1, Number(clip.end) - Number(clip.start) || 0)
   const job = createJob('render', { clipId, sourceId: clip.sourceId, ...(opts.jobId ? { id: opts.jobId } : {}) })
@@ -2138,10 +2181,10 @@ export async function runRender(clipId, opts = {}) {
     // nunca devem sobrescrever a preferência salva: voltando para 9:16, a caixa
     // manual da webcam continua sendo a fonte da verdade.
     let framing = clip.framing || (gta ? 'cam' : 'auto')
-    // A caixa ajustada no Estúdio é a fonte da verdade no 9:16, mesmo que o
-    // preset de enquadramento seja centro/esquerda/direita ou perseguição.
-    const manualCam = Boolean(clip.cam || source?.cam)
-    const wantsSplit = !wide && !chase && (manualCam || gta || framing === 'cam' || framing === 'auto')
+    // A caixa salva no Estúdio (`clip.cam`/`source.cam`) é a fonte da verdade
+    // *da caixa*, mas não pode religar o Split sozinha: se o usuário escolheu
+    // Centro/Esq./Dir./Fundo depois de ajustar a webcam, esse modo prevalece.
+    const wantsSplit = !wide && !chase && (gta || framing === 'cam')
     if (!cam && wantsSplit) {
       updateJob(job, { progress: 26, step: 'Localizando a webcam' })
       const spanSec = Math.max(1, clip.end - clip.start)
@@ -2172,7 +2215,10 @@ export async function runRender(clipId, opts = {}) {
     const { width: outW, height: outH } = size
     const bandH = Math.round(outH / 2)
     const blur = Math.max(8, Math.round(26 * outH / 1280))
-    const faceCam = cam
+    // A caixa manual só restringe a detecção de rosto quando ela realmente
+    // virou o Split. Nos modos Centro/Esq./Dir./Fundo ela não pode limitar a
+    // busca de rostos a uma região antiga da webcam.
+    const faceCam = split && cam
       ? { x: Math.round(cam.x * width), y: Math.round(cam.y * height), w: Math.round(cam.w * width), h: Math.round(cam.h * height) }
       : null
     const faceRegions = wantFaceBlur
@@ -2255,13 +2301,13 @@ export async function runRender(clipId, opts = {}) {
         .filter(Boolean)
       const mainBleeps = bleepOn(bleeps).join(',')
       const loud = LIGHT_RENDER ? '' : ',loudnorm=I=-14:TP=-1.5:LRA=11'
-      audioGraph = `;[0:a]asplit=2[amain][arep];`
+      audioGraph = `;[${audioSpec}]asplit=2[amain][arep];`
         + `[amain]atrim=0:${duration},asetpts=PTS-STARTPTS${mainBleeps ? `,${mainBleeps}` : ''}[a0];`
         + `[arep]atrim=${rstart}:${rend},asetpts=PTS-STARTPTS,atempo=${replay.speed}`
         + `${bleepReplay.length ? `,${bleepReplay.join(',')}` : ''},apad,atrim=0:${replayLen}[a1];`
         + `[a0][a1]concat=n=2:v=0:a=1${loud}[aout]`
     }
-    const audioMap = replay ? ['-map', '[aout]'] : ['-map', '0:a?']
+    const audioMap = replay ? ['-map', '[aout]'] : ['-map', audioSpec]
     const withAudio = (graph) => replay ? `${graph}${audioGraph}` : graph
     const ass = wantCaptions
       ? buildCaptionAss(clip, outDuration, outW, outH, gta, wantWatermark, contextText, xracingStyle)

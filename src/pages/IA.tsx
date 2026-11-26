@@ -3,7 +3,7 @@ import {
   AudioLines, Check, CheckCircle2, Clapperboard, Crop, Download, ImagePlus, Lightbulb,
   Scissors, Sparkles, Trash2, UploadCloud, Youtube,
 } from 'lucide-react'
-import { useApp } from '../store'
+import { friendlyMessage, useApp } from '../store'
 import { navigate } from '../router'
 import { PageHead, ProgressBar, Switch } from '../ui'
 import { relTime } from '../lib/format'
@@ -82,8 +82,9 @@ export function IAPage() {
         reader.readAsDataURL(file)
       })
       await api('/api/project/logo', { method: 'POST', body: JSON.stringify({ dataUrl }) })
-    } catch {}
-    finally { setLogoBusy(false) }
+    } catch (e: any) {
+      window.alert(friendlyMessage(e?.message))
+    } finally { setLogoBusy(false) }
   }
 
   const saveLogoPatch = async (patch: Partial<{ x: number; y: number; w: number; opacity: number }>) => {
@@ -99,15 +100,18 @@ export function IAPage() {
     setLogoDraft({ x: next.x, y: next.y, w: next.w, opacity: next.opacity })
     try {
       await api('/api/project', { method: 'POST', body: JSON.stringify({ logo: next }) })
-    } catch {}
+    } catch (e: any) {
+      window.alert(friendlyMessage(e?.message))
+    }
   }
 
   const removeLogo = async () => {
     setLogoBusy(true)
     try {
       await api('/api/project', { method: 'POST', body: JSON.stringify({ logo: null }) })
-    } catch {}
-    finally { setLogoBusy(false) }
+    } catch (e: any) {
+      window.alert(friendlyMessage(e?.message))
+    } finally { setLogoBusy(false) }
   }
 
   const saveStyle = async () => {
@@ -115,6 +119,7 @@ export function IAPage() {
     try {
       await api('/api/settings', { method: 'POST', body: JSON.stringify(draft) })
     } catch (e: any) {
+      window.alert(friendlyMessage(e?.message))
     } finally {
       setSaving(false)
     }
@@ -124,8 +129,8 @@ export function IAPage() {
     if (niche === settings.niche) return
     try {
       await api('/api/settings', { method: 'POST', body: JSON.stringify({ niche }) })
-      const label = NICHE_OPTIONS.find((o) => o.key === niche)?.label || ''
     } catch (e: any) {
+      window.alert(friendlyMessage(e?.message))
     }
   }
 

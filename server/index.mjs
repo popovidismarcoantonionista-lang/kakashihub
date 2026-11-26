@@ -39,7 +39,7 @@ import {
   appendDownloadPart, cleanupPreparedDownloads, createPreparedDownload,
   finalizePreparedDownload, findPreparedDownload, friendlyDownloadError,
 } from './download-prep.mjs'
-import { db, connectionInfo } from './db.mjs'
+import { db } from './db.mjs'
 import { isIgnoredSource, requestJobCancellation, unmarkJobQueued } from './work-gate.mjs'
 import { seedState } from './seed.mjs'
 
@@ -166,7 +166,6 @@ app.get('/api/health', async (req, res) => {
       blob: blobStorageEnabled(),
       database: Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL),
       dbProbe,
-      connection: connectionInfo,
     },
     live: liveCapabilities(),
   })
@@ -204,7 +203,7 @@ const NICHE_LABELS = {
 }
 
 const BOOLEAN_SETTINGS = ['autoApprove', 'captions', 'watermark', 'xracing', 'bgBlur', 'faceBlur']
-const FRAMINGS = new Set(['auto', 'cam', 'centro', 'esquerda', 'direita'])
+const FRAMINGS = new Set(['auto', 'preencher', 'cam', 'centro', 'esquerda', 'direita'])
 const FORMATS = new Set(['9:16', '16:9'])
 
 function asBool(value) {
@@ -1028,7 +1027,6 @@ app.delete('/api/compilations/:id', async (req, res) => {
 })
 
 app.patch('/api/clips/:id', (req, res) => {
-  const state = getState()
   const clip = findClip(req.params.id)
   if (!clip) return fail(res, 404, 'Corte não encontrado.')
   const allowed = [
@@ -1039,6 +1037,9 @@ app.patch('/api/clips/:id', (req, res) => {
   for (const key of allowed) {
     if (req.body[key] !== undefined) clip[key] = req.body[key]
   }
+  // Um valor inválido de `framing` chegando aqui virava crop/split imprevisível
+  // no ffmpeg; só os modos known são aceitos.
+  if (!FRAMINGS.has(clip.framing)) delete clip.framing
   clip.aspect = clip.aspect === '16:9' ? '16:9' : '9:16'
   if (typeof clip.contextCaption === 'string') clip.contextCaption = clip.contextCaption.slice(0, 180)
   // Números vindo do Estúdio precisam ser sanitizados antes de virarem ffmpeg.
@@ -1085,7 +1086,8 @@ app.patch('/api/clips/:id', (req, res) => {
       y: +num(req.body.cam.y, 0, 1 - h, 0.5).toFixed(4),
     }
   }
-  if (state.settings?.niche === 'games' && clip.type !== 'perseguicao') clip.framing = 'cam'
+  // Não forçar `cam` aqui: isso sobrescrevia o modo escolhido no Estúdio
+  // (Centro/Esq./Dir./Fundo) sempre que qualquer campo do corte era salvo.
   if (req.body.stage) {
     addActivity('agent', `Corte "${clip.hook}" marcado como ${clip.stage}`)
   }

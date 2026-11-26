@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  CalendarClock, ExternalLink, Facebook, KeyRound, Link2,
+  ExternalLink, Facebook, KeyRound, Link2,
   Music2, Play, Plus, Send, ShieldCheck, Trash2, Unplug, UploadCloud, Youtube,
 } from 'lucide-react'
 import { friendlyMessage, useApp } from '../store'
