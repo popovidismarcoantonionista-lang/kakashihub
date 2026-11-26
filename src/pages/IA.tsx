@@ -424,6 +424,19 @@ export function IAPage() {
               ))}
             </div>
 
+            <label className="field-label">Formato padrão do corte</label>
+            <div className="segmented">
+              {(['9:16', '16:9'] as const).map((f) => (
+                <button
+                  key={f}
+                  className={settings.format === f ? 'active' : ''}
+                  onClick={() => api('/api/settings', { method: 'POST', body: JSON.stringify({ format: f }) })}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+
             <div className="style-note">
               <Sparkles size={13} />
               <span>As mudanças valem para os próximos cortes processados.</span>

@@ -17,6 +17,11 @@ export function CortesPage() {
   const [sort, setSort] = useState<'score' | 'recentes' | 'duracao'>('score')
   const [longOpen, setLongOpen] = useState(false)
   const [longAspect, setLongAspect] = useState<'9:16' | '16:9'>('16:9')
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [batchAspect, setBatchAspect] = useState<'9:16' | '16:9'>('9:16')
+  const [batchPicked, setBatchPicked] = useState<string[]>([])
+  const [batching, setBatching] = useState(false)
+  const [batchNotice, setBatchNotice] = useState('')
   const [picked, setPicked] = useState<string[]>([])
   const [building, setBuilding] = useState(false)
   const [removingComp, setRemovingComp] = useState('')
@@ -61,6 +66,44 @@ export function CortesPage() {
       window.alert(friendlyMessage(e?.message))
     } finally {
       setBuilding(false)
+    }
+  }
+
+  const openBatch = () => {
+    const ready = clips.filter((c) => c.stage !== 'rascunho')
+    setBatchPicked((ready.length ? ready : clips).map((c) => c.id))
+    setBatchAspect(state?.settings?.format === '16:9' ? '16:9' : '9:16')
+    setBatchNotice('')
+    setBatchOpen(true)
+  }
+
+  const toggleBatchPick = (id: string) => {
+    setBatchPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  }
+
+  const renderBatch = async () => {
+    if (!batchPicked.length || batching) return
+    setBatching(true)
+    setBatchNotice('')
+    try {
+      const data = await api('/api/clips/render-many', {
+        method: 'POST',
+        body: JSON.stringify({ clipIds: batchPicked, aspect: batchAspect }),
+      })
+      const queued = Number(data?.queued) || 0
+      const skipped = (Number(data?.skippedBusy) || 0) + (Number(data?.skippedMedia) || 0)
+      if (!queued) {
+        setBatchNotice('Nenhum corte entrou na fila. Selecione outros cortes disponíveis.')
+      } else {
+        setBatchNotice(
+          `Fila iniciada: ${queued} ${queued === 1 ? 'corte' : 'cortes'} em ${batchAspect}, um por vez.`
+          + (skipped ? ` ${skipped} ignorado${skipped === 1 ? '' : 's'} por já estarem em produção ou sem vídeo.` : ''),
+        )
+      }
+    } catch (e: any) {
+      setBatchNotice(friendlyMessage(e?.message))
+    } finally {
+      setBatching(false)
     }
   }
 
@@ -112,6 +155,9 @@ export function CortesPage() {
         title="Cortes"
         actions={
           <>
+            <button className="btn btn-ghost" onClick={openBatch} disabled={!clips.length}>
+              <Scissors size={14} /> Gerar em massa
+            </button>
             <button className="btn btn-ghost" onClick={openLong} disabled={clips.length < 2}>
               <Film size={14} /> Vídeo longo
             </button>
@@ -257,6 +303,73 @@ export function CortesPage() {
       <div className="cortes-foot">
         <span className="mono">{filtered.length} de {clips.length} cortes</span>
       </div>
+
+      <Modal
+        open={batchOpen}
+        onClose={() => setBatchOpen(false)}
+        kicker={`FILA AUTOMÁTICA · ${batchAspect}`}
+        title="Gerar cortes em massa"
+        width={700}
+        footer={
+          <>
+            <div className="grow" />
+            <button className="btn btn-ghost" onClick={() => setBatchOpen(false)}>Fechar</button>
+            <button className="btn btn-primary" onClick={renderBatch} disabled={!batchPicked.length || batching}>
+              {batching ? <Logo size={13} className="btn-spin" /> : <Scissors size={14} />} Enfileirar cortes
+            </button>
+          </>
+        }
+      >
+        <label className="field-label">Formato dos cortes</label>
+        <div className="segmented small">
+          {(['9:16', '16:9'] as const).map((a) => (
+            <button
+              key={a}
+              className={batchAspect === a ? 'active' : ''}
+              onClick={() => setBatchAspect(a)}
+            >
+              {a}
+            </button>
+          ))}
+        </div>
+        {batchNotice && (
+          <div className="style-note">
+            <AlertTriangle size={13} />
+            <span>{batchNotice}</span>
+          </div>
+        )}
+        <div className="pick-tools">
+          <span className="mono">{batchPicked.length} DE {clips.length} SELECIONADOS · ATÉ 40 POR LOTE</span>
+          <button
+            className="link-btn"
+            onClick={() => setBatchPicked(batchPicked.length === clips.length ? [] : clips.map((c) => c.id))}
+          >
+            {batchPicked.length === clips.length ? 'Limpar seleção' : 'Selecionar todos'}
+          </button>
+        </div>
+        <div className="pick-list">
+          {[...clips].sort((a, b) => b.score - a.score).map((clip) => {
+            const on = batchPicked.includes(clip.id)
+            const busy = state?.jobs?.some((j) =>
+              ['running', 'pendente'].includes(j.status) && j.clipId === clip.id)
+            return (
+              <button
+                type="button"
+                key={clip.id}
+                className={`pick-row ${on ? 'on' : ''}`}
+                onClick={() => toggleBatchPick(clip.id)}
+              >
+                <span className="pick-check">{on && <Check size={11} />}</span>
+                <span className="pick-thumb"><Cover src={clip.cover} alt="" /></span>
+                <span className="pick-info">
+                  <b>{clip.hook}</b>
+                  <em>{fmtTime(clip.end - clip.start)} · {clip.aspect || '9:16'} · score {clip.score}{busy ? ' · em produção' : ''}</em>
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </Modal>
 
       <Modal
         open={longOpen}

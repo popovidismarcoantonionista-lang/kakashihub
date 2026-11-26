@@ -15,15 +15,18 @@ const JOB_TYPES = {
   compilation: 'compile',
 }
 
-export async function startProcessJob(kind, payload, metadata = {}) {
+export async function startProcessJob(kind, payload, metadata = {}, { flush = true } = {}) {
   const job = createJob(JOB_TYPES[kind] || kind, metadata)
   // O job já existe em memória. Uma falha transitória do Postgres aqui não
   // pode impedir o processamento nem fazer a API responder erro para o front
   // (o upload-complete, por exemplo, mostraria "Não foi possível concluir").
-  try {
-    await flushStore()
-  } catch (error) {
-    console.error('[jobs] falha ao antecipar persistência:', String(error?.message || error).slice(0, 300))
+  // Em lotes, o chamador desliga o flush aqui e persiste uma única vez.
+  if (flush) {
+    try {
+      await flushStore()
+    } catch (error) {
+      console.error('[jobs] falha ao antecipar persistência:', String(error?.message || error).slice(0, 300))
+    }
   }
   const runId = runBackground('job', processJobWorkflow, [kind, { ...payload, jobId: job.id }])
   job.workflowRunId = runId

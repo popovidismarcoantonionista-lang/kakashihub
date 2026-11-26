@@ -13,6 +13,7 @@ import {
   addActivity,
   findClip,
   findSource,
+  flushStore,
   getJob,
   getJobs,
   getState,
@@ -1193,6 +1194,69 @@ app.post('/api/clips/:id/render', async (req, res) => {
   clip.workflowRunId = runId
   save()
   ok(res, { ok: true })
+})
+
+// Fila automática de cortes: todos os jobs entram na mesma fila exclusiva do
+// Render free (work-gate), um por vez. Aqui só sanitizamos a seleção, aplicamos
+// o formato escolhido e persistimos o lote uma única vez.
+app.post('/api/clips/render-many', async (req, res) => {
+  const ids = Array.isArray(req.body?.clipIds)
+    ? [...new Set(req.body.clipIds.filter((v) => typeof v === 'string'))]
+    : []
+  if (!ids.length) return fail(res, 400, 'Selecione pelo menos um corte.')
+  if (ids.length > 40) return fail(res, 400, 'Use até 40 cortes por lote.')
+
+  const aspect = req.body?.aspect === '16:9' ? '16:9' : '9:16'
+  const jobs = getJobs().filter((j) => ['running', 'pendente'].includes(j.status))
+  const busy = new Set(jobs.map((j) => j.clipId).filter(Boolean))
+  const queued = []
+  let skippedBusy = 0
+  let skippedMedia = 0
+
+  for (const id of ids) {
+    const clip = findClip(id)
+    if (!clip) continue
+    if (busy.has(clip.id)) {
+      skippedBusy += 1
+      continue
+    }
+    const source = findSource(clip.sourceId)
+    const hasMedia = Boolean(
+      clip.mediaKey || liveMediaFile(clip) || source?.mediaKey
+      || fs.existsSync(path.join(SRC_MEDIA, `${clip.sourceId}.mp4`)),
+    )
+    if (!hasMedia) {
+      skippedMedia += 1
+      continue
+    }
+    clip.aspect = aspect
+    queued.push(clip)
+  }
+
+  if (!queued.length) {
+    ok(res, { ok: true, queued: 0, skippedBusy, skippedMedia })
+    return
+  }
+
+  const started = []
+  for (const clip of queued) {
+    const { runId } = await startProcessJob(
+      'render',
+      { clipId: clip.id },
+      { clipId: clip.id, sourceId: clip.sourceId },
+      { flush: false },
+    )
+    clip.workflowRunId = runId
+    started.push(runId)
+  }
+  addActivity('agent', `${started.length} cortes enfileirados em ${aspect}`)
+  save()
+  try {
+    await flushStore()
+  } catch (error) {
+    console.error('[clips] falha transitória ao persistir lote de renders:', String(error?.message || error).slice(0, 300))
+  }
+  ok(res, { ok: true, queued: started.length, skippedBusy, skippedMedia, aspect })
 })
 
 app.post('/api/clips/:id/trim', async (req, res) => {
