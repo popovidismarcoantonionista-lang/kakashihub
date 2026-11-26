@@ -12,7 +12,7 @@ export function seedState() {
       clipMax: 38,
       framing: 'auto',
       format: '9:16',
-      resolution: '4k',
+      resolution: '720p',
       autoApprove: false,
       captions: false,
       watermark: false,

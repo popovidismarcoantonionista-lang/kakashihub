@@ -17,17 +17,17 @@ const TIMEOUT = Number(process.env.SERVICE_TIMEOUT_MS || 120000)
 export const COBALT_URL = urlOf(process.env.COBALT_API_URL || process.env.FUGA_COBALT_URL)
 export const COBALT_KEY = keyOf(process.env.COBALT_API_KEY || process.env.FUGA_COBALT_KEY)
 // Fallback para o IP do Netlify quando a instância Cobalt exige JWT do Render.
+// A Function só aceita lives Twitch/Kick (allowlist de host); sem chave fixa
+// no repositório, qualquer pessoa não pode usar o relay como proxy aberto.
 export const COBALT_RELAY_URL = urlOf(process.env.COBALT_RELAY_URL || 'https://kakashiclipes.netlify.app/api/cobalt/relay')
-const COBALT_RELAY_KEY = keyOf(process.env.COBALT_RELAY_KEY || 'kakashi-relay-2026')
 export const YDL_API_URL = urlOf(process.env.YTDLP_API_URL || process.env.FUGA_YTDLP_API_URL)
 export const YDL_API_KEY = keyOf(process.env.YTDLP_API_KEY || process.env.FUGA_YTDLP_API_KEY)
 // Espelhos de leitura públicos (Invidious). Usados como gambiarra quando o
 // yt-dlp é barrado pelo IP de datacenter: eles resolvem o player response por
 // conta própria. Vários hosts entram porque alguns bloqueiam IPs de cloud.
 const DEFAULT_INVIDIOUS = [
-  // Primeiro da lista: é o único espelho testado que devolve `liveNow` e
-  // `hlsUrl` para lives do YouTube (testado em z2hktG1zUbs, 2026-11).
-  'https://yt.chocolatemoo53.com',
+  // A base do provedor de download (yt.chocolatemoo53.com) fica apenas no
+  // JSON interno de /api/downloads/prepare — nunca em config de espelho.
   'https://invidious.slipfox.xyz',
   'https://invidious.tiekoetter.com',
   'https://inv.zoomerville.com',
@@ -171,7 +171,6 @@ export async function cobaltResolve(url, opts = {}) {
       headers: () => ({
         Accept: 'application/json',
         'Content-Type': 'application/json',
-        'X-Relay-Key': COBALT_RELAY_KEY,
       }),
     })
   }

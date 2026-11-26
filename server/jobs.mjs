@@ -3,7 +3,8 @@ import {
   processJobWorkflow,
   scheduledUploadWorkflow,
 } from '../workflows/jobs.mjs'
-import { runBackground } from './background.mjs'
+import { hasActiveRun, runBackground } from './background.mjs'
+import { clearJobCancellation, isIgnoredSource } from './work-gate.mjs'
 import { createJob, finishJob, flushStore, getJob, getJobs, getState, save, saveJobs, withStore } from './store.mjs'
 
 const JOB_TYPES = {
@@ -36,7 +37,11 @@ export async function startLiveWorkflow(sourceId) {
     source.liveStopRequested = false
     save()
   }
-  await flushStore()
+  try {
+    await flushStore()
+  } catch (error) {
+    console.error('[jobs] falha ao antecipar persistência da live:', String(error?.message || error).slice(0, 300))
+  }
   const runId = runBackground('live', liveMonitorWorkflow, [sourceId])
   const target = getState().sources.find((item) => item.id === sourceId)
   if (target) {
@@ -47,7 +52,11 @@ export async function startLiveWorkflow(sourceId) {
 }
 
 export async function startUploadWorkflow(uploadId) {
-  await flushStore()
+  try {
+    await flushStore()
+  } catch (error) {
+    console.error('[jobs] falha ao antecipar persistência do upload:', String(error?.message || error).slice(0, 300))
+  }
   const runId = runBackground('upload', scheduledUploadWorkflow, [uploadId])
   const upload = getState().uploads.find((item) => item.id === uploadId)
   if (upload) {
@@ -73,12 +82,14 @@ export async function recoverLiveWorkflows() {
     }))
     const restartIds = []
     for (const source of snapshot.sources) {
-      if (source.mode !== 'live') continue
+      if (source.mode !== 'live' || isIgnoredSource(source.id)) continue
       if (!['ao-vivo', 'processando'].includes(source.status)) continue
       if (source.liveEndedAt || source.liveStopRequested) continue
+      // Se a promise ainda está viva — inclusive parada numa janela
+      // "pausado durante o processamento" — não religar: isso duplicava a
+      // captura logo após o boot. Se a promise morreu, o step não bloqueia.
+      if (hasActiveRun('live', source.id)) continue
       const job = snapshot.jobs.find((item) => item.id === source.liveJobId)
-      const paused = /pausado durante o processamento/i.test(job?.step || '')
-      if (paused) continue
       const checked = Date.parse(source.liveCheckedAt || source.liveStartedAt || 0)
       const started = Date.parse(job?.startedAt || 0)
       const freshJob = Number.isFinite(started) && Date.now() - started < LIVE_STALE_MS
@@ -120,6 +131,7 @@ export async function resumePendingJobs() {
     if (busy) return 0
     const pending = jobs.filter((job) => job.status === 'pendente'
       && job.retryPending === true
+      && !isIgnoredSource(job.sourceId)
       && ['render', 'compile', 'ingest', 'analyze'].includes(job.kind))
     for (const job of pending) {
       const isIngest = job.kind === 'ingest' || job.kind === 'analyze'

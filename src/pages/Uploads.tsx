@@ -3,7 +3,7 @@ import {
   CalendarClock, ExternalLink, Facebook, KeyRound, Link2,
   Music2, Play, Plus, Send, ShieldCheck, Trash2, Unplug, UploadCloud, Youtube,
 } from 'lucide-react'
-import { useApp } from '../store'
+import { friendlyMessage, useApp } from '../store'
 import { navigate } from '../router'
 import { Cover, EmptyState, Modal, PageHead, Select, StatCard } from '../ui'
 import { dayLabel } from '../lib/format'
@@ -274,7 +274,7 @@ export function UploadsPage() {
                           {cover ? <Cover src={cover} alt={u.title} className="up-thumb" /> : <div className="up-thumb empty" />}
                           <div>
                             <b>{u.title}</b>
-                            <em>{kind}{duration ? ` · ${duration}` : ''}{u.error ? ` · ${u.error}` : ''}</em>
+                            <em>{kind}{duration ? ` · ${duration}` : ''}{u.error ? ` · ${friendlyMessage(u.error)}` : ''}</em>
                           </div>
                         </div>
                       </td>
@@ -360,7 +360,7 @@ export function UploadsPage() {
               disabled={!clips.length}
               onClick={() => setForm({ ...form, target: 'corte' })}
             >
-              Corte 9:16
+              Corte
             </button>
             <button
               className={form.target === 'longo' ? 'active' : ''}

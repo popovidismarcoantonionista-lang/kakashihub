@@ -89,7 +89,7 @@ const SKIP_RULES = [
   },
   {
     kind: 'engajamento',
-    re: /\b(?:inscreva[-\s]?se|inscrevam[-\s]?se|se\s+inscreva|se\s+inscrever|curta\s+o\s+v[ií]deo|deixe\s+(?:o\s+|seu\s+)?like|ativar\s+o\s+sininho|ative\s+o\s+sino|at[ié]\s+a\s+pr[oó]xima|obrigad[oa]\s+por\s+assistir|tchau|subscribe|like\s+and\s+subscribe|hit\s+the\s+bell|thanks\s+for\s+watching|see\s+you\s+next|smash\s+that\s+like)\b/i,
+    re: /\b(?:inscreva[-\s]?se|inscreva\s+a[ií]|inscrevam[-\s]?se|se\s+inscreva|se\s+inscrever|curta\s+o\s+v[ií]deo|curte\s+a[ií]|d[aá]\s+um\s+like|deixe\s+(?:o\s+|seu\s+)?like|ativar\s+o\s+sininho|ative\s+o\s+sino|at[ié]\s+a\s+pr[oó]xima|at[ié]\s+logo|obrigad[oa]\s+por\s+assistir|tchau|subscribe|like\s+and\s+subscribe|hit\s+the\s+bell|thanks\s+for\s+watching|see\s+you\s+next|smash\s+that\s+like)\b/i,
   },
 ]
 
@@ -109,8 +109,10 @@ export function detectSkippableRanges(words, duration = 0) {
     const win = []
     let phrase = ''
     let matched = false
-    for (let j = i; j < Math.min(list.length, i + 7); j++) {
-      if (j > i && list[j].s - list[j - 1].e > 1.1) break
+    // CTAs longos e com pausas ("... inscreva-se ... até a próxima") não
+    // cabiam na janela de 7 palavras/1,1s e escapavam do corte.
+    for (let j = i; j < Math.min(list.length, i + 14); j++) {
+      if (j > i && list[j].s - list[j - 1].e > 2.6) break
       win.push(list[j])
       phrase += (phrase ? ' ' : '') + list[j].w
       for (const rule of SKIP_RULES) {
@@ -133,7 +135,9 @@ export function detectSkippableRanges(words, duration = 0) {
   }
   // Abertura sem fala (só vinheta/música): o primeiro som já é conteúdo.
   if (!found.some((r) => r.reason === 'intro') && list[0].s > 4) {
-    found.push({ start: 0, end: Math.min(6, Math.round((list[0].s - 0.3) * 100) / 100), reason: 'intro' })
+    // Vinhetas sem fala podem passar de 6s; remover até 12s quando há silêncio
+    // inicial claro, sem atingir o começo do conteúdo falado.
+    found.push({ start: 0, end: Math.min(12, Math.round((list[0].s - 0.3) * 100) / 100), reason: 'intro' })
   }
   const sorted = found.filter((r) => r.end > r.start).sort((a, b) => a.start - b.start)
   const merged = []

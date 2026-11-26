@@ -155,7 +155,7 @@ export interface Job {
   sourceId?: string
   clipId?: string
   compilationId?: string
-  status: 'running' | 'concluido' | 'erro'
+  status: 'running' | 'concluido' | 'cancelado' | 'erro'
   progress: number
   step: string
   error?: string

@@ -120,21 +120,21 @@ export function Select<T extends string>({
 
   useEffect(() => {
     if (!open) return
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: PointerEvent) => {
       if (!ref.current?.contains(e.target as Node)) setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
-    document.addEventListener('mousedown', onDown)
+    document.addEventListener('pointerdown', onDown)
     document.addEventListener('keydown', onKey)
     return () => {
-      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('pointerdown', onDown)
       document.removeEventListener('keydown', onKey)
     }
   }, [open])
 
   return (
     <div className={`select ${className}`} ref={ref}>
-      <button type="button" className={`select-btn ${open ? 'open' : ''}`} onClick={() => setOpen(!open)}>
+      <button type="button" className={`select-btn ${open ? 'open' : ''}`} onPointerDown={() => setOpen(!open)}>
         {current?.icon}
         <span>{current?.label || 'Selecionar'}</span>
         <ChevronDown size={13} />
@@ -146,7 +146,7 @@ export function Select<T extends string>({
               key={o.value}
               type="button"
               className={`select-opt ${o.value === value ? 'active' : ''}`}
-              onClick={() => { onChange(o.value); setOpen(false) }}
+              onPointerDown={() => { onChange(o.value); setOpen(false) }}
             >
               {o.icon}
               <span className="opt-main">
@@ -187,7 +187,7 @@ export function Modal({
 
   if (!open) return null
   return createPortal(
-    <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+    <div className="overlay" onPointerDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
       <div className="modal" style={{ width }} role="dialog" aria-modal="true">
         <div className="modal-head">
           <div>

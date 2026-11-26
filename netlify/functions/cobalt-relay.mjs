@@ -3,10 +3,11 @@
  *
  * O Render sai de um IP de datacenter e a instância pública começa a exigir
  * JWT (error.api.auth.jwt.missing). Esta Function roda no IP do Netlify e só
- * encaminha o pedido quando chamada com a chave compartilhada.
+ * encaminha o pedido apenas para lives Twitch/Kick. Não há segredo fixo no
+ * repositório: o allowlist de host impede que o relay vire proxy aberto.
  */
-const COBALT = 'https://rue-cobalt.xenon.zone/'
-const RELAY_KEY = 'kakashi-relay-2026'
+const COBALT = process.env.COBALT_API_URL || 'https://rue-cobalt.xenon.zone/'
+const ALLOWED_LIVE = /^https?:\/\/([a-z0-9-]+\.)*(twitch\.tv|kick\.com)(?:[/?]|$)/i
 
 const reply = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -15,9 +16,6 @@ const reply = (body, status = 200) => new Response(JSON.stringify(body), {
 
 export default async function handler(request) {
   if (request.method !== 'POST') return reply({ status: 'error', error: { code: 'relay-method' } }, 405)
-  if (request.headers.get('x-relay-key') !== RELAY_KEY) {
-    return reply({ status: 'error', error: { code: 'relay-forbidden' } }, 403)
-  }
 
   let payload
   try {
@@ -27,6 +25,9 @@ export default async function handler(request) {
   }
   if (!payload || typeof payload.url !== 'string' || !/^https?:\/\//i.test(payload.url)) {
     return reply({ status: 'error', error: { code: 'relay-invalid-url' } }, 400)
+  }
+  if (!ALLOWED_LIVE.test(payload.url)) {
+    return reply({ status: 'error', error: { code: 'relay-host-not-allowed' } }, 403)
   }
 
   try {

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import {
   AlertTriangle, Check, Download, Film, Filter, Link2, Play, Plus, Scissors, Trash2,
 } from 'lucide-react'
-import { useApp } from '../store'
+import { friendlyMessage, useApp } from '../store'
 import { navigate } from '../router'
 import { ClipCard, ClipPlayer, PlayerModal } from '../components'
 import { Cover, EmptyState, Logo, Modal, PageHead, ProgressBar, Select, StatCard } from '../ui'
@@ -156,7 +156,7 @@ export function CortesPage() {
                   <div className="longo-body">
                     <div className="longo-meta mono">{comp.clipIds.length} CORTES · {comp.aspect || '16:9'}</div>
                     <h3>{comp.title}</h3>
-                    {comp.error && <div className="src-error"><AlertTriangle size={13} /> {comp.error}</div>}
+                    {comp.error && <div className="src-error"><AlertTriangle size={13} /> {friendlyMessage(comp.error)}</div>}
                     <div className="longo-actions">
                       {comp.status === 'pronto' ? (
                         <>
@@ -370,7 +370,7 @@ export function CortesPage() {
             <div className="lo-ico"><Film size={18} /></div>
             <div className="lo-copy">
               <b>Todos os cortes já estão neste vídeo</b>
-              <span>Analise mais fontes para ter cortes novos disponíveis.</span>
+              <span>Adicione mais fontes para ter cortes novos disponíveis.</span>
             </div>
           </div>
         )}

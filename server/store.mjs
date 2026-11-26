@@ -8,7 +8,7 @@ import { db } from './db.mjs'
 import { fugaJobs, fugaState } from './schema.mjs'
 import { seedState } from './seed.mjs'
 import { isPortugueseCaptionText, portugueseHookOrDefault } from './pt-text.mjs'
-import { isJobQueued } from './work-gate.mjs'
+import { isJobCancelled, isJobQueued } from './work-gate.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const ROOT = path.resolve(__dirname, '..')
@@ -504,11 +504,29 @@ export function storeMiddleware(req, res, next) {
 export async function withStore(callback) {
   const context = await loadContext()
   return contextStorage.run(context, async () => {
+    let result
     try {
-      return await callback()
-    } finally {
-      await persistContext(context)
+      result = await callback()
+    } catch (error) {
+      // Um erro do trabalho não pode ser mascarado por falha de persistência,
+      // mas a persistência ainda precisa ser tentada para salvar o progresso.
+      try {
+        await persistContext(context)
+      } catch (persistError) {
+        console.error('[store] falha ao persistir após erro no trabalho:', String(persistError?.message || persistError).slice(0, 300))
+      }
+      throw error
     }
+    // O pipeline já protege o flush no fim de render/ingest/compilação. Mesmo
+    // assim, updateJob/finishJob marcam o job sujo de novo logo em seguida; se
+    // esse write transitório falhasse aqui, um trabalho concluído viraria erro.
+    // Em background a memória é a fonte da verdade até o próximo flush.
+    try {
+      await persistContext(context)
+    } catch (error) {
+      console.error('[store] falha transitória ao persistir (background):', String(error?.message || error).slice(0, 300))
+    }
+    return result
   })
 }
 
@@ -577,8 +595,7 @@ export function getJobs() {
     progress: job.progress,
     step: job.step,
     error: job.error,
-    // Diagnóstico interno: não é exibido no front, mas fica disponível em /api/state.
-    debug: job.debug,
+    // `debug` guarda stack/stderr e é estritamente interno: nunca sai na API.
     log: (job.log || []).slice(-14),
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,
@@ -639,10 +656,11 @@ export function updateJob(job, patch) {
 }
 
 export function finishJob(job, error) {
-  job.status = error ? 'erro' : 'concluido'
+  const cancelled = isJobCancelled(job.id)
+  job.status = error ? 'erro' : cancelled ? 'cancelado' : 'concluido'
   job.retryPending = false
   job.error = error ? String(error.message || error) : null
-  job.progress = error ? job.progress : 100
+  job.progress = error || cancelled ? job.progress : 100
   job.finishedAt = new Date().toISOString()
   const context = contextStorage.getStore()
   if (context) queueJobWrite(context, job)

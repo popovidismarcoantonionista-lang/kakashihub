@@ -52,9 +52,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
           <div className="grow" />
           <SearchBox />
-          <div className={`radar ${running.length ? 'busy' : ''}`} title={running.length ? 'Estúdio analisando uma fonte' : 'Tudo pronto por aqui'}>
+          <div className={`radar ${running.length ? 'busy' : ''}`} title={running.length ? 'Estúdio processando uma fonte' : 'Tudo pronto por aqui'}>
             <Dot tone={running.length ? 'amber' : 'green'} pulse />
-            {running.length ? `Analisando ${running.length} fonte${running.length > 1 ? 's' : ''}` : 'Estúdio pronto'}
+            {running.length ? `Processando ${running.length} fonte${running.length > 1 ? 's' : ''}` : 'Estúdio pronto'}
           </div>
           <button className="btn-icon" aria-label="Notificações"><Bell size={15} /><i className="notif" /></button>
           <button className="btn-icon" aria-label="Ajustes" onClick={() => navigate('ia')}><Settings2 size={15} /></button>
@@ -121,11 +121,11 @@ function SearchBox() {
   }, [])
 
   useEffect(() => {
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: PointerEvent) => {
       if (!boxRef.current?.contains(e.target as Node)) setFocus(false)
     }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
   }, [])
 
   const results = useMemo(() => {
@@ -328,7 +328,7 @@ function IngestModal() {
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder={'https://www.twitch.tv/canal\nhttps://kick.com/canal'}
-              autoFocus
+              autoFocus={typeof window !== 'undefined' && window.matchMedia('(pointer: fine)').matches}
             />
           </>
         )}

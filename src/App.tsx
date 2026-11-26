@@ -7,7 +7,6 @@ import { EstudioPage } from './pages/Estudio'
 import { UploadsPage } from './pages/Uploads'
 import { IAPage } from './pages/IA'
 import { Logo } from './ui'
-import { LiveCapture } from './liveCapture'
 
 function CurrentPage() {
   const { page } = useRoute()
@@ -43,7 +42,6 @@ function Boot() {
   return (
     <>
       <Shell><CurrentPage /></Shell>
-      <LiveCapture />
     </>
   )
 }

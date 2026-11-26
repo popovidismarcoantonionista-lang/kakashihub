@@ -152,7 +152,7 @@ export function IAPage() {
         <div className="pipe-head">
           <div>
             <span className="kicker">FLUXO ATIVO</span>
-            <b>{running.length ? `Analisando ${running.length} ${running.length > 1 ? 'vídeos' : 'vídeo'}` : 'Tudo pronto para o próximo corte'}</b>
+            <b>{running.length ? `Processando ${running.length} ${running.length > 1 ? 'vídeos' : 'vídeo'}` : 'Tudo pronto para o próximo corte'}</b>
           </div>
           <span className={`chip ${running.length ? 'chip-amber' : 'chip-green'}`}>
             <i className="live-dot"><i /></i> {running.length ? 'em execução' : 'estável'}
@@ -421,7 +421,7 @@ export function IAPage() {
 
             <div className="style-note">
               <Sparkles size={13} />
-              <span>As mudanças valem para os próximos cortes analisados.</span>
+              <span>As mudanças valem para os próximos cortes processados.</span>
             </div>
           </div>
 

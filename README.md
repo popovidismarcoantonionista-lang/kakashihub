@@ -23,34 +23,27 @@ npm run build
 npm start
 ```
 
-Para Netlify, o `netlify.toml` usa o preset Netlify do Nitro, publica `dist/` e registra a função gerada em `.netlify/v1/functions/`.
+Para Netlify, o `netlify.toml` publica `dist/`, faz proxy de `/api`, `/media` e `/covers` para o Render com assinatura `PROXY_SECRET` e registra as Functions de relay usadas pelas lives.
 
-O processo usa `PORT` quando definido (Render), ou `4780` por padrão. `/api/health` é o endpoint de health check e informa quais fontes estão configuradas (`live.youtubeDataApi`, `live.cobalt`, `live.ytDlpApi`, `live.mirrors`, `live.fixedStream`). Para lives, o que importa é `live.youtubeDataApi` (metadados) e `live.mirrors` (stream HLS); `live.cobalt` vale apenas para VOD.
+O processo usa `PORT` quando definido (Render), ou `4780` por padrão. `/api/health` é o endpoint de health check e informa quais fontes estão configuradas (`live.youtubeDataApi`, `live.cobalt`, `live.ytDlpApi`, `live.mirrors`, `live.fixedStream`). `live.cobalt` é apenas um resolvedor interno de lives Twitch/Kick; o download da busca é feito no navegador.
 
-## Lives e YouTube Data API v3
+## Lives: apenas Twitch e Kick
 
-A YouTube Data API v3 é usada para **detectar** a live e ler título, canal e thumbnail. Ela **não fornece o stream HLS**. Como o IP de datacenter do Render é bloqueado pelo YouTube (`Sign in to confirm you're not a bot`) e por todos os espelhos Invidious públicos (`403`), lives do YouTube usam **captura no navegador**: o frontend resolve `hlsUrl` no espelho, baixa os segmentos `.ts` com `local=true` e envia uma janela ao Render. Nenhum cookie é usado. O Cobalt **não serve para lives** (`error.api.content.video.live`) e só é usado para vídeos comuns. `FUGA_LIVE_STREAM` é uma URL fixa opcional, mas o HLS é assinado e expira.
+O monitoramento aceita **somente** links de Twitch e Kick, com `captureMode: 'server'`. Um link comum do YouTube não é transformado em live; vídeos gravados entram pela busca ou pelo upload. Não há captura no navegador, cookies de conta nem proxy de terceiros no fluxo padrão.
+
+O YouTube Data API v3 (quando configurado) só confirma metadados; o stream das lives Twitch/Kick é resolvido no servidor por yt-dlp/espelhos/Cobalt. `FUGA_LIVE_STREAM`, quando disponível, é uma URL HLS já autorizada — o HLS assinado expira e nunca é fixado no front.
 
 Para ativar no Render:
 
-1. No Google Cloud, habilite a **YouTube Data API v3** e crie uma chave de API.
-2. No serviço `kakashi-hub`, adicione a variável `YOUTUBE_API_KEY` com essa chave. O `render.yaml` declara a variável com `sync: false`, mas o valor precisa ser preenchido manualmente no painel do Render (Blueprints já existentes não pedem esse valor novamente).
-3. Para **lives**, o `render.yaml` define `INVIDIOUS_API_URLS=https://yt.chocolatemoo53.com,...`. O frontend consulta `GET /api/live/capture-config` para saber qual espelho usar; se ele ficar instável, troque a primeira URL da variável (ou aponte para sua própria instância Invidious, que deve devolver `hlsUrl` e aceitar `local=true`). O `COBALT_API_URL` continua configurado apenas para VOD; o `COBALT_API_KEY` só é necessário se a sua instância exigir token.
-4. Verifique em `GET /api/health` se `live.youtubeDataApi` e `live.mirrors` estão `true`. (`live.cobalt` indicando `true` não garante captura de live.)
+1. Preencha no painel os segredos declarados com `sync: false` em `render.yaml`: `PROXY_SECRET`, `DATABASE_URL`, `BLOB_READ_WRITE_TOKEN` e, se usada, `YOUTUBE_API_KEY`.
+2. `INVIDIOUS_API_URLS` e `COBALT_API_URL` são opcionais; "`yt.chocolatemoo53.com`" aparece apenas no JSON interno de `/api/downloads/prepare`, nunca na interface.
+3. Verifique em `GET /api/health` se o backend responde e se as variáveis esperadas estão presentes (sem expor valores).
 
-Quando a API v3 confirma que a transmissão está no ar mas o stream falha, a fonte recebe uma mensagem específica e `/api/state` expõe o detalhe técnico em `source.liveLastError` (sem vazar chaves de API). `source.liveMetadataSource` indica se os metadados vieram da Data API, da busca por canal ou da sondagem com yt-dlp.
+Erros de live ficam só em diagnóstico interno (`source.liveLastError`/`job.debug`); a interface mostra mensagens neutras. `source.liveMetadataSource` indica se os metadados vieram da Data API, da busca por canal ou da sondagem com yt-dlp.
 
-## Captura de lives no navegador
+## Download da busca
 
-Para fontes `youtube`, a criação marca `source.captureMode = 'browser'`. Enquanto houver uma fonte ao vivo nesse modo, o frontend mantém uma sessão por live:
-
-1. `GET /api/live/capture-config` devolve `{ mirror, windowSeconds, maxSegments }`.
-2. `GET {mirror}/api/v1/videos/{id}?local=true` devolve `hlsUrl`; o resultado fica em `localStorage` por 5 minutos — **a busca não se repete a cada janela**.
-3. O manifesto é buscado com `local=true`, o que faz o espelho devolver playlists e segmentos no próprio domínio, com CORS liberado e sem cookies.
-4. Os últimos N segmentos de vídeo e áudio são baixados e concatenados; o navegador envia `POST /api/live/:id/window` com um cabeçalho binário `LWIN` e os dois `.ts`.
-5. O Render muxa vídeo e áudio com `ffmpeg -c copy` e reaproveita `loudSpan`/`makeLiveClip`, exatamente como na captura feita no servidor.
-
-**A aba do estúdio precisa ficar aberta** enquanto a live é monitorada. Se nenhuma janela chegar em `4 × windowSeconds`, o monitoramento é encerrado com uma mensagem explicando isso. Twitch e Kick continuam usando a captura no servidor (`captureMode: 'server'`).
+O navegador busca os bytes no IP do usuário (faixas de 512 KB, no máximo 4 em paralelo) e envia as partes ao Render. O servidor junta 720p H264 + AAC e serve `/api/downloads/:id/file.mp4` com `Content-Length` real, suporte a `Range` e sem query string. Vídeos "720p60" gigantes são recusados acima de 180 MB. Nenhuma URL do provedor/CDN aparece na interface.
 
 ## Novo frontend (kakashii-hub)
 

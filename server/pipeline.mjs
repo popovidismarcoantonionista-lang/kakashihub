@@ -23,11 +23,11 @@ import {
   updateJob,
 } from './store.mjs'
 import { ensureLocalMedia, mediaPathFromUrl, storeLocalFile } from './media-store.mjs'
-import { beginLiveRecording, endLiveRecording, heavyWorkActive, waitForLiveRecording } from './work-gate.mjs'
+import { beginLiveRecording, endLiveRecording, heavyWorkActive, isJobCancelled, waitForLiveRecording } from './work-gate.mjs'
 import { INVIDIOUS_URL, INVIDIOUS_URLS, cobaltResolve, hasCobalt, hasYtdlpApi, hasInvidious, invidiousInfo, ydlInfo, youtubeVideoId } from './services.mjs'
 import { analyzeXracing, avoidSkippableRanges, detectSkippableRanges, wordsToCues } from './xracing-engine.mjs'
 import { transcribeXracing } from './xracing-stt.mjs'
-import { isPortugueseCaptionText } from './pt-text.mjs'
+import { isPortugueseCaptionText, portugueseHookOrDefault } from './pt-text.mjs'
 
 const PYTHON = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -95,14 +95,14 @@ export const OUTPUT_SIZES = {
 }
 
 function renderSize(aspect = '9:16') {
-  const key = String(getState().settings?.resolution || '4k')
+  const key = String(getState().settings?.resolution || '720p')
   if (aspect === '16:9') {
     const requested = key === '4k' ? { width: 3840, height: 2160 }
       : key === '1080p' ? { width: 1920, height: 1080 }
         : { width: 1280, height: 720 }
     return LIGHT_RENDER ? { width: 1280, height: 720 } : requested
   }
-  const requested = OUTPUT_SIZES[key] || OUTPUT_SIZES['4k']
+  const requested = OUTPUT_SIZES[key] || OUTPUT_SIZES['720p']
   return LIGHT_RENDER ? { width: 720, height: 1280 } : requested
 }
 
@@ -118,7 +118,7 @@ function downloadFormat(maxHeight) {
 }
 
 function sourceMaxHeight() {
-  const key = String(getState().settings?.resolution || '4k')
+  const key = String(getState().settings?.resolution || '720p')
   const requested = key === '4k' ? 2160 : key === '1080p' ? 1080 : 720
   return LIGHT_RENDER ? Math.min(requested, 720) : requested
 }
@@ -252,34 +252,14 @@ function run(cmd, args, opts = {}) {
   })
 }
 
-function prepareYouTubeCookies() {
-  const configured = String(process.env.FUGA_COOKIES || '').trim()
-  const cookiePath = configured || path.join(DATA, 'cookies.txt')
-  const encoded = String(process.env.FUGA_COOKIES_B64 || '').trim()
-  if (encoded && !fs.existsSync(cookiePath)) {
-    try {
-      const contents = Buffer.from(encoded, 'base64').toString('utf8')
-      if (contents.includes('# Netscape HTTP Cookie File') || contents.includes('\t.youtube.com\t')) {
-        fs.mkdirSync(path.dirname(cookiePath), { recursive: true })
-        fs.writeFileSync(cookiePath, contents, { mode: 0o600 })
-      }
-    } catch (err) {
-      console.warn('[youtube] não foi possível preparar cookies:', err?.message || err)
-    }
-  }
-  return cookiePath
+class JobCancelledError extends Error {}
+
+function assertJobActive(jobId) {
+  if (isJobCancelled(jobId)) throw new JobCancelledError('Trabalho cancelado.')
 }
 
-const YT_COOKIES = prepareYouTubeCookies()
-// IP de datacenter (Render) cai no "Sign in to confirm you're not a bot".
-// Um proxy residencial faz o YouTube ver uma conexão comum, sem cookies de
-// conta e sem renovação manual. Aceita também as variáveis padrão de proxy.
-const YTDLP_PROXY = String(
-  process.env.YTDLP_PROXY
-  || process.env.HTTPS_PROXY || process.env.https_proxy
-  || process.env.HTTP_PROXY || process.env.http_proxy
-  || '',
-).trim()
+// O fluxo padrão não usa cookies de conta nem proxy de terceiros: o download
+// da busca acontece no navegador do usuário e as lives são só Twitch/Kick.
 const INVIDIOUS_INSTANCE = process.env.INVIDIOUS_INSTANCE
 // O cliente ANDROID devolve o progressivo itag 18 mesmo em IP de datacenter,
 // onde WEB/TV caem no "Sign in to confirm you're not a bot". Vem primeiro para
@@ -293,7 +273,6 @@ const POT_ENABLED = /^(1|true|yes)$/i.test(process.env.YT_POT_ENABLED || '')
 const watchUrl = (id) => `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`
 
 export function ytdlp(args, opts = {}) {
-  const extra = fs.existsSync(YT_COOKIES) ? ['--cookies', YT_COOKIES] : []
   const youtubeArgs = []
   if (INVIDIOUS_INSTANCE) youtubeArgs.push(`invidious_instance=${INVIDIOUS_INSTANCE}`)
   if (PLAYER_CLIENTS) youtubeArgs.push(`player_client=${PLAYER_CLIENTS}`)
@@ -306,11 +285,9 @@ export function ytdlp(args, opts = {}) {
   const useExtras = !opts.plain
   return run(bundledYtDlp ? YTDLP_BIN : PYTHON, [
     ...(bundledYtDlp ? [] : ['-m', 'yt_dlp']),
-    ...extra,
     ...(useExtras && extractorArgs.length ? ['--extractor-args', extractorArgs.join(';')] : []),
     '--force-ipv4',
     '--js-runtimes', 'node',
-    ...(YTDLP_PROXY ? ['--proxy', YTDLP_PROXY] : []),
     ...(useExtras && IMPERSONATE ? ['--impersonate', IMPERSONATE] : []),
     ...(VERBOSE ? ['--verbose'] : []),
     ...args,
@@ -497,7 +474,9 @@ function pickHook(type, cues, seedText, cfg = NICHES.fuga) {
   const list = cfg.hooks[type] || cfg.hooks.momento
   let h = 0
   for (const ch of seedText) h = (h * 31 + ch.charCodeAt(0)) % 997
-  return list[h % list.length]
+  // Mesmo o fallback precisa passar pelo filtro pt: um preset corrompido ou
+  // traduzido não pode virar título em inglês no acervo.
+  return portugueseHookOrDefault(list[h % list.length], type, cfg?.niche)
 }
 
 function scoreWindow(cues, min, max, cfg = NICHES.fuga) {
@@ -903,11 +882,18 @@ export async function liveFrame(sourceId) {
 }
 
 async function findSubFile(sourceId) {
-  const files = fs.readdirSync(SRC_MEDIA).filter((f) => f.startsWith(sourceId) && f.endsWith('.vtt'))
+  // Só legendas em português. Um .en.vtt residual (de builds anteriores ou de
+  // auto-subs do YouTube) não pode desligar a legenda queimada do corte nem
+  // virar contexto em inglês.
+  const files = fs.readdirSync(SRC_MEDIA).filter((f) => {
+    if (!f.startsWith(sourceId) || !f.endsWith('.vtt')) return false
+    const lang = f.slice(sourceId.length + 1, -4)
+    return /(^|[._-])pt([._-]|$)/i.test(lang) && !/(^|[._-])en(?:g|us)?([._-]|$)/i.test(lang)
+  })
   if (!files.length) return null
   files.sort((a, b) => {
-    const pa = /\.pt/i.test(a) ? 0 : 1
-    const pb = /\.pt/i.test(b) ? 0 : 1
+    const pa = /pt[-_.]?br/i.test(a) ? 0 : 1
+    const pb = /pt[-_.]?br/i.test(b) ? 0 : 1
     return pa - pb
   })
   return path.join(SRC_MEDIA, files[0])
@@ -1177,28 +1163,8 @@ async function downloadViaService(url, destPath) {
   await downloadHttp(link, destPath)
 }
 
-async function downloadViaCobalt(url, destPath) {
-  const resolved = await cobaltResolve(url, { quality: '720' })
-  if (resolved.kind === 'single' || resolved.kind === 'hls') {
-    await downloadHttp(resolved.url, destPath)
-    return
-  }
-  if (resolved.kind === 'merge') {
-    const dir = fs.mkdtempSync(path.join(DATA, 'cobalt-'))
-    const video = path.join(dir, 'video.mp4')
-    const audio = path.join(dir, 'audio.m4a')
-    try {
-      await downloadHttp(resolved.video, video)
-      await downloadHttp(resolved.audio, audio)
-      await run(FFMPEG_BIN, ['-y', '-hide_banner', '-loglevel', 'error', '-i', video, '-i', audio, '-c', 'copy', '-shortest', destPath], { timeout: 1000 * 60 * 20 })
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
-    }
-    if (!fs.existsSync(destPath) || fs.statSync(destPath).size < 1024) throw new Error('service-empty')
-    return
-  }
-  throw new Error('cobalt-unsupported')
-}
+// Cobalt é usado apenas como resolvedor interno de lives (resolveLiveStreamParts).
+// VOD nunca passa por ele: o download da busca é feito pelo navegador.
 
 async function downloadViaInvidious(url, destPath) {
   const info = await invidiousInfo(url)
@@ -1391,8 +1357,9 @@ export async function runIngest(sourceId, url, opts = {}) {
     : (source.uploaded ? await ensureLocalMedia(source.mediaKey, sourceVideo(sourceId), `${sourceId}.mp4`) : null)
   const metaHint = opts.metaHint || {}
   try {
+    assertJobActive(opts.jobId)
     updateJob(job, { progress: 4, step: localFile ? 'Lendo o vídeo enviado' : 'Abrindo o link e lendo a fonte' })
-    let viaService = DL_ONLY && (canUseService() || hasCobalt())
+    let viaService = DL_ONLY && canUseService()
     let viaInvidious = false
     let viaPlayer = false
     const videoId = videoIdFromUrl(url || '')
@@ -1430,7 +1397,7 @@ export async function runIngest(sourceId, url, opts = {}) {
         try {
           meta = await probeMeta(url, job)
         } catch (err) {
-          if (!canMirror(err) || !(canUseService() || hasCobalt() || hasInvidious())) throw new Error(friendlyError(err))
+          if (!canMirror(err) || !(canUseService() || hasInvidious())) throw new Error(friendlyError(err))
           try {
             const live = isChannelUrl(url) ? await youtubeLiveMeta(url) : null
             if (live) meta = live
@@ -1447,8 +1414,16 @@ export async function runIngest(sourceId, url, opts = {}) {
         }
       }
       if (meta.is_live) {
+        // O monitoramento só existe para Twitch/Kick. Um link comum do YouTube
+        // que vira live não pode ser transformado em monitoramento sem passar
+        // pelo fluxo explícito "Nova fonte → Nova live" (captureMode: server).
+        const platform = /kick\.com/i.test(url) ? 'kick' : /twitch\.tv/i.test(url) ? 'twitch' : null
+        if (!platform || (source.captureMode && source.captureMode !== 'server')) {
+          throw new Error('Monitoramos apenas lives da Twitch e da Kick.')
+        }
         source.mode = 'live'
-        source.platform = /kick\.com/i.test(url) ? 'kick' : /twitch\.tv/i.test(url) ? 'twitch' : 'youtube'
+        source.platform = platform
+        source.captureMode = 'server'
         source.title = String(meta.title || 'Transmissão ao vivo').slice(0, 140)
         source.channel = String(meta.uploader || meta.channel || source.channel || 'Transmissão').slice(0, 90)
         if (meta.thumbnail) source.thumb = meta.thumbnail
@@ -1550,7 +1525,7 @@ export async function runIngest(sourceId, url, opts = {}) {
             }
           }
           if (!viaPlayer && !viaInvidious) {
-            if (!(canUseService() || hasCobalt())) throw new Error(friendlyError(dlError))
+            if (!canUseService()) throw new Error(friendlyError(dlError))
             viaService = true
           }
         }
@@ -1559,16 +1534,6 @@ export async function runIngest(sourceId, url, opts = {}) {
         updateJob(job, { step: 'Baixando o vídeo' })
         try {
           let downloaded = false
-          if (!downloaded && hasCobalt()) {
-            try {
-              await downloadViaCobalt(url, videoPath)
-              downloaded = true
-            } catch (err) {
-              const reason = String(err?.message || err).slice(0, 300)
-              attempts.push(`cobalt:${reason}`)
-              console.error('[download:cobalt]', reason)
-            }
-          }
           if (!downloaded && canUseService()) {
             try {
               await downloadViaService(url, videoPath)
@@ -1756,10 +1721,15 @@ export async function runIngest(sourceId, url, opts = {}) {
         cover: fs.existsSync(coverAbs) ? coverRel : '',
         coverKey,
         hashtags: cfg.hashtags[type] || cfg.hashtags.momento,
+        // Cues em inglês alucinados pelo Whisper não viram legenda nem descrição.
         captionLines: w.cues.length
-          ? w.cues.map((c) => ({ t: Math.max(0, c.start - w.start), text: c.text })).slice(0, 60)
+          ? w.cues.filter((c) => isPortugueseCaptionText(c.text))
+            .map((c) => ({ t: Math.max(0, c.start - w.start), text: c.text })).slice(0, 60)
           : [],
-        description: (w.cues.length ? w.cues.map((c) => c.text).join(' ') : (meta.description || '')).slice(0, 220),
+        description: (
+          w.cues.filter((c) => isPortugueseCaptionText(c.text)).map((c) => c.text).join(' ')
+          || (isPortugueseCaptionText(meta.description) ? meta.description : '')
+        ).slice(0, 220),
         createdAt: new Date().toISOString(),
       }
       if (i === 0 && xracingEdit) {
@@ -1789,6 +1759,7 @@ export async function runIngest(sourceId, url, opts = {}) {
       console.error('[blob:source-cover]', String(error?.message || error).slice(0, 200))
     }
 
+    assertJobActive(opts.jobId)
     source.status = 'pronto'
     source.progress = 100
     source.clips = created.length
@@ -1806,6 +1777,10 @@ export async function runIngest(sourceId, url, opts = {}) {
     finishJob(job)
     return created
   } catch (err) {
+    if (err instanceof JobCancelledError || isJobCancelled(opts.jobId)) {
+      finishJob(job)
+      return null
+    }
     // O usuário vê só a mensagem curta; o motivo real fica no log do Render
     // e em job.debug (diagnóstico interno, não mostrado na interface).
     const detail = String(err?.debug || err?.stderr || err?.stack || err?.message || err).slice(-1600)
@@ -1925,7 +1900,7 @@ function contextChunks(text, duration) {
 }
 
 function buildCaptionChunks(clip, duration, gta = false, forcedText = '') {
-  const forced = cleanContextText(forcedText)
+  const forced = isPortugueseCaptionText(forcedText) ? cleanContextText(forcedText) : ''
   if (forced) return contextChunks(forced, duration)
   const lines = Array.isArray(clip?.captionLines) ? clip.captionLines : []
   const raw = lines
@@ -1979,9 +1954,11 @@ function buildCaptionChunks(clip, duration, gta = false, forcedText = '') {
 function buildCaptionAss(clip, duration, outW, outH, gta = false, watermark = false, contextText = '', green = false) {
   // Legenda verde estilo XRacing: uma frase curta, em caixa alta, até 3 linhas,
   // visível por 15–28s. Não usa a animação palavra por palavra dos outros estilos.
-  if (green) {
+  // Sem contexto em português o estilo verde não tem o que mostrar: cai para
+  // a legenda normal em vez de deixar o corte sem nenhuma legenda.
+  if (green && isPortugueseCaptionText(contextText || clip?.contextCaption || clip?.hook)) {
     const sourceText = contextText || clip?.contextCaption || clip?.hook
-    const text = isPortugueseCaptionText(sourceText) ? cleanContextText(sourceText).toUpperCase() : ''
+    const text = cleanContextText(sourceText).toUpperCase()
     if (!text) return null
     const words = splitCaptionWords(text)
     const perLine = Math.max(1, Math.ceil(words.length / 3))
@@ -2106,6 +2083,7 @@ export async function runRender(clipId, opts = {}) {
   const duration = Math.max(1, Number(clip.end) - Number(clip.start) || 0)
   const job = createJob('render', { clipId, sourceId: clip.sourceId, ...(opts.jobId ? { id: opts.jobId } : {}) })
   try {
+    assertJobActive(opts.jobId)
     updateJob(job, { progress: 8, step: 'Preparando o corte' })
     const out = path.join(EXPORTS, `${clip.id}.mp4`)
     // Qualquer corte pode sair em 16:9. Nesse formato o quadro inteiro é
@@ -2160,7 +2138,10 @@ export async function runRender(clipId, opts = {}) {
     // nunca devem sobrescrever a preferência salva: voltando para 9:16, a caixa
     // manual da webcam continua sendo a fonte da verdade.
     let framing = clip.framing || (gta ? 'cam' : 'auto')
-    const wantsSplit = !wide && !chase && (gta || framing === 'cam' || framing === 'auto')
+    // A caixa ajustada no Estúdio é a fonte da verdade no 9:16, mesmo que o
+    // preset de enquadramento seja centro/esquerda/direita ou perseguição.
+    const manualCam = Boolean(clip.cam || source?.cam)
+    const wantsSplit = !wide && !chase && (manualCam || gta || framing === 'cam' || framing === 'auto')
     if (!cam && wantsSplit) {
       updateJob(job, { progress: 26, step: 'Localizando a webcam' })
       const spanSec = Math.max(1, clip.end - clip.start)
@@ -2448,6 +2429,9 @@ export async function runRender(clipId, opts = {}) {
       clearInterval(progressTimer)
       if (assFile) try { fs.unlinkSync(assFile) } catch {}
     }
+    // A fonte pode ter sido excluída enquanto o ffmpeg rodava. Não salvar o
+    // corte aqui evita que ele volte a existir depois da remoção.
+    assertJobActive(opts.jobId)
     clip.renderedKey = await storeLocalFile(out, `media/exports/${clip.id}.mp4`, 'video/mp4')
     updateJob(job, { progress: 88, step: 'Gerando a capa do corte' })
     const renderCover = path.join(COVERS, `${clip.id}-render.jpg`)
@@ -2478,6 +2462,14 @@ export async function runRender(clipId, opts = {}) {
     finishJob(job)
     return clip
   } catch (err) {
+    if (err instanceof JobCancelledError || isJobCancelled(opts.jobId)) {
+      for (const f of [
+        path.join(EXPORTS, `${clip.id}.mp4`),
+        path.join(COVERS, `${clip.id}-render.jpg`),
+      ]) { try { fs.unlinkSync(f) } catch {} }
+      finishJob(job)
+      return null
+    }
     // O usuário vê só a mensagem curta; o motivo real fica no log do Render.
     console.error('[render-error]', clipId, String(err?.stderr || err?.message || err).slice(-1800))
     finishJob(job, new Error('Não foi possível renderizar este corte agora.'))
@@ -2581,7 +2573,11 @@ export async function runTrim(clipId, startInput, endInput, opts = {}) {
     ]) { try { fs.unlinkSync(file) } catch {} }
     addActivity('agent', `Corte "${clip.hook}" reduzido para ${Math.round(length)}s`)
     save()
-    await flushStore()
+    try {
+      await flushStore()
+    } catch (error) {
+      console.error('[trim] falha transitória ao persistir:', String(error?.message || error).slice(0, 300))
+    }
     updateJob(job, { progress: 45, step: 'Recorte aplicado' })
     finishJob(job)
     return clip
@@ -2616,6 +2612,7 @@ export async function runCompilation(compilationId, opts = {}) {
   const job = createJob('compile', { compilationId, ...(opts.jobId ? { id: opts.jobId } : {}) })
   const work = path.join(EXPORTS, `comp-${compilationId}`)
   try {
+    assertJobActive(opts.jobId)
     comp.status = 'processando'
     comp.progress = 2
     comp.error = null
@@ -2638,6 +2635,7 @@ export async function runCompilation(compilationId, opts = {}) {
     let total = 0
 
     for (let i = 0; i < clips.length; i++) {
+      assertJobActive(opts.jobId)
       const clip = clips[i]
       const liveFile = clip.media
         ? await ensureLocalMedia(clip.mediaKey || mediaPathFromUrl(clip.media), liveMediaFile(clip), `${clip.id}.mp4`)
@@ -2720,6 +2718,7 @@ export async function runCompilation(compilationId, opts = {}) {
       out,
     ], { cwd: work, timeout: 1000 * 60 * (LIGHT_RENDER ? 10 : 20) })
     if (!fs.existsSync(out)) throw new Error('Arquivo final não gerado')
+    assertJobActive(opts.jobId)
     comp.mediaKey = await storeLocalFile(out, `media/exports/${compilationId}.mp4`, 'video/mp4')
 
     let finalDur = total
@@ -2752,6 +2751,15 @@ export async function runCompilation(compilationId, opts = {}) {
     fs.rmSync(work, { recursive: true, force: true })
     return comp
   } catch (err) {
+    if (err instanceof JobCancelledError || isJobCancelled(opts.jobId)) {
+      finishJob(job)
+      fs.rmSync(work, { recursive: true, force: true })
+      for (const f of [
+        path.join(EXPORTS, `${compilationId}.mp4`),
+        path.join(COVERS, `${compilationId}.jpg`),
+      ]) { try { fs.unlinkSync(f) } catch {} }
+      return null
+    }
     const detail = String(err?.stderr || err?.stack || err?.message || err).slice(-1200)
     console.error('[compilation-error]', compilationId, detail)
     updateJob(job, { debug: detail })
@@ -2781,22 +2789,6 @@ const LIVE_STREAM_RETRY_MS = Math.max(10, Number(process.env.LIVE_STREAM_RETRY_M
 // públicos. O frontend resolve o HLS no IP do usuário e envia janelas já em .ts.
 const browserLiveWindows = new Map()
 const BROWSER_WINDOW_TIMEOUT = Math.max(180, LIVE_WINDOW * 4) * 1000
-
-const LIVE_CAPTURE_FALLBACKS = [
-  'https://inv.nadeko.net',
-  'https://yewtu.be',
-  'https://invidious.nerdvpn.de',
-]
-
-export function liveCaptureConfig() {
-  return {
-    mirror: INVIDIOUS_URL,
-    mirrors: [...new Set([INVIDIOUS_URL, ...INVIDIOUS_URLS.slice(1), ...LIVE_CAPTURE_FALLBACKS])].filter(Boolean),
-    relay: '/api/live/relay',
-    windowSeconds: LIVE_WINDOW,
-    maxSegments: Math.ceil(LIVE_WINDOW / 5),
-  }
-}
 
 const LIVE_TEXT = {
   offline: 'Essa fonte não está ao vivo agora. Cole o link de uma transmissão em andamento…',
@@ -3200,7 +3192,7 @@ async function makeLiveClip(source, windowFile, span, session, index, captions =
   const clipCues = captions
     .filter((cue) => Number(cue?.t) <= span.end && Number(cue?.t) + 6 >= span.start)
     .map((cue) => ({ t: Math.round((Number(cue.t) - span.start) * 10) / 10, text: String(cue.text || '') }))
-    .filter((cue) => cue.text && cue.t > -6)
+    .filter((cue) => cue.text && cue.t > -6 && isPortugueseCaptionText(cue.text))
   const speech = clipCues.map((cue) => cue.text).join(' ')
   const spokenType = clipCues.length ? classify(speech, cfg) : 'momento'
   const type = spokenType !== 'momento' ? spokenType : liveClipType(cfg, index)
@@ -3414,7 +3406,20 @@ async function processLiveWindowFile(sourceId, win, job) {
   const spanLen = Math.min(maxSpan, Math.max(minSpan, Math.min(20, usable - 0.5)))
   const cutStart = await keyframeAtOrAfter(winFile, Math.max(lead + 0.1, 0.5))
   const spanStart = Math.max(0, Math.min(duration - spanLen, cutStart))
-  const span = duration >= 6 ? { start: spanStart, end: Math.min(duration, spanStart + spanLen) } : null
+  let span = duration >= 6 ? { start: spanStart, end: Math.min(duration, spanStart + spanLen) } : null
+  // A live também não pode abrir com vinheta, patrocínio ou CTA. As legendas
+  // da janela são convertidas em palavras para usar o mesmo detector do VOD.
+  if (span && captions.length) {
+    const liveWords = cuesToWords(captions.map((cue) => {
+      const t = Math.max(0, Number(cue.t) || 0)
+      return { start: t, end: t + 4, text: String(cue.text || '') }
+    }))
+    const skips = detectSkippableRanges(liveWords, duration)
+    if (skips.length) {
+      const adjusted = avoidSkippableRanges(span.start, span.end, skips, Math.min(minSpan, 8), duration)
+      if (adjusted && adjusted.end - adjusted.start >= 6) span = adjusted
+    }
+  }
   const lastEnd = Number(source.liveLastEnd) || -999
   if (span && session + span.start >= lastEnd + 6) {
     try {

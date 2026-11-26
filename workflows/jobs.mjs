@@ -10,6 +10,8 @@ import {
 import {
   beginHeavyWork,
   endHeavyWork,
+  clearJobCancellation,
+  isJobCancelled,
   markJobQueued,
   runHeavyExclusive,
   unmarkJobQueued,
@@ -28,22 +30,30 @@ export async function processJobWorkflow(kind, payload) {
     || kind === 'ingest' || kind === 'analyze'
 
   const execute = async () => {
+    if (isJobCancelled(payload.jobId)) return { status: 'cancelado' }
     unmarkJobQueued(payload.jobId)
+    let heavyStarted = false
     if (heavy) {
       beginHeavyWork()
-      await waitForLiveRecording()
+      heavyStarted = true
     }
     try {
+      if (heavy) await waitForLiveRecording()
+      // Pode ter sido cancelado enquanto esperava a fila ou a gravação da live.
+      if (isJobCancelled(payload.jobId)) return { status: 'cancelado' }
       const result = await processJobStep(kind, payload)
       if (kind === 'analyze' && await sourceBecameLiveStep(payload.sourceId)) {
         await startLiveWorkflowStep(payload.sourceId)
       }
       return result
     } catch (error) {
-      await failJobStep(payload.jobId, error?.message || 'O processamento falhou.')
+      if (!isJobCancelled(payload.jobId)) {
+        await failJobStep(payload.jobId, error?.message || 'O processamento falhou.')
+      }
       throw error
     } finally {
-      if (heavy) endHeavyWork()
+      if (heavyStarted) endHeavyWork()
+      clearJobCancellation(payload.jobId)
     }
   }
 

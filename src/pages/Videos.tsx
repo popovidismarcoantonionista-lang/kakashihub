@@ -3,7 +3,7 @@ import {
   AlertTriangle, Clapperboard, Crop, Download,
   Play, Plus, Radio, Search, Square, Trash2, UploadCloud, Youtube,
 } from 'lucide-react'
-import { useApp } from '../store'
+import { friendlyMessage, useApp } from '../store'
 import { CamBoxCanvas } from '../CamBoxCanvas'
 import { navigate } from '../router'
 import { PlayerModal } from '../components'
@@ -61,7 +61,6 @@ const PROXY_HOSTS = [
   'yt-comp2.chocolatemoo53.com',
   'yt-comp3.chocolatemoo53.com',
   'yt-comp6.chocolatemoo53.com',
-  'yt.chocolatemoo53.com',
 ]
 
 async function requestDownloadSession(url: string, title: string): Promise<DownloadSession> {
@@ -292,10 +291,6 @@ function jobLabel(kind?: string) {
   return 'Preparando a fonte'
 }
 
-function normalizeLink(raw: string) {
-  return raw.trim()
-}
-
 function platformName(source: Source) {
   if (source.platform === 'twitch') return 'Twitch'
   if (source.platform === 'kick') return 'Kick'
@@ -360,9 +355,10 @@ function LiveCamEditor({ source }: { source: Source }) {
   const apiRef = useRef(api)
   apiRef.current = api
 
-  // Ao abrir o ajuste, já usa a detecção do servidor em vez da caixa manual anterior.
-  // Roda só uma vez por fonte: api muda a cada refresh e repetiria a detecção.
+  // A caixa manual do Estúdio é a fonte da verdade: abrir o ajuste não pode
+  // sobrescrever o que o usuário já posicionou. A redetecção é explícita.
   useEffect(() => {
+    if (source.cam) return
     const call = apiRef.current
     void detectCamBoxAuto('live', source.id, call).then(async (cam) => {
       if (!cam) return
@@ -430,8 +426,6 @@ function LiveCamEditor({ source }: { source: Source }) {
 
 export function VideosPage() {
   const { state, api, refresh, setIngestOpen, setIngestTab } = useApp()
-  const [url, setUrl] = useState('')
-  const [liveBusy, setLiveBusy] = useState(false)
   const [liveActing, setLiveActing] = useState('')
   const [watching, setWatching] = useState<Source | null>(null)
   const [liveWatching, setLiveWatching] = useState<Source | null>(null)
@@ -474,22 +468,9 @@ export function VideosPage() {
     setIngestOpen(true)
   }
 
-  const startLive = async () => {
-    const target = normalizeLink(url)
-    if (!/^https?:\/\//i.test(target)) {
-      return
-    }
-    if (!/twitch\.tv|kick\.com/i.test(target)) {
-      return
-    }
-    setLiveBusy(true)
-    try {
-      await api('/api/live', { method: 'POST', body: JSON.stringify({ url: target }) })
-      setUrl('')
-    } catch (e: any) {
-    } finally {
-      setLiveBusy(false)
-    }
+  const openLive = () => {
+    setIngestTab('live')
+    setIngestOpen(true)
   }
 
   const stopMonitoring = async (source: Source) => {
@@ -529,7 +510,7 @@ export function VideosPage() {
       setFound(Array.isArray(data.items) ? data.items : [])
     } catch (e: any) {
       setFound([])
-      setFindError(e?.message || 'Não foi possível buscar vídeos agora.')
+      setFindError(friendlyMessage(e?.message || 'Não foi possível buscar vídeos agora.'))
     } finally {
       setFindBusy(false)
     }
@@ -551,7 +532,7 @@ export function VideosPage() {
         await triggerDownload(await requestPreparedDownload(item.url, item.title, setDownloadProgress))
       } catch (error: any) {
         failed += 1
-        reason = String(error?.message || '').trim()
+        reason = friendlyMessage(error?.message || '')
       }
       // O navegador pode bloquear downloads automáticos muito próximos uns dos
       // outros, então mantemos um intervalo entre os vídeos selecionados.
@@ -560,7 +541,7 @@ export function VideosPage() {
     setDownloadingIds([])
     setDownloadProgress(0)
     if (failed) {
-      setFindError(reason || `${failed} vídeo(s) não puderam ser baixados. Tente de novo em instantes.`)
+      setFindError(friendlyMessage(reason || `${failed} vídeo(s) não puderam ser baixados. Tente de novo em instantes.`))
     }
   }
 
@@ -603,21 +584,14 @@ export function VideosPage() {
         <div className="hero-glow" />
         <div className="hero-copy">
           <h2>Envie o vídeo.<br />Ou cole a live.</h2>
-          <p>Envie seus vídeos gravados. Para lives, cole o link.</p>
-          <form className="hero-form" onSubmit={(e) => { e.preventDefault(); startLive() }}>
+          <p>Envie seus vídeos gravados. Para lives, use a opção Nova fonte.</p>
+          <div className="hero-form">
             <Radio size={15} />
-            <input
-              id="hero-url"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="Link da live (Twitch ou Kick)"
-              spellCheck={false}
-            />
-            <button className="btn btn-live" disabled={liveBusy} type="submit">
-              {liveBusy ? <span className="spinner" /> : <Radio size={14} />}
-              {liveBusy ? 'Conectando…' : 'Monitorar live'}
+            <span className="hero-hint">Lives da Twitch e da Kick</span>
+            <button className="btn btn-live" type="button" onClick={openLive}>
+              <Plus size={14} /> Adicionar live
             </button>
-          </form>
+          </div>
           <div className="hero-live">
             <span className="hero-live-dot" />
             <div className="hero-live-copy">
@@ -722,7 +696,7 @@ export function VideosPage() {
       {running.length > 0 && (
         <div className="running-panel panel">
           <div className="running-head">
-            <span className="live-dot"><i /> ANALISANDO</span>
+            <span className="live-dot"><i /> PROCESSANDO</span>
             <span className="mono">{running.length} tarefa{running.length > 1 ? 's' : ''} em andamento</span>
           </div>
           {running.map((j) => {
@@ -732,7 +706,7 @@ export function VideosPage() {
                 <div className="rr-main">
                   <span className="rr-title">
                     <Logo size={14} className="rr-spin" />
-                    <b>{j.kind === 'render' ? 'Preparando corte' : j.kind === 'compile' ? 'Montando vídeo longo' : j.kind === 'live' ? 'Monitorando a live' : src?.title || 'Analisando vídeo'}</b>
+                    <b>{j.kind === 'render' ? 'Preparando corte' : j.kind === 'compile' ? 'Montando vídeo longo' : j.kind === 'live' ? 'Monitorando a live' : src?.title || 'Processando vídeo'}</b>
                   </span>
                   <em>{j.kind === 'render' ? 'Ajustando o vídeo' : j.kind === 'compile' ? 'Juntando os melhores momentos' : j.kind === 'live' ? 'Acompanhando a transmissão' : 'Lendo o vídeo enviado'}</em>
                 </div>
@@ -808,7 +782,7 @@ export function VideosPage() {
             const clips = (state?.clips || []).filter((c) => c.sourceId === source.id)
             const badge = isLive
               ? source.status === 'ao-vivo' ? 'AO VIVO' : source.status === 'erro' ? 'ATENÇÃO' : source.status === 'pronto' ? 'ENCERRADA' : 'CONECTANDO'
-              : source.status === 'pronto' ? 'PRONTA' : source.status === 'erro' ? 'ATENÇÃO' : 'ANALISANDO'
+              : source.status === 'pronto' ? 'PRONTA' : source.status === 'erro' ? 'ATENÇÃO' : 'PROCESSANDO'
             const embed = isLive ? liveEmbed(source) : null
             const liveThumb = isLive && !source.thumb && source.liveId
               ? `https://i.ytimg.com/vi/${source.liveId}/hqdefault.jpg`
@@ -881,7 +855,7 @@ export function VideosPage() {
                     </div>
                   )}
                   {source.error && (
-                    <div className="src-error"><AlertTriangle size={13} /> {source.error}</div>
+                    <div className="src-error"><AlertTriangle size={13} /> {friendlyMessage(source.error)}</div>
                   )}
                   {isLive && !source.error && source.liveEndNote && (
                     <div className="src-note">{source.liveEndNote}</div>
@@ -906,7 +880,7 @@ export function VideosPage() {
                         </button>
                       ) : (
                         <button className="btn btn-ghost btn-sm" onClick={() => resumeMonitoring(source)} disabled={liveActing === source.id}>
-                          {liveActing === source.id ? <span className="spinner" /> : <Radio size={12} />} Monitorar de novo
+                          {liveActing === source.id ? <span className="spinner" /> : <Radio size={12} />} Retomar acompanhamento
                         </button>
                       )
                     )}

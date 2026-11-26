@@ -13,15 +13,17 @@ import {
   addActivity,
   findClip,
   findSource,
+  getJob,
   getJobs,
   getState,
   save,
+  saveJobs,
   storeMiddleware,
 } from './store.mjs'
 import { blobMediaExists, blobStorageEnabled, deleteBlobMedia, getPrivateBlob, storeLocalFile } from './media-store.mjs'
 import {
   OUTPUT_SIZES, clipFrame, detectCamBoxForClip, detectCamBoxForLive, fetchChannelVideos,
-  getLiveHlsUrl, isLiveRunning, liveCapabilities, liveCaptureConfig, liveErrorText, liveFrame,
+  getLiveHlsUrl, isLiveRunning, liveCapabilities, liveFrame,
   liveMediaFile, queueBrowserLiveWindow, searchYoutubeVideos, stopLive, uniqueClips,
 } from './pipeline.mjs'
 import { startLiveWorkflow, startProcessJob, startUploadWorkflow } from './jobs.mjs'
@@ -32,15 +34,16 @@ import {
   oauthFinish, oauthStart, saveAppCredentials,
 } from './social.mjs'
 import { getRadar } from './radar.mjs'
-import { youtubeVideoId } from './services.mjs'
+import { INVIDIOUS_URLS, youtubeVideoId } from './services.mjs'
 import {
   appendDownloadPart, cleanupPreparedDownloads, createPreparedDownload,
   finalizePreparedDownload, findPreparedDownload, friendlyDownloadError,
 } from './download-prep.mjs'
 import { db, connectionInfo } from './db.mjs'
+import { isIgnoredSource, requestJobCancellation, unmarkJobQueued } from './work-gate.mjs'
+import { seedState } from './seed.mjs'
 
 const app = express()
-app.use(express.json({ limit: '6mb' }))
 
 function verifyNetlifySigned(sig, secret) {
   try {
@@ -72,6 +75,10 @@ app.use((req, res, next) => {
   if (signed && verifyNetlifySigned(signed, secret)) return next()
   return res.status(403).json({ error: 'Acesso direto bloqueado.' })
 })
+
+// O parsing do corpo vem depois do gate: uma requisição bloqueada não precisa
+// alocar memória para um payload de até 6 MB.
+app.use(express.json({ limit: '6mb' }))
 
 app.use('/api', (req, res, next) => {
   // Health precisa responder mesmo se o Postgres estiver indisponível.
@@ -176,12 +183,16 @@ app.get('/api/radar', async (req, res) => {
 
 app.get('/api/state', (req, res) => {
   const state = getState()
-  const sources = state.sources.map((s) => ({
-    ...s,
-    hasMedia: s.mode === 'live'
-      ? (state.clips || []).some((c) => c.sourceId === s.id && Boolean(c.mediaKey || c.media || liveMediaFile(c)))
-      : Boolean(s.mediaKey) || fs.existsSync(path.join(SRC_MEDIA, `${s.id}.mp4`)),
-  }))
+  const sources = state.sources.map((s) => {
+    // liveLastError é diagnóstico interno (pode conter detalhe de stream/proxy).
+    const { liveLastError: _ignored, ...publicSource } = s
+    return {
+      ...publicSource,
+      hasMedia: s.mode === 'live'
+        ? (state.clips || []).some((c) => c.sourceId === s.id && Boolean(c.mediaKey || c.media || liveMediaFile(c)))
+        : Boolean(s.mediaKey) || fs.existsSync(path.join(SRC_MEDIA, `${s.id}.mp4`)),
+    }
+  })
   ok(res, { ...state, sources, jobs: getJobs() })
 })
 
@@ -192,17 +203,36 @@ const NICHE_LABELS = {
   geral: 'Geral · Melhores momentos',
 }
 
+const BOOLEAN_SETTINGS = ['autoApprove', 'captions', 'watermark', 'xracing', 'bgBlur', 'faceBlur']
+const FRAMINGS = new Set(['auto', 'cam', 'centro', 'esquerda', 'direita'])
+const FORMATS = new Set(['9:16', '16:9'])
+
+function asBool(value) {
+  return value === true || value === 'true' || value === '1' || value === 1
+}
+
 app.post('/api/settings', (req, res) => {
   const state = getState()
   const body = req.body || {}
-  if (body.niche !== undefined && !NICHE_LABELS[body.niche]) delete body.niche
-  if (body.resolution !== undefined && !OUTPUT_SIZES[body.resolution]) delete body.resolution
-  const current = state.settings || {}
-  state.settings = {
-    ...current,
-    ...body,
-    agents: { ...(current.agents || {}), ...(body.agents || {}) },
+  const current = { ...seedState().settings, ...(state.settings || {}) }
+  const clean = {}
+  for (const [key, value] of Object.entries(body)) {
+    if (key === 'agents' || key === 'niche' || key === 'resolution' || key === 'framing' || key === 'format') continue
+    if (BOOLEAN_SETTINGS.includes(key)) clean[key] = asBool(value)
+    else if (key === 'clipMin' || key === 'clipMax') {
+      const n = Number(value)
+      if (Number.isFinite(n)) clean[key] = Math.min(600, Math.max(3, Math.round(n)))
+    } else clean[key] = value
   }
+  if (body.niche !== undefined && NICHE_LABELS[body.niche]) clean.niche = body.niche
+  if (body.resolution !== undefined && OUTPUT_SIZES[body.resolution]) clean.resolution = body.resolution
+  if (body.framing !== undefined && FRAMINGS.has(body.framing)) clean.framing = body.framing
+  if (body.format !== undefined && FORMATS.has(body.format)) clean.format = body.format
+  const agents = { ...(current.agents || {}) }
+  for (const [key, value] of Object.entries(body.agents || {})) {
+    if (typeof value === 'boolean' || typeof value === 'string' || typeof value === 'number') agents[key] = asBool(value)
+  }
+  state.settings = { ...current, ...clean, agents }
   state.project.niche = NICHE_LABELS[state.settings.niche] || state.project.niche
   save()
   ok(res, { settings: state.settings, project: state.project })
@@ -373,9 +403,24 @@ app.get('/api/downloads/:id/file.mp4', (req, res) => {
       res.set('Content-Range', `bytes */${size}`)
       return res.status(416).end()
     }
-    if (match[1]) start = Number(match[1])
-    if (match[2]) end = Number(match[2])
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) {
+    if (!match[1] && !match[2]) {
+      res.set('Content-Range', `bytes */${size}`)
+      return res.status(416).end()
+    }
+    // `bytes=-N` pede os N últimos bytes, não o intervalo 0..N.
+    if (!match[1]) {
+      const suffix = Number(match[2])
+      if (!Number.isFinite(suffix) || suffix <= 0) {
+        res.set('Content-Range', `bytes */${size}`)
+        return res.status(416).end()
+      }
+      start = Math.max(0, size - suffix)
+      end = size - 1
+    } else {
+      start = Number(match[1])
+      if (match[2]) end = Number(match[2])
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size || size <= 0) {
       res.set('Content-Range', `bytes */${size}`)
       return res.status(416).end()
     }
@@ -544,6 +589,7 @@ app.post('/api/sources/upload-complete', async (req, res) => {
 app.post('/api/sources/:id/analyze', async (req, res) => {
   const source = findSource(req.params.id)
   if (!source) return fail(res, 404, 'Fonte não encontrada.')
+  if (isIgnoredSource(source.id)) return fail(res, 400, 'Esta fonte não pode ser reprocessada.')
   if (!source.url && !source.uploaded) return fail(res, 400, 'Conecte um link ou envie um vídeo para analisar esta fonte.')
   if (getJobs().some((j) => j.status === 'running' && j.sourceId === source.id)) {
     return fail(res, 409, 'Esta fonte já está sendo analisada.')
@@ -663,10 +709,6 @@ app.post('/api/live/:id/start', async (req, res) => {
   ok(res, { ok: true })
 })
 
-app.get('/api/live/capture-config', (req, res) => {
-  ok(res, liveCaptureConfig())
-})
-
 // Relay dos HLS dos espelhos: no celular alguns navegadores/redes bloqueiam o
 // fetch cross-origin. O servidor busca o recurso e repassa na mesma origem.
 const RELAY_TTL = 4000
@@ -675,7 +717,7 @@ const relayCache = new Map()
 
 function relayHosts() {
   const hosts = new Set()
-  for (const mirror of liveCaptureConfig().mirrors || []) {
+  for (const mirror of INVIDIOUS_URLS) {
     try { hosts.add(new URL(mirror).hostname) } catch {}
   }
   return hosts
@@ -687,7 +729,7 @@ app.get('/api/live/relay', async (req, res) => {
   try { target = new URL(raw) } catch { return fail(res, 400, 'URL inválida.') }
   if (target.protocol !== 'https:') return fail(res, 400, 'Só HTTPS é permitido.')
   const hosts = relayHosts()
-  if (!hosts.has(target.hostname) && !/^(yt-comp\d+|yt)\.chocolatemoo53\.com$/i.test(target.hostname)) {
+  if (!hosts.has(target.hostname) && !/^yt-comp\d+\.chocolatemoo53\.com$/i.test(target.hostname)) {
     return fail(res, 403, 'Host não permitido.')
   }
   const cached = relayCache.get(raw)
@@ -769,7 +811,7 @@ app.post('/api/live/:id/window', express.raw({ type: 'application/octet-stream',
     ok(res, { accepted: true, bytes: result.bytes })
   } catch (e) {
     console.error('[live window]', e?.message || e)
-    fail(res, 500, 'Não foi possível processar a janela recebida.', { detail: liveErrorText(e, 300) })
+    fail(res, 500, 'Não foi possível processar a janela recebida.')
   }
 })
 
@@ -793,7 +835,7 @@ app.get('/api/live/:id/hls', async (req, res) => {
     ok(res, { hlsUrl })
   } catch (e) {
     console.error('[live hls]', e?.message || e)
-    fail(res, 500, 'Erro ao obter stream da live.', { detail: liveErrorText(e, 400) })
+    fail(res, 500, 'Não foi possível obter o stream da transmissão.')
   }
 })
 
@@ -801,12 +843,13 @@ app.delete('/api/sources/:id', async (req, res) => {
   const state = getState()
   const source = findSource(req.params.id)
   if (!source) return fail(res, 404, 'Fonte não encontrada.')
-  if (getJobs().some((j) => j.status === 'running' && j.sourceId === source.id)) {
-    if (!isLiveRunning(source.id)) {
-      return fail(res, 409, 'Esta fonte ainda está sendo analisada. Tente de novo em instantes.')
-    }
-    stopLive(source.id)
+  const jobs = getJobs()
+  const busyIngest = jobs.some((j) => ['running', 'pendente'].includes(j.status)
+    && j.sourceId === source.id && ['ingest', 'analyze'].includes(j.kind))
+  if (busyIngest && !isLiveRunning(source.id)) {
+    return fail(res, 409, 'Esta fonte ainda está sendo analisada. Tente de novo em instantes.')
   }
+  if (isLiveRunning(source.id)) stopLive(source.id)
   const clipsState = Array.isArray(state.clips) ? state.clips : []
   const uploadsState = Array.isArray(state.uploads) ? state.uploads : []
   const sourcesState = Array.isArray(state.sources) ? state.sources : []
@@ -814,6 +857,27 @@ app.delete('/api/sources/:id', async (req, res) => {
   const clips = clipsState.filter((c) => c.sourceId === source.id)
   const clipIds = new Set(clips.map((c) => c.id))
   const dropped = compilationsState.filter((c) => c.clipIds?.some((id) => clipIds.has(id)))
+  const droppedCompIds = new Set(dropped.map((c) => c.id))
+  // Um render/compilação em andamento não impede a exclusão. Cancelamos o job
+  // antes de apagar os arquivos para que o ffmpeg não grave de volta o corte
+  // (ou a fonte) depois que ela saiu do estado. Compilações são criadas só com
+  // compilationId — sem isso o ffmpeg continuava e gravava um blob órfão.
+  for (const job of jobs) {
+    if (!['running', 'pendente'].includes(job.status)) continue
+    if (job.sourceId !== source.id && !droppedCompIds.has(job.compilationId)) continue
+    requestJobCancellation(job.id)
+    unmarkJobQueued(job.id)
+    const current = getJob(job.id)
+    if (current) {
+      Object.assign(current, {
+        status: 'cancelado',
+        error: null,
+        retryPending: false,
+        finishedAt: new Date().toISOString(),
+      })
+      saveJobs()
+    }
+  }
   state.clips = clipsState.filter((c) => c.sourceId !== source.id)
   state.uploads = uploadsState.filter((u) => !clipIds.has(u.clipId))
   state.sources = sourcesState.filter((s) => s.id !== source.id)
@@ -1045,7 +1109,7 @@ app.post('/api/clips/:id/detect-cam', async (req, res) => {
     if (!cam) return fail(res, 404, 'Não foi possível localizar a webcam neste corte.')
     ok(res, { cam })
   } catch (error) {
-    fail(res, 500, 'Falha ao detectar a webcam.', { detail: liveErrorText(error, 200) })
+    fail(res, 500, 'Não foi possível detectar a webcam agora.')
   }
 })
 
@@ -1055,7 +1119,7 @@ app.post('/api/live/:id/detect-cam', async (req, res) => {
     if (!cam) return fail(res, 404, 'Ainda não há quadro da live para detectar a webcam.')
     ok(res, { cam })
   } catch (error) {
-    fail(res, 500, 'Falha ao detectar a webcam.', { detail: liveErrorText(error, 200) })
+    fail(res, 500, 'Não foi possível detectar a webcam agora.')
   }
 })
 

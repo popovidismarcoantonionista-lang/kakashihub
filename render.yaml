@@ -11,38 +11,49 @@ services:
         value: production
       - key: PYTHON
         value: python3
+      # Perfil do Render free (~512 MB): render leve, modelo tiny e no máximo
+      # 3 janelas de 60s de áudio. Fixados aqui para um blueprint recriado não
+      # voltar a usar 4K/int8-float e derrubar o processo.
+      - key: FUGA_LIGHT_RENDER
+        value: "true"
+      - key: XRACING_MODEL
+        value: tiny
+      - key: XRACING_MAX_AUDIO_SEC
+        value: "180"
       # Lives são apenas Twitch/Kick e o download é manual no navegador;
       # o provider de PO do YouTube só consumia RAM do Render free.
       - key: YT_POT_ENABLED
         value: "false"
-      # YouTube Data API v3: confirma status/título/canal da live antes do yt-dlp.
-      # Valores com sync:false devem ser preenchidos no painel do Render
-      # (o Blueprint não promove novos secrets em serviços já existentes).
+      # YouTube Data API v3: confirma status/título/canal das lives Twitch/Kick
+      # quando aplicável. sync:false = preenchido no painel do Render.
       - key: YOUTUBE_API_KEY
         sync: false
-      # Proxy residencial para downloads de VOD: o YouTube bloqueia IPs de
-      # datacenter com "Sign in to confirm you're not a bot". Formato:
-      # http://usuario:senha@host:porta (ou socks5://...). Sem isso, o VOD
-      # do YouTube falha no Render. Preencher no painel do Render.
-      - key: YTDLP_PROXY
-        sync: false
-      # Cobalt resolve VOD (vídeos comuns), mas RECUSA lives
-      # (error.api.content.video.live). Mantido para downloads normais.
+      # Cobalt é apenas resolvedor interno de lives (Twitch/Kick). VOD nunca
+      # passa por ele: o download da busca é feito no navegador do usuário.
       - key: COBALT_API_URL
         value: https://rue-cobalt.xenon.zone/
       - key: COBALT_API_KEY
         sync: false
-      # Resolvedor de LIVE: espelho Invidious que devolve `liveNow` + `hlsUrl`
-      # (testado sem chave e sem cookies na live z2hktG1zUbs). O HLS é assinado
-      # e expira, então é resolvido a cada janela — nunca use como URL fixa.
+      # Resolvedores primários das lives. O HLS é assinado e expira, então é
+      # resolvido a cada janela — nunca usar como URL fixa.
       - key: INVIDIOUS_API_URLS
-        value: https://yt.chocolatemoo53.com,https://invidious.slipfox.xyz,https://invidious.tiekoetter.com
+        value: https://invidious.slipfox.xyz,https://invidious.tiekoetter.com
       - key: YTDLP_API_URL
         sync: false
       - key: YTDLP_API_KEY
         sync: false
       # URL HLS já autorizada, quando disponível (alternativa aos resolvedores).
       - key: FUGA_LIVE_STREAM
+        sync: false
+      # Segredos obrigatórios: sem PROXY_SECRET o backend aceita acesso direto;
+      # sem BLOB_READ_WRITE_TOKEN / DATABASE_URL o estado não persiste. O
+      # Blueprint não publica valores sync:false em serviços já existentes —
+      # conferir no painel do Render após qualquer recriação.
+      - key: PROXY_SECRET
+        sync: false
+      - key: BLOB_READ_WRITE_TOKEN
+        sync: false
+      - key: DATABASE_URL
         sync: false
       # A interface estática e as rotas /api são atendidas pelo mesmo Express.
       # Configure um disco persistente se precisar manter arquivos entre deploys.
@@ -51,18 +62,17 @@ services:
       #   mountPath: /var/data
       #   sizeGB: 10
 
-  # Novo frontend (TanStack Start). Processes independente do Express acima:
-  # mesmo repositório, diretório separado e um único processo Node no Render.
+  # Frontend independente (TanStack Start), mesmo repositório, pasta separada.
   - type: web
     name: kakashii-hub
     runtime: node
     plan: free
     rootDir: kakashii-hub
-    buildCommand: npm install --no-audit --no-fund && npm run build
+    # vite é devDependency: NODE_ENV=production no build omitiria o Vite.
+    buildCommand: npm install --include=dev --no-audit --no-fund && npm run build
     startCommand: npm start
     healthCheckPath: /
     autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
-

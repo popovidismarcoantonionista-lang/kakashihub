@@ -25,6 +25,8 @@ const PROVIDER = String(process.env.SEARCH_DOWNLOAD_PROVIDER || 'https://yt.choc
 const FFMPEG_TIMEOUT = 10 * 60 * 1000
 const TTL = 30 * 60 * 1000
 const MAX_FILES = 12
+// Mesmo limite do front: faixas "720p60" gigantes são recusadas no servidor.
+export const MAX_VIDEO_BYTES = 180 * 1024 * 1024
 const ID_RE = /^dl-[a-z0-9-]+$/i
 const PARTS = new Set(['video', 'audio'])
 
@@ -156,6 +158,7 @@ export function finalizePreparedDownload(id, payload) {
   const audioSize = Number(payload?.audioSize)
   if (!Number.isFinite(videoSize) || !Number.isFinite(audioSize)
     || videoSize <= 0 || audioSize <= 0
+    || videoSize + audioSize > MAX_VIDEO_BYTES
     || fs.statSync(videoFile).size !== videoSize
     || fs.statSync(audioFile).size !== audioSize) {
     throw new Error('download-tamanho')
@@ -195,5 +198,6 @@ export function friendlyDownloadError(error) {
   const message = String(error?.message || '')
   if (message.includes('invidious-no-id')) return 'Cole um link de vídeo do YouTube.'
   if (message.includes('download-sessao')) return 'Este download expirou. Tente de novo.'
+  if (message.includes('download-tamanho')) return 'Este vídeo é grande demais para o download. Escolha uma qualidade menor.'
   return 'Não foi possível preparar o download agora. Tente de novo em instantes.'
 }

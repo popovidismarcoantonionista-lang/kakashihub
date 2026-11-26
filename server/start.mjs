@@ -5,6 +5,7 @@ import app from './index.mjs'
 import { withStore, closeOrphanWork, getState, save, sweepStaleJobs } from './store.mjs'
 import { startLiveWorkflow, resumePendingJobs, recoverLiveWorkflows } from './jobs.mjs'
 import { cleanupPreparedDownloads } from './download-prep.mjs'
+import { isIgnoredSource } from './work-gate.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DIST = path.join(ROOT, 'dist')
@@ -23,7 +24,7 @@ if (serveFrontend && fs.existsSync(DIST)) {
 
 const resumeLiveIds = await withStore(() => {
   closeOrphanWork()
-  return getState().sources.filter((s) => s.liveResumePending).map((s) => s.id)
+  return getState().sources.filter((s) => s.liveResumePending && !isIgnoredSource(s.id)).map((s) => s.id)
 })
 
 for (const id of resumeLiveIds) {
