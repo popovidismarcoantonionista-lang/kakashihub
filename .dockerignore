@@ -1,9 +1,12 @@
 node_modules
 dist
 data
+.netlify
 .git
-.gitignore
+.github
+tmp
 *.log
-vibe_images
-.bin
-kakashii-hub
+cookies.txt
+.env
+.env.*
+.env.example
