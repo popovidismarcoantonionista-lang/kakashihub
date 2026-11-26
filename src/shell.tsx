@@ -235,7 +235,7 @@ function IngestModal() {
           item.id === source.id && ['processando', 'pronto'].includes(item.status))
         if (!started) throw error
       }
-      await refresh()
+      await refresh(true)
       setIngestOpen(false)
       setFile(null)
       navigate('videos')

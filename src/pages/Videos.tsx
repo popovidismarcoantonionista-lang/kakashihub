@@ -3,7 +3,7 @@ import {
   AlertTriangle, Clapperboard, Crop, Download,
   Play, Plus, Radio, Search, Square, Trash2, UploadCloud, Youtube,
 } from 'lucide-react'
-import { friendlyMessage, useApp } from '../store'
+import { RATE_LIMIT_MESSAGE, friendlyMessage, useApp } from '../store'
 import { CamBoxCanvas } from '../CamBoxCanvas'
 import { navigate } from '../router'
 import { PlayerModal } from '../components'
@@ -524,6 +524,12 @@ export function VideosPage() {
     setFindError('')
     try {
       const res = await fetch(`/api/videos/search?q=${encodeURIComponent(q)}`)
+      if (res.status === 429) {
+        const retry = Number(res.headers.get('retry-after') || 0)
+        throw new Error(retry > 60
+          ? `Muitas requisições em instantes. Aguarde cerca de ${Math.ceil(retry / 60)} minuto(s) e tente novamente.`
+          : RATE_LIMIT_MESSAGE)
+      }
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || 'Busca indisponível.')
       setFound(Array.isArray(data.items) ? data.items : [])

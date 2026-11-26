@@ -32,7 +32,7 @@ function Boot() {
         ) : (
           <>
             <p>{error || 'Não foi possível carregar o estúdio.'}</p>
-            <button className="btn btn-primary" onClick={refresh}>Tentar de novo</button>
+            <button className="btn btn-primary" onClick={() => { void refresh(true) }}>Tentar de novo</button>
           </>
         )}
       </div>
