@@ -1127,12 +1127,46 @@ app.delete('/api/clips/:id', async (req, res) => {
   const state = getState()
   const clip = findClip(req.params.id)
   if (!clip) return fail(res, 404, 'Corte não encontrado.')
+  const jobs = getJobs()
+  const compilationsState = Array.isArray(state.compilations) ? state.compilations : []
+  const dropped = compilationsState.filter((c) => (c.clipIds || []).includes(clip.id))
+  const droppedCompIds = new Set(dropped.map((c) => c.id))
+  // Render e compilações em andamento não impedem a exclusão: sinalizamos o
+  // cancelamento antes de apagar os arquivos para o ffmpeg não gravar de volta
+  // um corte/vídeo longo que já saiu do estado.
+  for (const job of jobs) {
+    if (!['running', 'pendente'].includes(job.status)) continue
+    if (job.clipId !== clip.id && !droppedCompIds.has(job.compilationId)) continue
+    requestJobCancellation(job.id)
+    unmarkJobQueued(job.id)
+    const current = getJob(job.id)
+    if (current) {
+      Object.assign(current, {
+        status: 'cancelado',
+        error: null,
+        retryPending: false,
+        finishedAt: new Date().toISOString(),
+      })
+      saveJobs()
+    }
+  }
   state.clips = state.clips.filter((c) => c.id !== clip.id)
   state.uploads = state.uploads.filter((u) => u.clipId !== clip.id)
   const source = findSource(clip.sourceId)
   if (source) source.clips = state.clips.filter((c) => c.sourceId === source.id).length
+  if (dropped.length) {
+    const droppedIds = new Set(dropped.map((c) => c.id))
+    state.uploads = (Array.isArray(state.uploads) ? state.uploads : [])
+      .filter((u) => !u.compilationId || !droppedIds.has(u.compilationId))
+    state.compilations = compilationsState.filter((c) => !dropped.includes(c))
+  }
   save()
-  try { await deleteBlobMedia([clip.mediaKey, clip.renderedKey, clip.coverKey]) } catch (error) {
+  try { await deleteBlobMedia([
+    clip.mediaKey,
+    clip.renderedKey,
+    clip.coverKey,
+    ...dropped.flatMap((compilation) => [compilation.mediaKey, compilation.coverKey]),
+  ]) } catch (error) {
     console.error('[blob:delete-clip]', String(error?.message || error).slice(0, 300))
   }
   for (const f of [
@@ -1141,6 +1175,9 @@ app.delete('/api/clips/:id', async (req, res) => {
     path.join(COVERS, `${clip.id}-render.jpg`),
     path.join(EXPORTS, `${clip.id}.mp4`),
   ]) { if (f) try { fs.unlinkSync(f) } catch {} }
+  if (dropped.length) {
+    for (const compilation of dropped) removeCompilationFiles(compilation.id)
+  }
   ok(res, { ok: true })
 })
 

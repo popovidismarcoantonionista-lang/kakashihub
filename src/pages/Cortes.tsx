@@ -60,6 +60,7 @@ export function CortesPage() {
       await api('/api/compilations', { method: 'POST', body: JSON.stringify({ clipIds: picked, aspect: longAspect }) })
       setLongOpen(false)
     } catch (e: any) {
+      window.alert(friendlyMessage(e?.message))
     } finally {
       setBuilding(false)
     }
@@ -70,6 +71,7 @@ export function CortesPage() {
     try {
       await api(`/api/compilations/${comp.id}`, { method: 'DELETE' })
     } catch (e: any) {
+      window.alert(friendlyMessage(e?.message))
     } finally {
       setRemovingComp('')
     }
@@ -92,6 +94,7 @@ export function CortesPage() {
       setAddTarget(null)
       setAddPicked([])
     } catch (e: any) {
+      window.alert(friendlyMessage(e?.message))
     } finally {
       setAdding(false)
     }
