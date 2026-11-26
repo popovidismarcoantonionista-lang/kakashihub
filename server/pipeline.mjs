@@ -2121,7 +2121,10 @@ export async function runRender(clipId, opts = {}) {
     const renderSettings = getState().settings || {}
     const xracing = renderSettings.xracing === true
     const xracingStyle = xracing && (clip.style === 'xracing' || Boolean(clip.replay))
-    const wantCaptions = renderSettings.captions === true || xracing
+    // Se a fonte já trouxer VTT, o vídeo já tem legenda: não queimamos texto
+    // extra no corte (evita duplicar/sobrepor legendas).
+    const sourceHasVtt = Boolean(await findSubFile(clip.sourceId))
+    const wantCaptions = !sourceHasVtt && (renderSettings.captions === true || xracing)
     const wantWatermark = renderSettings.watermark === true
     const wantBgBlur = renderSettings.bgBlur === true || xracing
     const wantFaceBlur = renderSettings.faceBlur === true
