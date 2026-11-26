@@ -130,7 +130,10 @@ export async function resumePendingJobs() {
       const payload = job.kind === 'compile'
         ? { compilationId: job.compilationId }
         : isIngest ? { sourceId: job.sourceId } : { clipId: job.clipId }
-      await withStore(() => startProcessJob(job.kind, payload, {
+      // O kind salvo no store é o de execução (compile). O workflow espera o
+      // kind lógico (compilation), senão cai no "tipo não suportado".
+      const logicalKind = job.kind === 'compile' ? 'compilation' : job.kind
+      await withStore(() => startProcessJob(logicalKind, payload, {
         id: job.id,
         sourceId: job.sourceId,
         clipId: job.clipId,
