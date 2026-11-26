@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import {
   AlertTriangle, Check, Download, Film, Filter, Link2, Play, Plus, Scissors, Trash2, Zap,
 } from 'lucide-react'
-import { friendlyMessage, useApp } from '../store'
+import { assetUrl, friendlyMessage, useApp } from '../store'
 import { navigate } from '../router'
 import { ClipCard, ClipPlayer, PlayerModal } from '../components'
 import { Cover, EmptyState, Logo, Modal, PageHead, ProgressBar, Select, StatCard, Switch } from '../ui'
@@ -641,7 +641,7 @@ export function CortesPage() {
         }
       >
         {playingComp && (
-          <video className="player-video" src={playingComp.url} poster={playingComp.cover} controls autoPlay playsInline />
+          <video className="player-video" src={assetUrl(playingComp.url)} poster={assetUrl(playingComp.cover)} controls autoPlay playsInline />
         )}
       </PlayerModal>
     </div>

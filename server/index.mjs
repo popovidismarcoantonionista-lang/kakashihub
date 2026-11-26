@@ -1,12 +1,11 @@
 import express from 'express'
 import { sql } from 'drizzle-orm'
-import { handleUpload } from '@vercel/blob/client'
 import fs from 'node:fs'
 import path from 'node:path'
-import { Readable } from 'node:stream'
 import crypto from 'node:crypto'
 import {
   COVERS,
+  DATA,
   EXPORTS,
   MEDIA,
   SRC_MEDIA,
@@ -21,7 +20,7 @@ import {
   saveJobs,
   storeMiddleware,
 } from './store.mjs'
-import { blobMediaExists, blobStorageEnabled, deleteBlobMedia, getPrivateBlob, storeLocalFile } from './media-store.mjs'
+import { blobStorageEnabled, deleteBlobMedia, ensureLocalMedia, storeLocalFile } from './media-store.mjs'
 import {
   OUTPUT_SIZES, clipFrame, detectCamBoxForClip, detectCamBoxForLive, fetchChannelVideos,
   getLiveHlsUrl, isLiveRunning, liveCapabilities, liveFrame,
@@ -73,23 +72,29 @@ const PUBLIC_GET_PATHS = new Set([
   '/api/state', '/api/jobs', '/api/radar', '/api/connections', '/api/videos/search',
 ])
 const PUBLIC_ORIGINS = new Set(['https://kakashiclipes.netlify.app'])
+const PUBLIC_MEDIA_RE = /^\/(?:media|covers)\//
 const DOWNLOAD_FILE_RE = /^\/api\/downloads\/[^/]+\/file\.mp4$/
 const DOWNLOAD_WRITE_RE = /^\/api\/downloads\/(?:prepare|[^/]+\/(?:upload|finalize))$/
+// Upload de fonte vai direto ao container (IP do visitante) em partes, para
+// não depender do proxy do Netlify nem de token do Vercel Blob no navegador.
+const SOURCE_UPLOAD_RE = /^\/api\/sources\/(?:upload|upload-chunk|upload-complete)$/
 
 app.use((req, res, next) => {
   const origin = String(req.get('origin') || '')
   const publicRead = PUBLIC_GET_PATHS.has(req.path)
+  const publicMedia = PUBLIC_MEDIA_RE.test(req.path)
   const downloadFile = DOWNLOAD_FILE_RE.test(req.path)
   const downloadWrite = DOWNLOAD_WRITE_RE.test(req.path)
-  const direct = (req.method === 'GET' && publicRead)
-    || ((req.method === 'GET' || req.method === 'HEAD') && downloadFile)
-    || (req.method === 'POST' && downloadWrite)
-    || (req.method === 'OPTIONS' && (publicRead || downloadFile || downloadWrite))
+  const sourceUpload = SOURCE_UPLOAD_RE.test(req.path)
+  const direct = (req.method === 'GET' && (publicRead || publicMedia))
+    || ((req.method === 'GET' || req.method === 'HEAD') && (downloadFile || publicMedia))
+    || (req.method === 'POST' && (downloadWrite || sourceUpload))
+    || (req.method === 'OPTIONS' && (publicRead || downloadFile || downloadWrite || publicMedia || sourceUpload))
   if (direct) {
     if (PUBLIC_ORIGINS.has(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin)
       res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS')
-      res.setHeader('Access-Control-Allow-Headers', 'Accept, Content-Type, Range')
+      res.setHeader('Access-Control-Allow-Headers', 'Accept, Content-Type, Range, x-upload-token')
       res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Range, Accept-Ranges')
       res.setHeader('Access-Control-Max-Age', '600')
       res.setHeader('Vary', 'Origin')
@@ -119,7 +124,19 @@ app.use('/api', (req, res, next) => {
 })
 
 const UPLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024
+const UPLOAD_CHUNK = 4 * 1024 * 1024
+const UPLOAD_PARTS = path.join(DATA, 'uploads')
+fs.mkdirSync(UPLOAD_PARTS, { recursive: true })
 const UPLOAD_EXTS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi'])
+
+function uploadPartDir(sourceId) {
+  return path.join(UPLOAD_PARTS, path.basename(String(sourceId || '')).replace(/[^\w-]/g, '_'))
+}
+
+function expectedPartSize(source, part) {
+  const totalBytes = Number(source?.upload?.size || 0)
+  return Math.max(0, Math.min(UPLOAD_CHUNK, totalBytes - part * UPLOAD_CHUNK))
+}
 
 function uploadTitle(raw) {
   const clean = path.basename(String(raw || 'video.mp4'))
@@ -138,35 +155,25 @@ app.use('/media', express.static(MEDIA, { maxAge: 0 }))
 function ok(res, data = {}) { res.set('Cache-Control', 'no-store'); res.json(data) }
 function fail(res, status, message, extra) { res.set('Cache-Control', 'no-store'); res.status(status).json({ error: message, ...(extra || {}) }) }
 
-async function servePrivateMedia(req, res, next, prefix) {
+// O disco local é cache de leitura; se o arquivo não estiver nele, buscamos no
+// Netlify Blobs uma vez e gravamos no cache. express.sendFile já resolve Range,
+// ETag e Content-Length, então o navegador continua fazendo seek normalmente.
+async function serveCachedMedia(req, res, next, prefix) {
   try {
     const pathname = `${prefix}/${String(req.params[0] || '')}`
-    const result = await getPrivateBlob(pathname, req.headers)
-    if (!result) return next()
-    if (result.statusCode === 304) {
-      res.set('ETag', result.blob.etag).set('Cache-Control', 'private, no-cache')
-      return res.status(304).end()
-    }
-    const contentRange = result.headers.get('content-range')
-    res.status(contentRange ? 206 : 200)
-      .set('Content-Type', result.blob.contentType)
-      .set('ETag', result.blob.etag)
-      .set('Accept-Ranges', 'bytes')
-      .set('Cache-Control', 'private, no-cache')
-    if (contentRange) res.set('Content-Range', contentRange)
-    const contentLength = result.headers.get('content-length')
-    if (contentLength) res.set('Content-Length', contentLength)
-    else if (!contentRange) res.set('Content-Length', String(result.blob.size))
-    Readable.fromWeb(result.stream).on('error', next).pipe(res)
+    const file = await ensureLocalMedia(pathname, null, path.basename(pathname))
+    if (!file) return next()
+    res.set('Cache-Control', 'private, no-cache')
+    return res.sendFile(file)
   } catch (error) {
-    if (error?.statusCode === 404) return res.status(404).end()
-    console.error('[blob:read]', String(error?.message || error).slice(0, 300))
+    if (error?.message === 'arquivo-inexistente' || error?.statusCode === 404) return res.status(404).end()
+    console.error('[blobs:read]', String(error?.message || error).slice(0, 300))
     fail(res, 502, 'Não foi possível carregar este arquivo agora.')
   }
 }
 
-app.get('/media/*', (req, res, next) => servePrivateMedia(req, res, next, 'media'))
-app.get('/covers/*', (req, res, next) => servePrivateMedia(req, res, next, 'covers'))
+app.get('/media/*', (req, res, next) => serveCachedMedia(req, res, next, 'media'))
+app.get('/covers/*', (req, res, next) => serveCachedMedia(req, res, next, 'covers'))
 
 app.get('/api/health', async (req, res) => {
   let downloader = 'off'
@@ -196,6 +203,7 @@ app.get('/api/health', async (req, res) => {
     downloader,
     storage: {
       blob: blobStorageEnabled(),
+      provider: 'netlify-blobs',
       database: Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL),
       dbProbe,
     },
@@ -215,10 +223,13 @@ app.get('/api/radar', async (req, res) => {
 app.get('/api/state', (req, res) => {
   const state = getState()
   const sources = state.sources.map((s) => {
-    // liveLastError é diagnóstico interno (pode conter detalhe de stream/proxy).
-    const { liveLastError: _ignored, ...publicSource } = s
+    // liveLastError e o token de upload são diagnóstico/credencial interna.
+    const { liveLastError: _ignored, upload: uploadInfo, ...publicSource } = s
+    const upload = uploadInfo ? { ...uploadInfo } : uploadInfo
+    if (upload) delete upload.token
     return {
       ...publicSource,
+      ...(upload ? { upload } : {}),
       hasMedia: s.mode === 'live'
         ? (state.clips || []).some((c) => c.sourceId === s.id && Boolean(c.mediaKey || c.media || liveMediaFile(c)))
         : Boolean(s.mediaKey) || fs.existsSync(path.join(SRC_MEDIA, `${s.id}.mp4`)),
@@ -510,9 +521,8 @@ app.post('/api/sources', async (req, res) => {
   res.status(202).json({ sources: created })
 })
 
-// O Blob fica fora do Vercel, então o callback automático de upload não é
-// configurado. O navegador avisa que o arquivo chegou; estas funções são
-// idempotentes para não iniciar dois jobs se o callback também acontecer.
+// O upload termina no próprio container e o navegador avisa que todas as partes
+// chegaram. Esta função é idempotente para não iniciar dois jobs de ingestão.
 function finishSourceUpload(source, mediaKey) {
   if (source.uploaded) return false
   source.mediaKey = mediaKey
@@ -551,6 +561,7 @@ app.post('/api/sources/upload', (req, res) => {
 
   const id = `src-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
   const title = uploadTitle(name)
+  const token = crypto.randomBytes(24).toString('hex')
   const source = {
     id,
     title,
@@ -565,55 +576,94 @@ app.post('/api/sources/upload', (req, res) => {
     uploaded: false,
     uploading: true,
     url: '',
-    upload: { name, size, type },
+    upload: { name, size, type, token, chunkSize: UPLOAD_CHUNK },
   }
   getState().sources.unshift(source)
   addActivity('agent', `Vídeo enviado para análise · ${title}`)
   save()
-  ok(res, { source })
+  ok(res, {
+    source,
+    upload: { token, chunkSize: UPLOAD_CHUNK, totalParts: Math.ceil(size / UPLOAD_CHUNK) },
+  })
 })
 
-app.post('/api/sources/upload-token', async (req, res) => {
+// Cada parte é gravada com índice explícito: um retry de rede não duplica
+// bytes. O token curto só é conhecido pelo navegador que iniciou o upload.
+app.post('/api/sources/upload-chunk', async (req, res) => {
+  const source = findSource(String(req.query.sourceId || ''))
+  const token = String(req.get('x-upload-token') || '')
+  if (!source || !source.uploading || !source.upload?.token || token !== source.upload.token) {
+    return fail(res, 403, 'Este upload não está mais ativo.')
+  }
+  const part = Number(req.query.part)
+  const total = Math.ceil(Number(source.upload.size || 0) / UPLOAD_CHUNK)
+  const expected = expectedPartSize(source, part)
+  if (!Number.isInteger(part) || part < 0 || part >= total || expected <= 0) {
+    return fail(res, 400, 'Parte de upload inválida.')
+  }
+  const dir = uploadPartDir(source.id)
+  const target = path.join(dir, `${String(part).padStart(6, '0')}.part`)
   try {
-    const result = await handleUpload({
-      request: req,
-      body: req.body,
-      onBeforeGenerateToken: async (pathname, clientPayload) => {
-        let payload
-        try { payload = JSON.parse(clientPayload || '{}') } catch { throw new Error('Dados de upload inválidos.') }
-        const source = findSource(String(payload.sourceId || ''))
-        if (!source?.uploading) throw new Error('Este upload não está mais ativo.')
-        if (pathname !== `media/src/${source.id}.mp4`) throw new Error('Caminho de upload inválido.')
-        return {
-          allowedContentTypes: ['video/mp4', 'video/quicktime', 'video/x-m4v', 'video/webm', 'video/x-matroska', 'video/x-msvideo', 'video/avi', 'application/octet-stream'],
-          maximumSizeInBytes: UPLOAD_MAX_BYTES,
-          validUntil: Date.now() + 30 * 60 * 1000,
-          addRandomSuffix: false,
-          allowOverwrite: true,
-          tokenPayload: JSON.stringify({ sourceId: source.id }),
-        }
-      },
-      // Sem callbackUrl pública o aviso do Blob só sujava o log do Render.
-      // O navegador chama /api/sources/upload-complete depois do upload.
-    })
-    ok(res, result)
+    fs.mkdirSync(dir, { recursive: true })
+    if (fs.existsSync(target) && fs.statSync(target).size === expected) {
+      return ok(res, { ok: true, part, cached: true })
+    }
+    const chunks = []
+    let bytes = 0
+    for await (const chunk of req) {
+      bytes += chunk.length
+      if (bytes > expected + 1024 * 1024) return fail(res, 413, 'Parte maior que o esperado.')
+      chunks.push(chunk)
+    }
+    if (bytes !== expected) return fail(res, 400, 'Parte incompleta. Envie novamente.')
+    const temp = `${target}.${crypto.randomUUID()}.part`
+    fs.writeFileSync(temp, Buffer.concat(chunks), { flag: 'wx' })
+    fs.renameSync(temp, target)
+    ok(res, { ok: true, part, size: bytes })
   } catch (error) {
-    console.error('[blob:upload]', String(error?.message || error).slice(0, 300))
-    fail(res, 400, error?.message || 'Não foi possível concluir o upload.')
+    console.error('[upload:chunk]', String(error?.message || error).slice(0, 240))
+    fail(res, 400, 'Não foi possível receber esta parte. Tente novamente.')
   }
 })
 
 app.post('/api/sources/upload-complete', async (req, res) => {
+  const source = findSource(String(req.body?.sourceId || ''))
+  const token = String(req.body?.token || '')
+  if (!source || !source.uploading || !source.upload?.token || token !== source.upload.token) {
+    return fail(res, 403, 'Este upload não está mais ativo.')
+  }
+  const size = Number(source.upload.size || 0)
+  const total = Math.ceil(size / UPLOAD_CHUNK)
+  const dir = uploadPartDir(source.id)
+  const finalPath = path.join(SRC_MEDIA, `${path.basename(source.id)}.mp4`)
+  const tempPath = `${finalPath}.${crypto.randomUUID()}.part`
+  let output = null
   try {
-    const source = findSource(String(req.body?.sourceId || ''))
-    if (!source || !source.uploading) return fail(res, 400, 'Este upload não está mais ativo.')
+    output = fs.createWriteStream(tempPath, { flags: 'wx' })
+    let written = 0
+    for (let part = 0; part < total; part += 1) {
+      const partPath = path.join(dir, `${String(part).padStart(6, '0')}.part`)
+      if (!fs.existsSync(partPath)) throw new Error('parte-faltando')
+      const chunk = fs.readFileSync(partPath)
+      if (chunk.length !== expectedPartSize(source, part)) throw new Error('parte-incompleta')
+      output.write(chunk)
+      written += chunk.length
+    }
+    if (written !== size) throw new Error('tamanho-diferente')
+    await new Promise((resolve, reject) => output.end((error) => error ? reject(error) : resolve()))
+    output = null
+    fs.renameSync(tempPath, finalPath)
+
     const mediaKey = `media/src/${source.id}.mp4`
-    if (!(await blobMediaExists(mediaKey))) return fail(res, 400, 'O arquivo ainda não chegou. Tente reenviar.')
+    await storeLocalFile(finalPath, mediaKey, source.upload.type || 'video/mp4')
     if (finishSourceUpload(source, mediaKey)) await startSourceIngest(source)
+    fs.rmSync(dir, { recursive: true, force: true })
     ok(res, { ok: true })
   } catch (error) {
-    console.error('[blob:complete]', String(error?.message || error).slice(0, 300))
-    fail(res, 400, error?.message || 'Não foi possível concluir o upload.')
+    try { output?.destroy() } catch {}
+    fs.rmSync(tempPath, { force: true })
+    console.error('[upload:complete]', String(error?.message || error).slice(0, 300))
+    fail(res, 400, 'Não foi possível concluir o upload. Tente reenviar.')
   }
 })
 

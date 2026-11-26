@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Check, ChevronDown, X } from 'lucide-react'
 import type { ClipType } from './types'
+import { assetUrl } from './store'
 
 export function Logo({ size = 30, className = '' }: { size?: number; className?: string }) {
   const tomoe = 'M 0 -3 C 3 -3 5 -1 5 1.4 C 5 3.2 3.6 4.4 2 4.2 C 2.6 2.8 2.4 1.4 1.6 0.4 C 0.8 -0.6 -0.6 -1 -2 -0.6 Z'
@@ -262,7 +263,7 @@ export function Cover({ src, alt, className = '' }: { src: string; alt: string; 
   const [failed, setFailed] = useState(false)
   useEffect(() => setFailed(false), [src])
   if (!src || failed) return <div className={`cover-fallback ${className}`} aria-label={alt}><Logo size={28} /></div>
-  return <img className={className} src={src} alt={alt} loading="lazy" onError={() => setFailed(true)} />
+  return <img className={className} src={assetUrl(src)} alt={alt} loading="lazy" onError={() => setFailed(true)} />
 }
 
 export function Dot({ tone = 'green', pulse = false }: { tone?: string; pulse?: boolean }) {

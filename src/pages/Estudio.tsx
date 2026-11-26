@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   Check, Clapperboard, Crop, Download, Play, Scissors,
 } from 'lucide-react'
-import { friendlyMessage, useApp } from '../store'
+import { assetUrl, friendlyMessage, useApp } from '../store'
 import { CamBoxCanvas } from '../CamBoxCanvas'
 import { navigate, useRoute } from '../router'
 import { Preview } from '../components'
@@ -468,7 +468,7 @@ export function EstudioPage() {
                   {!clip.renderedUrl && !clip.media && source.hasMedia && (
                     <a
                       className="btn btn-ghost w-full"
-                      href={`/media/src/${source.id}.mp4`}
+                      href={assetUrl(`/media/src/${source.id}.mp4`)}
                       download={`${source.id}.mp4`}
                     >
                       <Download size={14} /> Baixar vídeo original
@@ -726,7 +726,7 @@ function TimelineCanvas({
                 onClick={() => onSelect(c.id)}
               >
                 <div className="sc-thumb">
-                  <img src={c.cover} alt={c.hook} loading="lazy" />
+                  <img src={assetUrl(c.cover)} alt={c.hook} loading="lazy" />
                   <span className="sc-num">{String(i + 1).padStart(2, '0')}</span>
                   <span className="sc-dur mono">{Math.round(c.end - c.start)}s</span>
                 </div>

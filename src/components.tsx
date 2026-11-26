@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowUpRight, Frame, Pause, Play, Radio, Sparkles, Youtube } from 'lucide-react'
 import type { Clip, Source } from './types'
 import { fmtRange, fmtTime } from './lib/format'
+import { assetUrl } from './store'
 import { Cover, Modal, ScoreRing, StagePill, TypeBadge } from './ui'
 
 export function ClipCard({ clip, source, onOpen, onPlay }: { clip: Clip; source?: Source; onOpen: () => void; onPlay?: () => void }) {
@@ -74,7 +75,7 @@ export function ClipPlayer({ clip, source }: { clip: Clip; source?: Source }) {
   const [failed, setFailed] = useState(false)
   const live = Boolean(clip.media)
   const raw = !clip.renderedUrl && !live && source?.hasMedia ? `/media/src/${source.id}.mp4` : null
-  const src = clip.renderedUrl || clip.media || raw
+  const src = assetUrl(clip.renderedUrl || clip.media || raw)
 
   if (!src || failed) {
     return (
@@ -91,7 +92,7 @@ export function ClipPlayer({ clip, source }: { clip: Clip; source?: Source }) {
       ref={ref}
       className="player-video"
       src={src}
-      poster={clip.cover}
+      poster={assetUrl(clip.cover)}
       controls
       autoPlay
       playsInline
@@ -128,7 +129,7 @@ export function Preview({ clip, source, compact = false, aspect = '9:16' }: {
   const rawSrc = liveSrc || (source?.hasMedia ? `/media/src/${source.id}.mp4` : null)
   const from = liveSrc ? 0 : clip.start
   const plain = rendered || Boolean(liveSrc)
-  const src = clip.renderedUrl || rawSrc
+  const src = assetUrl(clip.renderedUrl || rawSrc)
   const videoRef = useRef<HTMLVideoElement>(null)
   const gameRef = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying] = useState(false)

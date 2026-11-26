@@ -3,7 +3,7 @@ import {
   AlertTriangle, Clapperboard, Crop, Download,
   Play, Plus, Radio, Search, Square, Trash2, UploadCloud, Youtube,
 } from 'lucide-react'
-import { DIRECT_API, RATE_LIMIT_MESSAGE, friendlyMessage, publicGet, publicPost, useApp } from '../store'
+import { DIRECT_API, RATE_LIMIT_MESSAGE, assetUrl, friendlyMessage, publicGet, publicPost, useApp } from '../store'
 import { CamBoxCanvas } from '../CamBoxCanvas'
 import { navigate } from '../router'
 import { PlayerModal } from '../components'
@@ -972,7 +972,7 @@ export function VideosPage() {
           <>
             <a
               className="btn btn-ghost"
-              href={watching ? `/media/src/${watching.id}.mp4` : undefined}
+              href={watching ? assetUrl(`/media/src/${watching.id}.mp4`) : undefined}
               download={watching ? `${watching.id}.mp4` : undefined}
             >
               <Download size={14} /> Baixar vídeo
@@ -985,8 +985,8 @@ export function VideosPage() {
         {watching && (
           <video
             className="player-video"
-            src={`/media/src/${watching.id}.mp4`}
-            poster={watching.thumb}
+            src={assetUrl(`/media/src/${watching.id}.mp4`)}
+            poster={assetUrl(watching.thumb)}
             controls
             autoPlay
             playsInline

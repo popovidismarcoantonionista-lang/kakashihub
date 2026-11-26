@@ -3,7 +3,7 @@ import {
   AudioLines, Check, CheckCircle2, Clapperboard, Crop, Download, ImagePlus, Lightbulb,
   Scissors, Sparkles, Trash2, UploadCloud, Youtube,
 } from 'lucide-react'
-import { friendlyMessage, useApp } from '../store'
+import { assetUrl, friendlyMessage, useApp } from '../store'
 import { navigate } from '../router'
 import { PageHead, ProgressBar, Switch } from '../ui'
 import { relTime } from '../lib/format'
@@ -255,7 +255,7 @@ export function IAPage() {
                 <div className="logo-preview">
                   {state.project?.logo?.url ? (
                     <img
-                      src={state.project.logo.url}
+                      src={assetUrl(state.project.logo.url)}
                       alt="Logo do canal"
                       style={{
                         position: 'absolute',

@@ -5,6 +5,7 @@ import app from './index.mjs'
 import { withStore, closeOrphanWork, getState, save, sweepStaleJobs } from './store.mjs'
 import { startLiveWorkflow, resumePendingJobs, recoverLiveWorkflows } from './jobs.mjs'
 import { cleanupPreparedDownloads } from './download-prep.mjs'
+import { blobStorageEnabled, syncLocalMediaToBlobs } from './media-store.mjs'
 import { isIgnoredSource } from './work-gate.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -75,4 +76,13 @@ resumeTimer.unref?.()
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`[server] Kakashi Hub ouvindo em 0.0.0.0:${port}`)
+  // Migração/idempotência: sobe para o Netlify Blobs os arquivos que já estão
+  // no disco do container. Roda em background para não atrasar o boot.
+  if (blobStorageEnabled()) {
+    setImmediate(() => {
+      syncLocalMediaToBlobs()
+        .then((stats) => console.log('[blobs:sync]', JSON.stringify(stats)))
+        .catch((error) => console.warn('[blobs:sync]', String(error?.message || error).slice(0, 200)))
+    })
+  }
 })

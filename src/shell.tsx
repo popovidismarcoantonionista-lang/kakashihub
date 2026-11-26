@@ -1,10 +1,9 @@
-import { upload } from '@vercel/blob/client'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bell, Clapperboard, Plus, Radio, Scissors,
   Search, Settings2, Sparkles, UploadCloud, Youtube, ChevronRight, X,
 } from 'lucide-react'
-import { publicGet, useApp } from './store'
+import { DIRECT_API, directPost, publicGet, useApp } from './store'
 import { navigate, useRoute } from './router'
 import { Logo, Modal, Dot } from './ui'
 import { todayLabel } from './lib/format'
@@ -208,24 +207,40 @@ function IngestModal() {
     setUploadProgress(0)
     setError('')
     try {
-      const { source } = await api('/api/sources/upload', {
+      const { source, upload } = await directPost('/api/sources/upload', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: file.name, size: file.size, type: file.type }),
       })
-      await upload(`media/src/${source.id}.mp4`, file, {
-        // O store do Blob é público; access 'private' é recusado pelo Vercel.
-        access: 'public',
-        handleUploadUrl: '/api/sources/upload-token',
-        clientPayload: JSON.stringify({ sourceId: source.id }),
-        contentType: file.type || 'video/mp4',
-        multipart: file.size >= 100 * 1024 * 1024,
-        onUploadProgress: ({ percentage }) => setUploadProgress(percentage),
-      })
+      const chunkSize = Number(upload?.chunkSize) || 4 * 1024 * 1024
+      const totalParts = Math.max(1, Math.ceil(file.size / chunkSize))
+      for (let part = 0; part < totalParts; part += 1) {
+        const start = part * chunkSize
+        const chunk = file.slice(start, Math.min(file.size, start + chunkSize))
+        const res = await fetch(
+          `${DIRECT_API}/api/sources/upload-chunk?sourceId=${encodeURIComponent(source.id)}&part=${part}`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/octet-stream',
+              'x-upload-token': String(upload.token),
+            },
+            body: chunk,
+          },
+        )
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data?.error || 'Não foi possível enviar este pedaço do vídeo.')
+        }
+        setUploadProgress(Math.round(((part + 1) / totalParts) * 95))
+      }
       try {
-        await api('/api/sources/upload-complete', {
+        await directPost('/api/sources/upload-complete', {
           method: 'POST',
-          body: JSON.stringify({ sourceId: source.id }),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceId: source.id, token: upload.token }),
         })
+        setUploadProgress(100)
       } catch (error) {
         // Uma falha transitória ao persistir não pode virar erro na tela se o
         // servidor já iniciou a análise: o job está na fila e vai aparecer.

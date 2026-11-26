@@ -67,6 +67,29 @@ export async function publicGet(path: string): Promise<Response> {
   return fetch(path, { cache: 'no-store' })
 }
 
+// Mídia do próprio app sai direto do container: evita o limite de requisições
+// do proxy e não consome créditos de banda do Netlify.
+export function assetUrl(value: string | undefined | null): string {
+  const src = String(value || '')
+  if (src.startsWith('/media/') || src.startsWith('/covers/')) return `${DIRECT_API}${src}`
+  return src
+}
+
+// Escritas do fluxo de upload também vão direto ao container, mas sem retry
+// automático: uma parte reenviada é idempotente pelo índice no servidor.
+export async function directPost(path: string, init: RequestInit = {}): Promise<any> {
+  const res = await fetch(`${DIRECT_API}${path}`, {
+    ...init,
+    method: String(init.method || 'POST').toUpperCase(),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    if (res.status === 429) throw new Error(RATE_LIMIT_MESSAGE)
+    throw new Error(friendlyMessage(data?.error))
+  }
+  return data
+}
+
 export async function publicPost(path: string, init: RequestInit = {}): Promise<Response> {
   const options: RequestInit = { ...init, method: String(init.method || 'POST').toUpperCase() }
   try {
