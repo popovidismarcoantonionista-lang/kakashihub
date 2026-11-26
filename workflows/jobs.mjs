@@ -7,7 +7,14 @@ import {
   sourceBecameLiveStep,
   startLiveWorkflowStep,
 } from './steps.mjs'
-import { beginHeavyWork, endHeavyWork, runHeavyExclusive, waitForLiveRecording } from '../server/work-gate.mjs'
+import {
+  beginHeavyWork,
+  endHeavyWork,
+  markJobQueued,
+  runHeavyExclusive,
+  unmarkJobQueued,
+  waitForLiveRecording,
+} from '../server/work-gate.mjs'
 
 // `use workflow` / `sleep` do SDK exigem um build Nitro/Next. Aqui as funções
 // são orquestrações comuns executadas por server/background.mjs no mesmo
@@ -21,6 +28,7 @@ export async function processJobWorkflow(kind, payload) {
     || kind === 'ingest' || kind === 'analyze'
 
   const execute = async () => {
+    unmarkJobQueued(payload.jobId)
     if (heavy) {
       beginHeavyWork()
       await waitForLiveRecording()
@@ -41,7 +49,9 @@ export async function processJobWorkflow(kind, payload) {
 
   // Um job pesado por vez. Sem a fila, dois renders rodavam juntos, estouravam
   // RAM/CPU no Render free e o processo reiniciava com o corte pela metade.
-  return heavy ? runHeavyExclusive(execute) : execute()
+  if (!heavy) return execute()
+  markJobQueued(payload.jobId)
+  return runHeavyExclusive(execute)
 }
 
 export async function liveMonitorWorkflow(sourceId) {

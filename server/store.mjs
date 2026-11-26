@@ -8,6 +8,7 @@ import { db } from './db.mjs'
 import { fugaJobs, fugaState } from './schema.mjs'
 import { seedState } from './seed.mjs'
 import { isPortugueseCaptionText, portugueseHookOrDefault } from './pt-text.mjs'
+import { isJobQueued } from './work-gate.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const ROOT = path.resolve(__dirname, '..')
@@ -653,7 +654,7 @@ export function closeOrphanWork() {
   const now = new Date().toISOString()
   const context = contextStorage.getStore()
   const allJobs = stateScope().jobs
-  const retryableKinds = new Set(['render', 'compile'])
+  const retryableKinds = new Set(['render', 'compile', 'ingest', 'analyze'])
   for (const job of allJobs) {
     if (job.status === 'running') {
       // Se outro job para o mesmo alvo já concluiu depois deste começar, este
@@ -689,6 +690,11 @@ export function closeOrphanWork() {
     const file = path.join(DATA, String(rel).replace(/^\/+/, ''))
     try { return fs.existsSync(file) && fs.statSync(file).size > 1024 } catch { return false }
   }
+  const pendingSourceIds = new Set(
+    stateScope().jobs
+      .filter((job) => job.status === 'pendente' && job.retryPending && job.sourceId)
+      .map((job) => job.sourceId),
+  )
   const state = getState()
   for (const source of state.sources) {
     // Um deploy/restart não deve encerrar uma transmissão que ainda está no ar.
@@ -702,10 +708,15 @@ export function closeOrphanWork() {
       delete source.liveEndedAt
       delete source.liveJobId
     } else if (source.status === 'processando') {
-      source.status = 'erro'
-      source.error = 'Não foi possível concluir. Tente novamente.'
-      if (source.mode === 'live') source.liveStopRequested = true
-      if (source.uploading) source.uploading = false
+      if (pendingSourceIds.has(source.id)) {
+        // O job será retomado pelo start.mjs; a fonte continua em análise.
+        source.error = null
+      } else {
+        source.status = 'erro'
+        source.error = 'Não foi possível concluir. Tente novamente.'
+        if (source.mode === 'live') source.liveStopRequested = true
+        if (source.uploading) source.uploading = false
+      }
     }
     if (source.hasMedia && !source.mediaKey
       && !mediaFileExists(`media/src/${source.id}.mp4`)
@@ -762,7 +773,9 @@ export function sweepStaleJobs() {
       && ((job.clipId && other.clipId === job.clipId)
         || (job.compilationId && other.compilationId === job.compilationId))
       && Date.parse(other.finishedAt || 0) > (Number.isFinite(started) ? started : 0))
-    if (!aged && !superseded) continue
+    // Está apenas esperando a fila exclusiva; não é job órfão. Um trabalho
+    // substituído por execução mais recente ainda deve ser encerrado.
+    if (!superseded && (isJobQueued(job.id) || !aged)) continue
     Object.assign(job, {
       status: 'erro',
       error: superseded

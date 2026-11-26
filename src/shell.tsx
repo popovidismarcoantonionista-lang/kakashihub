@@ -221,10 +221,20 @@ function IngestModal() {
         multipart: file.size >= 100 * 1024 * 1024,
         onUploadProgress: ({ percentage }) => setUploadProgress(percentage),
       })
-      await api('/api/sources/upload-complete', {
-        method: 'POST',
-        body: JSON.stringify({ sourceId: source.id }),
-      })
+      try {
+        await api('/api/sources/upload-complete', {
+          method: 'POST',
+          body: JSON.stringify({ sourceId: source.id }),
+        })
+      } catch (error) {
+        // Uma falha transitória ao persistir não pode virar erro na tela se o
+        // servidor já iniciou a análise: o job está na fila e vai aparecer.
+        const fresh = await fetch('/api/state', { cache: 'no-store' })
+          .then((res) => res.json()).catch(() => null)
+        const started = fresh?.sources?.some((item: { id: string; status: string }) =>
+          item.id === source.id && ['processando', 'pronto'].includes(item.status))
+        if (!started) throw error
+      }
       await refresh()
       setIngestOpen(false)
       setFile(null)

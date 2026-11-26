@@ -16,7 +16,14 @@ const JOB_TYPES = {
 
 export async function startProcessJob(kind, payload, metadata = {}) {
   const job = createJob(JOB_TYPES[kind] || kind, metadata)
-  await flushStore()
+  // O job já existe em memória. Uma falha transitória do Postgres aqui não
+  // pode impedir o processamento nem fazer a API responder erro para o front
+  // (o upload-complete, por exemplo, mostraria "Não foi possível concluir").
+  try {
+    await flushStore()
+  } catch (error) {
+    console.error('[jobs] falha ao antecipar persistência:', String(error?.message || error).slice(0, 300))
+  }
   const runId = runBackground('job', processJobWorkflow, [kind, { ...payload, jobId: job.id }])
   job.workflowRunId = runId
   saveJobs()
@@ -113,13 +120,16 @@ export async function resumePendingJobs() {
     if (busy) return 0
     const pending = jobs.filter((job) => job.status === 'pendente'
       && job.retryPending === true
-      && ['render', 'compile'].includes(job.kind))
+      && ['render', 'compile', 'ingest', 'analyze'].includes(job.kind))
     for (const job of pending) {
-      const targetId = job.kind === 'compile' ? job.compilationId : job.clipId
+      const isIngest = job.kind === 'ingest' || job.kind === 'analyze'
+      const targetId = job.kind === 'compile'
+        ? job.compilationId
+        : isIngest ? job.sourceId : job.clipId
       if (!targetId) continue
       const payload = job.kind === 'compile'
         ? { compilationId: job.compilationId }
-        : { clipId: job.clipId }
+        : isIngest ? { sourceId: job.sourceId } : { clipId: job.clipId }
       await withStore(() => startProcessJob(job.kind, payload, {
         id: job.id,
         sourceId: job.sourceId,

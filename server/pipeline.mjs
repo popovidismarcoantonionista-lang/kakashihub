@@ -34,8 +34,17 @@ const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const PYHOST_DIR = path.join(APP_ROOT, '.pyhost')
 const FFMPEG_LOCAL_BIN = path.join(APP_ROOT, '.bin', 'ffmpeg')
 const FFPROBE_LOCAL_BIN = path.join(APP_ROOT, '.bin', 'ffprobe')
-const FFMPEG_BIN = process.env.FFMPEG_BIN || (fs.existsSync(FFMPEG_LOCAL_BIN) ? FFMPEG_LOCAL_BIN : 'ffmpeg')
-const FFPROBE_BIN = process.env.FFPROBE_BIN || (fs.existsSync(FFPROBE_LOCAL_BIN) ? FFPROBE_LOCAL_BIN : 'ffprobe')
+// No container do Render o ffmpeg vem do apt. Resolver o caminho absoluto
+// evita `spawn ffmpeg ENOENT` quando o PATH do processo muda após um restart.
+const systemBinary = (name) => [
+  `/usr/bin/${name}`,
+  `/usr/local/bin/${name}`,
+  `/bin/${name}`,
+].find((candidate) => fs.existsSync(candidate))
+const FFMPEG_BIN = process.env.FFMPEG_BIN
+  || (fs.existsSync(FFMPEG_LOCAL_BIN) ? FFMPEG_LOCAL_BIN : systemBinary('ffmpeg') || 'ffmpeg')
+const FFPROBE_BIN = process.env.FFPROBE_BIN
+  || (fs.existsSync(FFPROBE_LOCAL_BIN) ? FFPROBE_LOCAL_BIN : systemBinary('ffprobe') || 'ffprobe')
 const YTDLP_BIN = process.env.YTDLP_BIN || path.join(APP_ROOT, '.bin', 'yt-dlp')
 // Render free tem ~512 MB de RAM. Renderizar 4K vertical com split + blur +
 // legendas estoura o processo e derruba o estado. Por padrão, limitamos a 720p
@@ -209,6 +218,11 @@ function norm(text) {
 
 function run(cmd, args, opts = {}) {
   return new Promise((resolve, reject) => {
+    // Um restart pode apagar /tmp entre a criação do job e o spawn; recriar o
+    // cwd aqui evita `spawn ENOENT` em plena renderização.
+    if (opts.cwd) {
+      try { fs.mkdirSync(opts.cwd, { recursive: true }) } catch {}
+    }
     const child = spawn(cmd, args, { windowsHide: true, cwd: opts.cwd, env: opts.env || process.env })
     const binary = opts.encoding === 'buffer'
     const outChunks = []
@@ -2723,7 +2737,13 @@ export async function runCompilation(compilationId, opts = {}) {
     comp.finishedAt = new Date().toISOString()
     addActivity('render', `Vídeo longo "${comp.title}" pronto com ${clips.length} cortes`)
     save()
-    await flushStore()
+    // O arquivo já está pronto; uma queda transitória do Postgres aqui não
+    // pode transformar a compilação concluída em erro.
+    try {
+      await flushStore()
+    } catch (error) {
+      console.warn('[compile-flush]', String(error?.message || error).slice(0, 200))
+    }
     updateJob(job, { progress: 99, step: 'Vídeo longo finalizado' })
     finishJob(job)
     fs.rmSync(work, { recursive: true, force: true })
