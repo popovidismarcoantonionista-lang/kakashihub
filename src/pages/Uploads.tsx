@@ -266,7 +266,7 @@ export function UploadsPage() {
                     || (state?.compilations || []).find((c) => c.id === u.compilationId)
                   const cover = clip?.cover || comp?.cover || ''
                   const duration = clip ? `${Math.round(clip.end - clip.start)}s` : comp ? clock(comp.duration) : ''
-                  const kind = clip ? 'Corte 9:16' : comp ? 'Vídeo longo 16:9' : 'Vídeo removido'
+                  const kind = clip ? `Corte ${clip.aspect || '9:16'}` : comp ? `Vídeo longo ${comp.aspect || '16:9'}` : 'Vídeo removido'
                   return (
                     <tr key={u.id}>
                       <td data-label="Vídeo">
@@ -367,7 +367,7 @@ export function UploadsPage() {
               disabled={!comps.length}
               onClick={() => setForm({ ...form, target: 'longo' })}
             >
-              Vídeo longo 16:9
+              Vídeo longo
             </button>
           </div>
           {form.target === 'corte' ? (

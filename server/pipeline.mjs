@@ -2094,9 +2094,11 @@ export async function runRender(clipId, opts = {}) {
   try {
     updateJob(job, { progress: 8, step: 'Preparando o corte' })
     const out = path.join(EXPORTS, `${clip.id}.mp4`)
-    // Perseguição tem corte dedicado: 9:16 ou 16:9, sempre sem caixa de crop.
+    // Qualquer corte pode sair em 16:9. Nesse formato o quadro inteiro é
+    // mantido: sem caixa de crop, sem split e sem enquadramento automático.
     const chase = clip.type === 'perseguicao'
-    const aspect = chase && clip.aspect === '16:9' ? '16:9' : '9:16'
+    const wide = clip.aspect === '16:9'
+    const aspect = wide ? '16:9' : '9:16'
     const size = renderSize(aspect)
     const gta = !chase && (clip.niche === 'gta' || getState().settings?.niche === 'gta')
     // Texto no vídeo só se o usuário ligar explicitamente nas configurações.
@@ -2137,7 +2139,11 @@ export async function runRender(clipId, opts = {}) {
       : []
     updateJob(job, { progress: 22, step: 'Calculando o enquadramento' })
     let cam = clip.cam || source?.cam || null
-    const wantsSplit = !chase && (gta || clip.framing === 'cam' || clip.framing === 'auto' || !clip.framing)
+    // `framing` é só o enquadramento desta renderização. O 16:9 e a perseguição
+    // nunca devem sobrescrever a preferência salva: voltando para 9:16, a caixa
+    // manual da webcam continua sendo a fonte da verdade.
+    let framing = clip.framing || (gta ? 'cam' : 'auto')
+    const wantsSplit = !wide && !chase && (gta || framing === 'cam' || framing === 'auto')
     if (!cam && wantsSplit) {
       updateJob(job, { progress: 26, step: 'Localizando a webcam' })
       const spanSec = Math.max(1, clip.end - clip.start)
@@ -2147,19 +2153,20 @@ export async function runRender(clipId, opts = {}) {
       clip.cam = cam
     }
     const split = wantsSplit && cam && cam.w >= 0.05 && cam.h >= 0.05
-    if (split && clip.framing !== 'cam') clip.framing = 'cam'
-    if (gta) clip.framing = 'cam'
+    if (split && framing !== 'cam') framing = 'cam'
+    if (gta) framing = 'cam'
     // Sem webcam detectada, o estilo pede o fundo desfocado em vez do crop seco.
-    if (wantBgBlur && !split) clip.framing = 'preencher'
-    // Mesmo com blur/fundo ligado nos settings, perseguição não usa caixa nem split.
-    if (chase) clip.framing = 'centro'
+    if (wantBgBlur && !split && !wide) framing = 'preencher'
+    // Nem perseguição nem cortes em 16:9 usam caixa, split ou crop manual.
+    if (chase || wide) framing = 'centro'
+    if (!wide && !chase) clip.framing = framing
     let frac = 0.5
     if (!split) {
-      if (clip.framing === 'auto') {
+      if (framing === 'auto') {
         if (typeof clip.framingBias === 'number' && clip.framingBias !== 0.5) frac = clip.framingBias
         else frac = await computeFraming(src, from, from + (clip.end - clip.start))
-      } else if (clip.framing === 'esquerda') frac = 0.05
-      else if (clip.framing === 'direita') frac = 0.95
+      } else if (framing === 'esquerda') frac = 0.05
+      else if (framing === 'direita') frac = 0.95
     }
     clip.framingBias = frac
 
@@ -2175,7 +2182,7 @@ export async function runRender(clipId, opts = {}) {
       : []
     let vf = ''
     let filterComplex = null
-    if (chase && aspect === '16:9') {
+    if (wide) {
       // Sem crop e sem caixa: mantém o quadro inteiro e só completa com barra
       // preta quando a proporção do vídeo não é exatamente 16:9.
       vf = `scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1`
@@ -2202,7 +2209,7 @@ export async function runRender(clipId, opts = {}) {
         + `[cambgf][camfgf]overlay=(W-w)/2:(H-h)/2,setsar=1[ct];`
         + `[gamef]scale=${outW}:${bandH}:flags=${camFlags}:force_original_aspect_ratio=increase,crop=${outW}:${bandH},setsar=1[gt];`
         + `[ct][gt]vstack=2,setsar=1[vout]`
-    } else if (clip.framing === 'preencher') {
+    } else if (framing === 'preencher') {
       filterComplex = '[0:v]split=2[bgs][fgs];'
         + `[bgs]scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH},gblur=sigma=${blur}[bg];`
         + `[fgs]scale=${outW}:-2:flags=lanczos[fg];`
@@ -2222,7 +2229,7 @@ export async function runRender(clipId, opts = {}) {
       filterComplex = faceFc + (filterComplex ? filterComplex.replace(/\[0:v\]/g, '[fblurred]') : `[fblurred]${vf}[vout]`)
       vf = ''
     }
-    const renderStep = chase ? `${aspect} · ${sizeLabel(size)}` : gta ? `Split GTA · ${sizeLabel(size)}` : split ? `Split · ${sizeLabel(size)}` : `9:16 · ${sizeLabel(size)}`
+    const renderStep = wide ? `16:9 · ${sizeLabel(size)}` : gta ? `Split GTA · ${sizeLabel(size)}` : split ? `Split · ${sizeLabel(size)}` : `9:16 · ${sizeLabel(size)}`
     updateJob(job, {
       progress: 34,
       step: replay ? `${renderStep} · replay ${replay.speed}x` : renderStep,
@@ -2601,6 +2608,15 @@ export async function runCompilation(compilationId, opts = {}) {
     fs.mkdirSync(work, { recursive: true })
 
     updateJob(job, { progress: 5, step: 'Preparando os blocos' })
+    // O formato escolhido na tela de vídeo longo vale para toda a junção.
+    const aspect = comp.aspect === '9:16' ? '9:16' : '16:9'
+    const outW = aspect === '9:16' ? 720 : 1280
+    const outH = aspect === '9:16' ? 1280 : 720
+    // 16:9 mantém o quadro inteiro (com barra preta se precisar); 9:16 preenche
+    // o vertical cortando só as laterais, sem deixar faixas enormes em cima.
+    const vf = aspect === '9:16'
+      ? `scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH},fps=30,setsar=1`
+      : `scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2:color=black,fps=30,setsar=1`
     const parts = []
     let total = 0
 
@@ -2619,7 +2635,6 @@ export async function runCompilation(compilationId, opts = {}) {
       updateJob(job, { progress: step, step: `Montando bloco ${i + 1} de ${clips.length}` })
       comp.progress = step
       save()
-      const vf = 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=30,setsar=1'
       await run(FFMPEG_BIN, [
         '-y', '-hide_banner', '-loglevel', 'error',
         ...(LIGHT_RENDER ? ['-threads', '1', '-filter_threads', '1'] : []),

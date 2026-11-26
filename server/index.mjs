@@ -886,9 +886,11 @@ app.post('/api/compilations', async (req, res) => {
   const title = String(req.body?.title || '').trim().slice(0, 80) ||
     `Compilado · ${new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}`
   const duration = Math.round(clips.reduce((a, c) => a + (c.end - c.start), 0) + 7)
+  const aspect = req.body?.aspect === '9:16' ? '9:16' : '16:9'
   const comp = {
     id,
     title,
+    aspect,
     clipIds: clips.map((c) => c.id),
     duration,
     status: 'processando',
@@ -973,9 +975,7 @@ app.patch('/api/clips/:id', (req, res) => {
   for (const key of allowed) {
     if (req.body[key] !== undefined) clip[key] = req.body[key]
   }
-  if (clip.type === 'perseguicao') {
-    clip.aspect = clip.aspect === '16:9' ? '16:9' : '9:16'
-  }
+  clip.aspect = clip.aspect === '16:9' ? '16:9' : '9:16'
   if (typeof clip.contextCaption === 'string') clip.contextCaption = clip.contextCaption.slice(0, 180)
   // Números vindo do Estúdio precisam ser sanitizados antes de virarem ffmpeg.
   const num = (v) => {

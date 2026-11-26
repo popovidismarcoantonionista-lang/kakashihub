@@ -121,6 +121,7 @@ export interface Connection {
 export interface Compilation {
   id: string
   title: string
+  aspect?: '9:16' | '16:9'
   clipIds: string[]
   duration: number
   status: 'processando' | 'pronto' | 'erro'

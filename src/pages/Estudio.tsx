@@ -56,9 +56,10 @@ export function EstudioPage() {
   const apiRef = useRef(api)
   apiRef.current = api
   const games = state?.settings?.niche === 'games'
-  // Perseguição tem corte próprio: 9:16 ou 16:9, sempre sem caixa de crop.
+  // Qualquer corte pode sair em 9:16 ou 16:9. A caixa manual continua valendo
+  // só no vertical; no horizontal o quadro inteiro é mantido.
   const chase = clip?.type === 'perseguicao'
-  const aspect: '9:16' | '16:9' = chase && clip?.aspect === '16:9' ? '16:9' : '9:16'
+  const aspect: '9:16' | '16:9' = clip?.aspect === '16:9' ? '16:9' : '9:16'
   // Depende dos valores, não da identidade do objeto: o refresh periódico troca
   // a referência de clip.cam e clobberaria o ajuste manual a cada 1,4s.
   const camSig = clip?.cam
@@ -269,7 +270,7 @@ export function EstudioPage() {
                 <span className="agent-ico"><Crop size={14} /></span>
                 <div>
                   <b>Enquadramento</b>
-                  <em>{chase ? `Sem caixa · ${aspect}` : (FRAMING_LABEL[clip.framing] || 'Split')}</em>
+                  <em>{aspect === '16:9' || chase ? `Sem caixa · ${aspect}` : (FRAMING_LABEL[clip.framing] || 'Split')}</em>
                 </div>
                 <span className="agent-state">pronto</span>
               </div>
@@ -293,27 +294,25 @@ export function EstudioPage() {
 
             {clip.style === 'xracing' && <XracingEditor clip={clip} patchClip={patchClip} />}
 
-            {chase ? (
-              <>
-                <label className="field-label">Formato do corte</label>
-                <div className="segmented small">
-                  {(['9:16', '16:9'] as const).map((a) => (
-                    <button
-                      key={a}
-                      className={aspect === a ? 'active' : ''}
-                      onClick={() => patchClip({ aspect: a, framing: 'centro' })}
-                    >
-                      {a}
-                    </button>
-                  ))}
-                </div>
-                <span className="cam-hint">
-                  Sem caixa de crop: {aspect === '16:9'
-                    ? 'o quadro inteiro é mantido, sem cortar as laterais.'
-                    : 'o centro do quadro é enquadrado em vertical, sem caixa manual.'}
-                </span>
-              </>
-            ) : (
+            <label className="field-label">Formato do corte</label>
+            <div className="segmented small">
+              {(['9:16', '16:9'] as const).map((a) => (
+                <button
+                  key={a}
+                  className={aspect === a ? 'active' : ''}
+                  onClick={() => patchClip({ aspect: a })}
+                >
+                  {a}
+                </button>
+              ))}
+            </div>
+            {aspect === '16:9' && (
+              <span className="cam-hint">
+                Sem caixa de crop: o quadro inteiro é mantido, sem cortar as laterais.
+              </span>
+            )}
+
+            {aspect === '9:16' && !chase ? (
               <>
                 <label className="field-label">Enquadramento</label>
                 {games ? (
@@ -359,7 +358,11 @@ export function EstudioPage() {
                   </div>
                 )}
               </>
-            )}
+            ) : aspect === '9:16' && chase ? (
+              <span className="cam-hint">
+                Sem caixa de crop: o centro do quadro é enquadrado em vertical, sem caixa manual.
+              </span>
+            ) : null}
 
             <label className="field-label">Gancho do corte</label>
             <textarea

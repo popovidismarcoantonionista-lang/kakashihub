@@ -178,6 +178,7 @@ function normalizeState(value) {
     const hook = portugueseHookOrDefault(clip.hook, clip.type, clip.niche)
     return {
       ...clip,
+      aspect: clip.aspect === '16:9' ? '16:9' : '9:16',
       hook,
       description: isPortugueseCaptionText(clip.description) ? clip.description : hook,
       contextCaption: isPortugueseCaptionText(clip.contextCaption) ? clip.contextCaption : '',
@@ -185,9 +186,11 @@ function normalizeState(value) {
       captionLines: ptLines(clip.captionLines),
     }
   }) : []
+  state.compilations = Array.isArray(state.compilations) ? state.compilations.map((comp) => (
+    isObject(comp) ? { ...comp, aspect: comp.aspect === '9:16' ? '9:16' : '16:9' } : comp
+  )) : []
   state.uploads = Array.isArray(state.uploads) ? state.uploads : []
   state.activity = Array.isArray(state.activity) ? state.activity : []
-  state.compilations = Array.isArray(state.compilations) ? state.compilations : []
   state.connections = isObject(state.connections) ? state.connections : {}
   state.oauthPending = isObject(state.oauthPending) ? state.oauthPending : {}
   return state

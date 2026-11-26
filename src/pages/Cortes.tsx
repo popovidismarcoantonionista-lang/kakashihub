@@ -16,6 +16,7 @@ export function CortesPage() {
   const [type, setType] = useState<'todos' | ClipType>('todos')
   const [sort, setSort] = useState<'score' | 'recentes' | 'duracao'>('score')
   const [longOpen, setLongOpen] = useState(false)
+  const [longAspect, setLongAspect] = useState<'9:16' | '16:9'>('16:9')
   const [picked, setPicked] = useState<string[]>([])
   const [building, setBuilding] = useState(false)
   const [removingComp, setRemovingComp] = useState('')
@@ -56,7 +57,7 @@ export function CortesPage() {
     if (picked.length < 2) return
     setBuilding(true)
     try {
-      await api('/api/compilations', { method: 'POST', body: JSON.stringify({ clipIds: picked }) })
+      await api('/api/compilations', { method: 'POST', body: JSON.stringify({ clipIds: picked, aspect: longAspect }) })
       setLongOpen(false)
     } catch (e: any) {
     } finally {
@@ -153,7 +154,7 @@ export function CortesPage() {
                     )}
                   </div>
                   <div className="longo-body">
-                    <div className="longo-meta mono">{comp.clipIds.length} CORTES · 16:9</div>
+                    <div className="longo-meta mono">{comp.clipIds.length} CORTES · {comp.aspect || '16:9'}</div>
                     <h3>{comp.title}</h3>
                     {comp.error && <div className="src-error"><AlertTriangle size={13} /> {comp.error}</div>}
                     <div className="longo-actions">
@@ -260,7 +261,7 @@ export function CortesPage() {
       <Modal
         open={longOpen}
         onClose={() => setLongOpen(false)}
-        kicker="VÍDEO LONGO · 16:9"
+        kicker={`VÍDEO LONGO · ${longAspect}`}
         title="Montar vídeo longo"
         width={700}
         footer={
@@ -273,6 +274,18 @@ export function CortesPage() {
           </>
         }
       >
+        <label className="field-label">Formato do vídeo longo</label>
+        <div className="segmented small">
+          {(['16:9', '9:16'] as const).map((a) => (
+            <button
+              key={a}
+              className={longAspect === a ? 'active' : ''}
+              onClick={() => setLongAspect(a)}
+            >
+              {a}
+            </button>
+          ))}
+        </div>
         <div className="pick-tools">
           <span className="mono">{clips.length} CORTES DISPONÍVEIS</span>
           <button
@@ -307,7 +320,7 @@ export function CortesPage() {
       <Modal
         open={Boolean(addTarget)}
         onClose={() => { setAddTarget(null); setAddPicked([]) }}
-        kicker="VÍDEO LONGO · 16:9"
+        kicker={`VÍDEO LONGO · ${addTarget?.aspect || '16:9'}`}
         title="Adicionar cortes ao vídeo longo"
         width={700}
         footer={
@@ -389,7 +402,7 @@ export function CortesPage() {
       <PlayerModal
         open={Boolean(playingComp)}
         onClose={() => setPlayingComp(null)}
-        kicker="PLAYER · 16:9"
+        kicker={`PLAYER · ${playingComp?.aspect || '16:9'}`}
         title={playingComp?.title || 'Vídeo longo'}
         subtitle={playingComp ? `${playingComp.clipIds.length} cortes · ${fmtTime(playingComp.duration)}` : ''}
         width={880}
