@@ -12,6 +12,7 @@ RUN apt-get update \
      libcairo2 libpango-1.0-0 libjpeg62-turbo libgif7 librsvg2-2 libpixman-1-0 \
   && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production \
+    PORT=10000 \
     PYTHON=python3 \
     FUGA_COOKIES=/app/cookies.txt \
     YOUTUBE_API_KEY="" \
