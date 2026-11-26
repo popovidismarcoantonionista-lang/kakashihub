@@ -12,6 +12,7 @@ export function ClipCard({ clip, source, onOpen, onPlay }: { clip: Clip; source?
         <div className="clip-grad" />
         <div className="clip-top">
           <TypeBadge type={clip.type} />
+          <span className="chip chip-glass">{clip.aspect || '9:16'}</span>
           <ScoreRing score={clip.score} size={36} />
         </div>
         <button

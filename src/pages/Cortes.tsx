@@ -379,10 +379,10 @@ export function CortesPage() {
       <PlayerModal
         open={Boolean(watching)}
         onClose={() => setWatching(null)}
-        kicker="PLAYER · 9:16"
+        kicker={`PLAYER · ${watching?.aspect || '9:16'}`}
         title={watching?.hook || 'Assistir corte'}
         subtitle={watching ? `${CLIP_TYPES.find((t) => t.key === watching.type)?.label || 'Corte'} · ${fmtTime(watching.start)}–${fmtTime(watching.end)}${watching.live ? ' da live' : ''}` : ''}
-        width={400}
+        width={watching?.aspect === '16:9' ? 880 : 400}
         footer={
           <>
             <div className="grow" />
