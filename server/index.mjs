@@ -203,7 +203,7 @@ const NICHE_LABELS = {
   geral: 'Geral · Melhores momentos',
 }
 
-const BOOLEAN_SETTINGS = ['autoApprove', 'captions', 'watermark', 'xracing', 'bgBlur', 'faceBlur']
+const BOOLEAN_SETTINGS = ['autoApprove', 'captions', 'watermark', 'xracing', 'bgBlur', 'faceBlur', 'muteAudio']
 const FRAMINGS = new Set(['auto', 'preencher', 'cam', 'centro', 'esquerda', 'direita'])
 const FORMATS = new Set(['9:16', '16:9'])
 
@@ -602,6 +602,38 @@ app.post('/api/sources/:id/analyze', async (req, res) => {
   source.workflowRunId = runId
   save()
   ok(res, { ok: true })
+})
+
+// Auto-cortes: a análise sugere os momentos e, quando termina, a workflow
+// enfileira os melhores cortes na fila exclusiva de renderização.
+app.post('/api/sources/:id/auto-cortes', async (req, res) => {
+  const state = getState()
+  const source = findSource(req.params.id)
+  if (!source) return fail(res, 404, 'Fonte não encontrada.')
+  if (isIgnoredSource(source.id)) return fail(res, 400, 'Esta fonte não pode ser reprocessada.')
+  if (!source.url && !source.uploaded) return fail(res, 400, 'Conecte um link ou envie um vídeo para criar cortes automáticos.')
+  if (getJobs().some((j) => ['running', 'pendente'].includes(j.status) && j.sourceId === source.id)) {
+    return fail(res, 409, 'Esta fonte já está sendo processada.')
+  }
+  const aspect = req.body?.aspect === '16:9' ? '16:9' : '9:16'
+  const limit = Math.min(40, Math.max(1, Math.round(Number(req.body?.limit) || 12)))
+  const style = {}
+  if (req.body?.muteAudio !== undefined) style.muteAudio = asBool(req.body.muteAudio)
+  if (req.body?.bgBlur !== undefined) style.bgBlur = asBool(req.body.bgBlur)
+  if (Object.keys(style).length) {
+    state.settings = { ...(state.settings || {}), ...style }
+  }
+  source.status = 'processando'
+  source.progress = 2
+  source.error = null
+  save()
+  const { runId } = await startProcessJob('analyze', {
+    sourceId: source.id,
+    autoRender: { aspect, limit, muteAudio: asBool(req.body?.muteAudio) },
+  }, { sourceId: source.id })
+  source.workflowRunId = runId
+  save()
+  ok(res, { ok: true, aspect, limit })
 })
 
 app.patch('/api/sources/:id', (req, res) => {
@@ -1207,6 +1239,15 @@ app.post('/api/clips/render-many', async (req, res) => {
   if (ids.length > 40) return fail(res, 400, 'Use até 40 cortes por lote.')
 
   const aspect = req.body?.aspect === '16:9' ? '16:9' : '9:16'
+  const state = getState()
+  const style = {}
+  if (req.body?.muteAudio !== undefined) style.muteAudio = asBool(req.body.muteAudio)
+  if (req.body?.bgBlur !== undefined) style.bgBlur = asBool(req.body.bgBlur)
+  if (Object.keys(style).length) {
+    state.settings = { ...(state.settings || {}), ...style }
+    save()
+  }
+  const muteAudio = asBool(req.body?.muteAudio)
   const jobs = getJobs().filter((j) => ['running', 'pendente'].includes(j.status))
   const busy = new Set(jobs.map((j) => j.clipId).filter(Boolean))
   const queued = []
@@ -1242,7 +1283,7 @@ app.post('/api/clips/render-many', async (req, res) => {
   for (const clip of queued) {
     const { runId } = await startProcessJob(
       'render',
-      { clipId: clip.id },
+      { clipId: clip.id, ...(muteAudio ? { muteAudio: true } : {}) },
       { clipId: clip.id, sourceId: clip.sourceId },
       { flush: false },
     )

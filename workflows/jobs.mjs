@@ -17,11 +17,57 @@ import {
   unmarkJobQueued,
   waitForLiveRecording,
 } from '../server/work-gate.mjs'
+import { runBackground } from '../server/background.mjs'
+import {
+  addActivity,
+  createJob,
+  findClip,
+  flushStore,
+  save,
+  saveJobs,
+  withStore,
+} from '../server/store.mjs'
 
 // `use workflow` / `sleep` do SDK exigem um build Nitro/Next. Aqui as funções
 // são orquestrações comuns executadas por server/background.mjs no mesmo
 // processo do Express (modelo de deploy do Render).
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// Depois da análise, os cortes sugeridos entram na mesma fila exclusiva dos
+// renders manuais. Nada roda em paralelo: o runHeavyExclusive abaixo recebe os
+// novos jobs enquanto o job de análise ainda está concluindo.
+async function enqueueAutoRenders(clips, options) {
+  return withStore(async () => {
+    const aspect = options?.aspect === '16:9' ? '16:9' : '9:16'
+    const limit = Math.min(40, Math.max(1, Number(options?.limit) || 12))
+    const list = (Array.isArray(clips) ? clips : [])
+      .filter((clip) => clip && findClip(clip.id))
+      .slice(0, limit)
+    if (!list.length) return 0
+    const started = []
+    for (const item of list) {
+      const clip = findClip(item.id)
+      clip.aspect = aspect
+      const job = createJob('render', { clipId: clip.id, sourceId: clip.sourceId })
+      const runId = runBackground('job', processJobWorkflow, ['render', {
+        clipId: clip.id,
+        jobId: job.id,
+        ...(options?.muteAudio === true ? { muteAudio: true } : {}),
+      }])
+      job.workflowRunId = runId
+      started.push(runId)
+    }
+    addActivity('agent', `${started.length} cortes enfileirados automaticamente em ${aspect}`)
+    save()
+    saveJobs()
+    try {
+      await flushStore()
+    } catch (error) {
+      console.error('[auto-cortes] falha transitória ao persistir fila:', String(error?.message || error).slice(0, 300))
+    }
+    return started.length
+  })
+}
 
 export async function processJobWorkflow(kind, payload) {
   // Render/trim/compilação e análise de vídeo não podem concorrer com a gravação
@@ -42,6 +88,9 @@ export async function processJobWorkflow(kind, payload) {
       // Pode ter sido cancelado enquanto esperava a fila ou a gravação da live.
       if (isJobCancelled(payload.jobId)) return { status: 'cancelado' }
       const result = await processJobStep(kind, payload)
+      if (kind === 'analyze' && payload.autoRender && Array.isArray(result)) {
+        await enqueueAutoRenders(result, payload.autoRender)
+      }
       if (kind === 'analyze' && await sourceBecameLiveStep(payload.sourceId)) {
         await startLiveWorkflowStep(payload.sourceId)
       }

@@ -19,6 +19,7 @@ export function seedState() {
       xracing: false,
       bgBlur: false,
       faceBlur: false,
+      muteAudio: false,
       agents: {
         radar: true,
         momentos: true,

@@ -2149,6 +2149,9 @@ export async function runRender(clipId, opts = {}) {
     const wantWatermark = renderSettings.watermark === true
     const wantBgBlur = renderSettings.bgBlur === true || xracing
     const wantFaceBlur = renderSettings.faceBlur === true
+    // Estilo "fundo blur sem áudio": o override do lote vale mais que a
+    // preferência global, mas o padrão continua mantendo a faixa original.
+    const wantAudio = opts.muteAudio === true ? false : renderSettings.muteAudio !== true
     const ptContext = (value) => (isPortugueseCaptionText(value) ? cleanContextText(value) : '')
     const contextText = xracing
       ? (ptContext(clip.contextCaption) || ptContext(parseCreditCaption(source?.description, from)) || ptContext(clip.hook))
@@ -2273,7 +2276,7 @@ export async function runRender(clipId, opts = {}) {
       filterComplex = faceFc + (filterComplex ? filterComplex.replace(/\[0:v\]/g, '[fblurred]') : `[fblurred]${vf}[vout]`)
       vf = ''
     }
-    const renderStep = wide ? `16:9 · ${sizeLabel(size)}` : gta ? `Split GTA · ${sizeLabel(size)}` : split ? `Split · ${sizeLabel(size)}` : `9:16 · ${sizeLabel(size)}`
+    const renderStep = (wide ? `16:9 · ${sizeLabel(size)}` : gta ? `Split GTA · ${sizeLabel(size)}` : split ? `Split · ${sizeLabel(size)}` : `9:16 · ${sizeLabel(size)}`) + (wantAudio ? '' : ' · sem áudio')
     updateJob(job, {
       progress: 34,
       step: replay ? `${renderStep} · replay ${replay.speed}x` : renderStep,
@@ -2284,7 +2287,7 @@ export async function runRender(clipId, opts = {}) {
     const rstart = replay ? Math.round((replay.start - from) * 100) / 100 : 0
     const rend = replay ? Math.round((replay.end - from) * 100) / 100 : 0
     let audioGraph = ''
-    if (replay) {
+    if (wantAudio && replay) {
       const bleepOn = (r) => r
         .map((b) => {
           const s = Math.max(0, Math.round((b.start - from) * 100) / 100)
@@ -2307,8 +2310,8 @@ export async function runRender(clipId, opts = {}) {
         + `${bleepReplay.length ? `,${bleepReplay.join(',')}` : ''},apad,atrim=0:${replayLen}[a1];`
         + `[a0][a1]concat=n=2:v=0:a=1${loud}[aout]`
     }
-    const audioMap = replay ? ['-map', '[aout]'] : ['-map', audioSpec]
-    const withAudio = (graph) => replay ? `${graph}${audioGraph}` : graph
+    const audioMap = !wantAudio ? [] : replay ? ['-map', '[aout]'] : ['-map', audioSpec]
+    const withAudio = (graph) => wantAudio && replay ? `${graph}${audioGraph}` : graph
     const ass = wantCaptions
       ? buildCaptionAss(clip, outDuration, outW, outH, gta, wantWatermark, contextText, xracingStyle)
       : null
@@ -2414,10 +2417,10 @@ export async function runRender(clipId, opts = {}) {
         '-crf', '20',
         '-pix_fmt', 'yuv420p',
         ...(LIGHT_RENDER ? ['-r', '30'] : []),
-        '-c:a', 'aac', '-b:a', '160k', '-ar', '48000',
+        ...(wantAudio ? ['-c:a', 'aac', '-b:a', '160k', '-ar', '48000'] : ['-an']),
         // No replay o loudnorm já está dentro do grafo de áudio; usar -af junto
         // com o map do concat conflita e derruba o render.
-        ...(LIGHT_RENDER || replay ? [] : ['-af', 'loudnorm=I=-14:TP=-1.5:LRA=11']),
+        ...(wantAudio && !LIGHT_RENDER && !replay ? ['-af', 'loudnorm=I=-14:TP=-1.5:LRA=11'] : []),
         '-max_muxing_queue_size', '256',
         '-movflags', '+faststart',
         ...(replay ? ['-t', String(outDuration)] : ['-shortest']),

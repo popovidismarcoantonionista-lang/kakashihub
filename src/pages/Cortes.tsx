@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react'
 import {
-  AlertTriangle, Check, Download, Film, Filter, Link2, Play, Plus, Scissors, Trash2,
+  AlertTriangle, Check, Download, Film, Filter, Link2, Play, Plus, Scissors, Trash2, Zap,
 } from 'lucide-react'
 import { friendlyMessage, useApp } from '../store'
 import { navigate } from '../router'
 import { ClipCard, ClipPlayer, PlayerModal } from '../components'
-import { Cover, EmptyState, Logo, Modal, PageHead, ProgressBar, Select, StatCard } from '../ui'
+import { Cover, EmptyState, Logo, Modal, PageHead, ProgressBar, Select, StatCard, Switch } from '../ui'
 import { fmtTime } from '../lib/format'
 import { CLIP_TYPES } from '../types'
 import type { Clip, ClipType, Compilation } from '../types'
@@ -22,6 +22,14 @@ export function CortesPage() {
   const [batchPicked, setBatchPicked] = useState<string[]>([])
   const [batching, setBatching] = useState(false)
   const [batchNotice, setBatchNotice] = useState('')
+  const [exampleStyle, setExampleStyle] = useState(false)
+  const [autoOpen, setAutoOpen] = useState(false)
+  const [autoSourceId, setAutoSourceId] = useState('')
+  const [autoAspect, setAutoAspect] = useState<'9:16' | '16:9'>('9:16')
+  const [autoLimit, setAutoLimit] = useState('12')
+  const [autoStyle, setAutoStyle] = useState(false)
+  const [autoStarting, setAutoStarting] = useState(false)
+  const [autoNotice, setAutoNotice] = useState('')
   const [picked, setPicked] = useState<string[]>([])
   const [building, setBuilding] = useState(false)
   const [removingComp, setRemovingComp] = useState('')
@@ -33,6 +41,8 @@ export function CortesPage() {
 
   const clips = state?.clips || []
   const comps = state?.compilations || []
+  const autoSources = (state?.sources || []).filter((s) =>
+    s.mode !== 'live' && s.status !== 'ao-vivo' && Boolean(s.url || s.uploaded))
   const avg = clips.length ? Math.round(clips.reduce((a, c) => a + (c.end - c.start), 0) / clips.length) : 0
   const best = clips.length ? Math.max(...clips.map((c) => c.score)) : 0
 
@@ -73,6 +83,7 @@ export function CortesPage() {
     const ready = clips.filter((c) => c.stage !== 'rascunho')
     setBatchPicked((ready.length ? ready : clips).map((c) => c.id))
     setBatchAspect(state?.settings?.format === '16:9' ? '16:9' : '9:16')
+    setExampleStyle(Boolean(state?.settings?.bgBlur && state?.settings?.muteAudio))
     setBatchNotice('')
     setBatchOpen(true)
   }
@@ -88,7 +99,12 @@ export function CortesPage() {
     try {
       const data = await api('/api/clips/render-many', {
         method: 'POST',
-        body: JSON.stringify({ clipIds: batchPicked, aspect: batchAspect }),
+        body: JSON.stringify({
+          clipIds: batchPicked,
+          aspect: batchAspect,
+          bgBlur: exampleStyle,
+          muteAudio: exampleStyle,
+        }),
       })
       const queued = Number(data?.queued) || 0
       const skipped = (Number(data?.skippedBusy) || 0) + (Number(data?.skippedMedia) || 0)
@@ -104,6 +120,37 @@ export function CortesPage() {
       setBatchNotice(friendlyMessage(e?.message))
     } finally {
       setBatching(false)
+    }
+  }
+
+  const openAuto = () => {
+    setAutoSourceId(autoSources[0]?.id || '')
+    setAutoAspect(state?.settings?.format === '16:9' ? '16:9' : '9:16')
+    setAutoLimit('12')
+    setAutoStyle(Boolean(state?.settings?.bgBlur && state?.settings?.muteAudio))
+    setAutoNotice('')
+    setAutoOpen(true)
+  }
+
+  const startAuto = async () => {
+    if (!autoSourceId || autoStarting) return
+    setAutoStarting(true)
+    setAutoNotice('')
+    try {
+      await api(`/api/sources/${autoSourceId}/auto-cortes`, {
+        method: 'POST',
+        body: JSON.stringify({
+          aspect: autoAspect,
+          limit: Number(autoLimit),
+          bgBlur: autoStyle,
+          muteAudio: autoStyle,
+        }),
+      })
+      setAutoNotice(`Análise iniciada. Até ${autoLimit} cortes em ${autoAspect} serão enfileirados um por vez ao terminar.`)
+    } catch (e: any) {
+      setAutoNotice(friendlyMessage(e?.message))
+    } finally {
+      setAutoStarting(false)
     }
   }
 
@@ -155,6 +202,9 @@ export function CortesPage() {
         title="Cortes"
         actions={
           <>
+            <button className="btn btn-ghost" onClick={openAuto} disabled={!autoSources.length}>
+              <Zap size={14} /> Auto-cortes
+            </button>
             <button className="btn btn-ghost" onClick={openBatch} disabled={!clips.length}>
               <Scissors size={14} /> Gerar em massa
             </button>
@@ -305,6 +355,65 @@ export function CortesPage() {
       </div>
 
       <Modal
+        open={autoOpen}
+        onClose={() => setAutoOpen(false)}
+        kicker={`AUTO-CORTES · ${autoAspect}`}
+        title="Cortes automáticos"
+        width={560}
+        footer={
+          <>
+            <div className="grow" />
+            <button className="btn btn-ghost" onClick={() => setAutoOpen(false)}>Fechar</button>
+            <button className="btn btn-primary" onClick={startAuto} disabled={!autoSourceId || autoStarting}>
+              {autoStarting ? <Logo size={13} className="btn-spin" /> : <Zap size={14} />} Criar cortes
+            </button>
+          </>
+        }
+      >
+        <label className="field-label">Vídeo de origem</label>
+        <Select
+          value={autoSourceId}
+          onChange={setAutoSourceId}
+          options={autoSources.map((s) => ({
+            value: s.id,
+            label: `${s.title.slice(0, 42)}${s.title.length > 42 ? '…' : ''} · ${s.clips} cortes`,
+          }))}
+        />
+
+        <label className="field-label">Formato dos cortes</label>
+        <div className="segmented small">
+          {(['9:16', '16:9'] as const).map((a) => (
+            <button key={a} className={autoAspect === a ? 'active' : ''} onClick={() => setAutoAspect(a)}>
+              {a}
+            </button>
+          ))}
+        </div>
+
+        <label className="field-label">Quantidade máxima</label>
+        <Select
+          value={autoLimit}
+          onChange={setAutoLimit}
+          options={['8', '12', '20', '40'].map((n) => ({ value: n, label: `${n} cortes` }))}
+        />
+
+        <div className="option-row">
+          <div><b>Estilo do exemplo</b><em>9:16 com fundo desfocado e sem áudio</em></div>
+          <Switch checked={autoStyle} label="Estilo do exemplo" onChange={setAutoStyle} />
+        </div>
+
+        {autoNotice && (
+          <div className="style-note">
+            <AlertTriangle size={13} />
+            <span>{autoNotice}</span>
+          </div>
+        )}
+        <div className="style-note">
+          <Zap size={13} />
+          <span>O vídeo é analisado primeiro. Depois os melhores momentos entram na fila, um por vez.</span>
+        </div>
+      </Modal>
+
+      <Modal
         open={batchOpen}
         onClose={() => setBatchOpen(false)}
         kicker={`FILA AUTOMÁTICA · ${batchAspect}`}
@@ -331,6 +440,10 @@ export function CortesPage() {
               {a}
             </button>
           ))}
+        </div>
+        <div className="option-row">
+          <div><b>Estilo do exemplo</b><em>9:16 com fundo desfocado e sem áudio</em></div>
+          <Switch checked={exampleStyle} label="Estilo do exemplo" onChange={setExampleStyle} />
         </div>
         {batchNotice && (
           <div className="style-note">

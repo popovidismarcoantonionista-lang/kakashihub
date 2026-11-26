@@ -384,6 +384,14 @@ export function IAPage() {
                 onChange={(v) => { void api('/api/settings', { method: 'POST', body: JSON.stringify({ faceBlur: v }) }) }}
               />
             </div>
+            <div className="option-row">
+              <div><b>Cortes sem áudio</b><em>Exporta o vídeo sem faixa de áudio, como o exemplo</em></div>
+              <Switch
+                checked={Boolean(settings?.muteAudio)}
+                label="Cortes sem áudio"
+                onChange={(v) => { void api('/api/settings', { method: 'POST', body: JSON.stringify({ muteAudio: v }) }) }}
+              />
+            </div>
 
             <div className="range-field">
               <div className="rf-head"><span>Duração mínima</span><b className="mono">{draft.clipMin}s</b></div>

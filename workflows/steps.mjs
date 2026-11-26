@@ -17,7 +17,10 @@ export async function processJobStep(kind, payload) {
           jobId: payload.jobId,
         })
       case 'render':
-        return runRender(payload.clipId, { jobId: payload.jobId })
+        return runRender(payload.clipId, {
+          jobId: payload.jobId,
+          ...(payload.muteAudio === true ? { muteAudio: true } : {}),
+        })
       case 'trim': {
         const clip = await runTrim(payload.clipId, payload.start, payload.end, { jobId: payload.jobId })
         await renderTrimmedClipStep(clip.id)

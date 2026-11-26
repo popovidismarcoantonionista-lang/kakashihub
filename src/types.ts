@@ -146,6 +146,7 @@ export interface Settings {
   xracing?: boolean
   bgBlur?: boolean
   faceBlur?: boolean
+  muteAudio?: boolean
   agents: Record<string, boolean>
 }
 
