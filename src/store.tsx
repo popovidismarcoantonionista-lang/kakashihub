@@ -53,8 +53,8 @@ const STATE_CHANNEL = 'kakashihub-state'
 const LAST_FETCH_KEY = 'kakashihub:lastFetchAt'
 const MIN_FETCH_GAP = 2000
 
-// Leituras públicas vão direto ao container (IP do visitante), evitando o IP
-// compartilhado do proxy Netlify. Escritas continuam passando pelo proxy.
+// Leituras e downloads vão direto ao container (IP do visitante), evitando o IP
+// compartilhado do proxy Netlify. Outras escritas continuam passando pelo proxy.
 export const DIRECT_API = 'https://kakashihub-b283a.containers.snapdeploy.app'
 
 export async function publicGet(path: string): Promise<Response> {
@@ -65,6 +65,23 @@ export async function publicGet(path: string): Promise<Response> {
     if (!fallback) return res
   } catch {}
   return fetch(path, { cache: 'no-store' })
+}
+
+export async function publicPost(path: string, init: RequestInit = {}): Promise<Response> {
+  const options: RequestInit = { ...init, method: String(init.method || 'POST').toUpperCase() }
+  try {
+    const res = await fetch(`${DIRECT_API}${path}`, options)
+    // 403 (gate antigo), 429 e 502/503 (container acordando) não chegaram à
+    // rota, então podem repetir no proxy sem duplicar bytes enviados.
+    if (res.status === 403 || res.status === 429 || res.status === 502 || res.status === 503) {
+      return fetch(path, options)
+    }
+    return res
+  } catch {
+    // Não repetimos upload/finalize por erro de rede: a resposta pode ter se
+    // perdido depois do servidor gravar, e o retry duplicaria o arquivo.
+    throw new Error('Não foi possível concluir agora. Tente novamente.')
+  }
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {

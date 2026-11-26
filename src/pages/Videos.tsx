@@ -3,7 +3,7 @@ import {
   AlertTriangle, Clapperboard, Crop, Download,
   Play, Plus, Radio, Search, Square, Trash2, UploadCloud, Youtube,
 } from 'lucide-react'
-import { RATE_LIMIT_MESSAGE, friendlyMessage, publicGet, useApp } from '../store'
+import { DIRECT_API, RATE_LIMIT_MESSAGE, friendlyMessage, publicGet, publicPost, useApp } from '../store'
 import { CamBoxCanvas } from '../CamBoxCanvas'
 import { navigate } from '../router'
 import { PlayerModal } from '../components'
@@ -25,6 +25,14 @@ type RadarItem = {
 }
 
 type RadarData = { ok: boolean; kickOk?: boolean; items: RadarItem[]; liveCount: number }
+
+function rateLimitError(res: Response): string | null {
+  if (res.status !== 429) return null
+  const retry = Number(res.headers.get('retry-after') || 0)
+  return retry > 60
+    ? `Muitas requisições em instantes. Aguarde cerca de ${Math.ceil(retry / 60)} minuto(s) e tente novamente.`
+    : RATE_LIMIT_MESSAGE
+}
 
 type FoundVideo = {
   id: string
@@ -76,11 +84,12 @@ const PROXY_HOSTS = [
 ]
 
 async function requestDownloadSession(url: string, title: string): Promise<DownloadSession> {
-  const res = await fetch('/api/downloads/prepare', {
-    method: 'POST',
+  const res = await publicPost('/api/downloads/prepare', {
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, title }),
   })
+  const limited = rateLimitError(res)
+  if (limited) throw new Error(limited)
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data?.error || 'Não foi possível preparar o download.')
   if (!data?.id || !data?.provider || !data?.videoId) throw new Error('O download não foi iniciado. Tente de novo.')
@@ -162,11 +171,12 @@ async function uploadPart(
       chunk.set(piece, offset)
       offset += piece.length
     }
-    const sent = await fetch(`/api/downloads/${session.id}/upload?part=${part}`, {
-      method: 'POST',
+    const sent = await publicPost(`/api/downloads/${session.id}/upload?part=${part}`, {
       headers: { 'Content-Type': 'application/octet-stream' },
       body: chunk,
     })
+    const limited = rateLimitError(sent)
+    if (limited) throw new Error(limited)
     if (!sent.ok) throw new Error('O envio do vídeo falhou. Tente de novo.')
     pending = []
     pendingSize = 0
@@ -247,8 +257,7 @@ async function requestPreparedDownload(
   report(doneBytes / total)
   await uploadPart(session, 'audio', audio, (received) => report((doneBytes + received) / total))
   report(1)
-  const done = await fetch(`/api/downloads/${session.id}/finalize`, {
-    method: 'POST',
+  const done = await publicPost(`/api/downloads/${session.id}/finalize`, {
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     body: JSON.stringify({
       videoSize: Number(video.clen),
@@ -256,6 +265,8 @@ async function requestPreparedDownload(
       quality: String(video.qualityLabel || ''),
     }),
   })
+  const limited = rateLimitError(done)
+  if (limited) throw new Error(limited)
   const data = await done.json().catch(() => ({}))
   if (!done.ok || !data?.url) throw new Error(data?.error || 'Não foi possível montar o download. Tente de novo.')
   return { url: String(data.url) }
@@ -267,7 +278,7 @@ async function triggerDownload(download: PreparedDownload) {
   const frame = document.createElement('iframe')
   frame.style.display = 'none'
   frame.referrerPolicy = 'no-referrer'
-  frame.src = download.url
+  frame.src = /^https?:\/\//i.test(download.url) ? download.url : `${DIRECT_API}${download.url}`
   document.body.appendChild(frame)
   // Não remover o iframe enquanto o download corre: o stream é lento e
   // removê-lo antes do fim aborta a transferência e o navegador retoma.
@@ -524,12 +535,8 @@ export function VideosPage() {
     setFindError('')
     try {
       const res = await publicGet(`/api/videos/search?q=${encodeURIComponent(q)}`)
-      if (res.status === 429) {
-        const retry = Number(res.headers.get('retry-after') || 0)
-        throw new Error(retry > 60
-          ? `Muitas requisições em instantes. Aguarde cerca de ${Math.ceil(retry / 60)} minuto(s) e tente novamente.`
-          : RATE_LIMIT_MESSAGE)
-      }
+      const limited = rateLimitError(res)
+      if (limited) throw new Error(limited)
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || 'Busca indisponível.')
       setFound(Array.isArray(data.items) ? data.items : [])

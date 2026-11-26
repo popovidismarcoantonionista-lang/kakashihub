@@ -66,20 +66,36 @@ function verifyNetlifySigned(sig, secret) {
   }
 }
 
-// Leituras sem segredos podem vir direto do navegador: o proxy Netlify sai de um
-// IP compartilhado e bate no limite de 100 req/min do domínio do container.
+// O proxy Netlify sai de um IP compartilhado e bate no limite de 100 req/min do
+// domínio do container. Leituras e o fluxo de download (que o navegador faz com
+// o IP do visitante) podem vir direto, sem segredos e só para a origem do site.
 const PUBLIC_GET_PATHS = new Set([
   '/api/state', '/api/jobs', '/api/radar', '/api/connections', '/api/videos/search',
 ])
 const PUBLIC_ORIGINS = new Set(['https://kakashiclipes.netlify.app'])
+const DOWNLOAD_FILE_RE = /^\/api\/downloads\/[^/]+\/file\.mp4$/
+const DOWNLOAD_WRITE_RE = /^\/api\/downloads\/(?:prepare|[^/]+\/(?:upload|finalize))$/
 
 app.use((req, res, next) => {
   const origin = String(req.get('origin') || '')
-  if (req.method === 'GET' && PUBLIC_GET_PATHS.has(req.path) && PUBLIC_ORIGINS.has(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin)
-    res.setHeader('Access-Control-Allow-Methods', 'GET')
-    res.setHeader('Access-Control-Max-Age', '600')
-    res.setHeader('Vary', 'Origin')
+  const publicRead = PUBLIC_GET_PATHS.has(req.path)
+  const downloadFile = DOWNLOAD_FILE_RE.test(req.path)
+  const downloadWrite = DOWNLOAD_WRITE_RE.test(req.path)
+  const direct = (req.method === 'GET' && publicRead)
+    || ((req.method === 'GET' || req.method === 'HEAD') && downloadFile)
+    || (req.method === 'POST' && downloadWrite)
+    || (req.method === 'OPTIONS' && (publicRead || downloadFile || downloadWrite))
+  if (direct) {
+    if (PUBLIC_ORIGINS.has(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin)
+      res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS')
+      res.setHeader('Access-Control-Allow-Headers', 'Accept, Content-Type, Range')
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Range, Accept-Ranges')
+      res.setHeader('Access-Control-Max-Age', '600')
+      res.setHeader('Vary', 'Origin')
+    }
+    // O navegador manda OPTIONS antes do POST com application/json ou octet-stream.
+    if (req.method === 'OPTIONS') return res.status(204).end()
     return next()
   }
   const secret = String(process.env.PROXY_SECRET || '').trim()
