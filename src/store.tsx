@@ -60,8 +60,10 @@ export const DIRECT_API = 'https://kakashihub-b283a.containers.snapdeploy.app'
 export async function publicGet(path: string): Promise<Response> {
   try {
     const res = await fetch(`${DIRECT_API}${path}`, { cache: 'no-store' })
-    // 403 (gate antigo), 429 e 503 (container acordando) ainda podem usar o proxy.
-    const fallback = res.status === 403 || res.status === 429 || res.status >= 500
+    // 403 (gate antigo) e 5xx (container acordando) podem usar o proxy.
+    // 429 NÃO deve cair no proxy: o IP compartilhado do Netlify já está no
+    // limite e isso multiplicaria as requisições em vez de aliviar.
+    const fallback = res.status === 403 || res.status >= 500
     if (!fallback) return res
   } catch {}
   return fetch(path, { cache: 'no-store' })
