@@ -2,7 +2,6 @@
 // depende do store do Vercel (suspenso por limite de banda). O container mantém
 // uma cópia local em DATA para leitura rápida e para não pagar egress de novo a
 // cada reprodução. As URLs brutas do Blob nunca são expostas ao front.
-import { getStore } from '@netlify/blobs'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -19,7 +18,7 @@ const TOKEN = String(
 ).trim()
 const STORE_NAME = String(process.env.NETLIFY_BLOB_STORE || 'kakashihub').trim()
 const API_URL = 'https://api.netlify.com/api/v1/blobs'
-// getStore usa este prefixo para stores de site (não deploy-specific).
+// A API usa este prefixo para stores de site (não deploy-specific).
 const STORE_PREFIX = `site:${STORE_NAME}`
 const USE_BLOB = Boolean(SITE_ID && TOKEN && STORE_NAME)
 const pendingDownloads = new Map()
@@ -30,10 +29,6 @@ function cleanPathname(value) {
   if (!pathname || pathname.includes('\\') || pathname.split('/').some((part) => !part || part === '.' || part === '..')) return null
   if (!/^(media|covers)\//.test(pathname)) return null
   return pathname
-}
-
-function blobStore() {
-  return getStore(STORE_NAME, { siteID: SITE_ID, token: TOKEN, consistency: 'strong' })
 }
 
 function apiKeyUrl(key) {
@@ -169,7 +164,12 @@ export async function blobMediaExists(pathname) {
   const safePath = cleanPathname(pathname)
   if (!safePath || !USE_BLOB) return false
   try {
-    return Boolean(await blobStore().getMetadata(safePath))
+    const url = await signedGetUrl(safePath)
+    // A URL assinada é gerada mesmo para chaves inexistentes; só o GET prova
+    // que o objeto existe. Um byte basta para não baixar o MP4 inteiro.
+    const response = await fetch(url, { headers: { Range: 'bytes=0-0' } })
+    await response.arrayBuffer().catch(() => {})
+    return response.status === 200 || response.status === 206
   } catch {
     return false
   }
@@ -181,7 +181,13 @@ export async function deleteBlobMedia(pathnames) {
     .map(cleanPathname)
     .filter(Boolean)
   for (const key of safePaths) {
-    try { await blobStore().delete(key) } catch {}
+    try {
+      const response = await fetch(apiKeyUrl(key), {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      })
+      await response.arrayBuffer().catch(() => {})
+    } catch {}
   }
 }
 
