@@ -66,7 +66,22 @@ function verifyNetlifySigned(sig, secret) {
   }
 }
 
+// Leituras sem segredos podem vir direto do navegador: o proxy Netlify sai de um
+// IP compartilhado e bate no limite de 100 req/min do domínio do container.
+const PUBLIC_GET_PATHS = new Set([
+  '/api/state', '/api/jobs', '/api/radar', '/api/connections', '/api/videos/search',
+])
+const PUBLIC_ORIGINS = new Set(['https://kakashiclipes.netlify.app'])
+
 app.use((req, res, next) => {
+  const origin = String(req.get('origin') || '')
+  if (req.method === 'GET' && PUBLIC_GET_PATHS.has(req.path) && PUBLIC_ORIGINS.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Access-Control-Allow-Methods', 'GET')
+    res.setHeader('Access-Control-Max-Age', '600')
+    res.setHeader('Vary', 'Origin')
+    return next()
+  }
   const secret = String(process.env.PROXY_SECRET || '').trim()
   if (!secret) return next()
   if (req.path === '/api/health') return next()

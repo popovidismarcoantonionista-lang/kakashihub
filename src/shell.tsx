@@ -4,7 +4,7 @@ import {
   Bell, Clapperboard, Plus, Radio, Scissors,
   Search, Settings2, Sparkles, UploadCloud, Youtube, ChevronRight, X,
 } from 'lucide-react'
-import { useApp } from './store'
+import { publicGet, useApp } from './store'
 import { navigate, useRoute } from './router'
 import { Logo, Modal, Dot } from './ui'
 import { todayLabel } from './lib/format'
@@ -229,7 +229,7 @@ function IngestModal() {
       } catch (error) {
         // Uma falha transitória ao persistir não pode virar erro na tela se o
         // servidor já iniciou a análise: o job está na fila e vai aparecer.
-        const fresh = await fetch('/api/state', { cache: 'no-store' })
+        const fresh = await publicGet('/api/state')
           .then((res) => res.json()).catch(() => null)
         const started = fresh?.sources?.some((item: { id: string; status: string }) =>
           item.id === source.id && ['processando', 'pronto'].includes(item.status))

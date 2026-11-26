@@ -3,7 +3,7 @@ import {
   AlertTriangle, Clapperboard, Crop, Download,
   Play, Plus, Radio, Search, Square, Trash2, UploadCloud, Youtube,
 } from 'lucide-react'
-import { RATE_LIMIT_MESSAGE, friendlyMessage, useApp } from '../store'
+import { RATE_LIMIT_MESSAGE, friendlyMessage, publicGet, useApp } from '../store'
 import { CamBoxCanvas } from '../CamBoxCanvas'
 import { navigate } from '../router'
 import { PlayerModal } from '../components'
@@ -464,7 +464,7 @@ export function VideosPage() {
     let alive = true
     const load = async () => {
       try {
-        const res = await fetch('/api/radar')
+        const res = await publicGet('/api/radar')
         if (!res.ok) throw new Error('offline')
         const data = await res.json()
         if (alive) setRadar(data)
@@ -523,7 +523,7 @@ export function VideosPage() {
     setFindBusy(true)
     setFindError('')
     try {
-      const res = await fetch(`/api/videos/search?q=${encodeURIComponent(q)}`)
+      const res = await publicGet(`/api/videos/search?q=${encodeURIComponent(q)}`)
       if (res.status === 429) {
         const retry = Number(res.headers.get('retry-after') || 0)
         throw new Error(retry > 60

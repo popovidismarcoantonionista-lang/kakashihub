@@ -53,6 +53,20 @@ const STATE_CHANNEL = 'kakashihub-state'
 const LAST_FETCH_KEY = 'kakashihub:lastFetchAt'
 const MIN_FETCH_GAP = 2000
 
+// Leituras públicas vão direto ao container (IP do visitante), evitando o IP
+// compartilhado do proxy Netlify. Escritas continuam passando pelo proxy.
+export const DIRECT_API = 'https://kakashihub-b283a.containers.snapdeploy.app'
+
+export async function publicGet(path: string): Promise<Response> {
+  try {
+    const res = await fetch(`${DIRECT_API}${path}`, { cache: 'no-store' })
+    // 403 (gate antigo), 429 e 503 (container acordando) ainda podem usar o proxy.
+    const fallback = res.status === 403 || res.status === 429 || res.status >= 500
+    if (!fallback) return res
+  } catch {}
+  return fetch(path, { cache: 'no-store' })
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State | null>(null)
   const [loading, setLoading] = useState(true)
@@ -84,7 +98,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const now = Date.now()
       if (!force && now - Number(localStorage.getItem(LAST_FETCH_KEY) || 0) < MIN_FETCH_GAP) return
-      const res = await fetch('/api/state', { cache: 'no-store' })
+      const res = await publicGet('/api/state')
       if (res.status === 429) {
         setError(RATE_LIMIT_MESSAGE)
         return

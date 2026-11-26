@@ -3,7 +3,7 @@ import {
   ExternalLink, Facebook, KeyRound, Link2,
   Music2, Play, Plus, Send, ShieldCheck, Trash2, Unplug, UploadCloud, Youtube,
 } from 'lucide-react'
-import { friendlyMessage, useApp } from '../store'
+import { friendlyMessage, publicGet, useApp } from '../store'
 import { navigate } from '../router'
 import { Cover, EmptyState, Modal, PageHead, Select, StatCard } from '../ui'
 import { dayLabel } from '../lib/format'
@@ -71,7 +71,7 @@ export function UploadsPage() {
 
   const loadConnections = useCallback(async () => {
     try {
-      const res = await fetch('/api/connections')
+      const res = await publicGet('/api/connections')
       const data = await res.json()
       setConns(data.connections)
     } catch {}
