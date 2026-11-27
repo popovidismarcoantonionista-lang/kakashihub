@@ -42,15 +42,6 @@
   force = true
   signed = "PROXY_SECRET"
 
-# Temporário: busca de mídia no container antigo para migrar ao Netlify Blobs.
-# Remover depois que o acervo estiver no storage novo.
-[[redirects]]
-  from = "/oldmedia/*"
-  to = "https://kakashihub-b283a.containers.snapdeploy.app/media/:splat"
-  status = 200
-  force = true
-  signed = "PROXY_SECRET"
-
 # SPA fallback
 [[redirects]]
   from = "/*"
