@@ -139,7 +139,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async (force = false) => {
     try {
       const now = Date.now()
-      if (!force && now - Number(localStorage.getItem(LAST_FETCH_KEY) || 0) < MIN_FETCH_GAP) return
+      // Só pula uma leitura recente se esta aba já tem estado. Sem isso, uma
+      // aba recém-aberta (ou um refresh manual) podia encerrar o loading antes
+      // do primeiro /api/state e cair no "Não foi possível carregar o estúdio".
+      if (!force && stateRef.current && now - Number(localStorage.getItem(LAST_FETCH_KEY) || 0) < MIN_FETCH_GAP) return
       const res = await publicGet('/api/state')
       if (res.status === 429) {
         setError(RATE_LIMIT_MESSAGE)
