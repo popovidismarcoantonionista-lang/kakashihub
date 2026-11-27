@@ -847,6 +847,18 @@ export function sourceVideo(sourceId) {
   return fs.existsSync(file) ? file : null
 }
 
+export async function removeJob(id) {
+  const context = contextStorage.getStore()
+  if (!context) throw new Error('removeJob requer um contexto de persistência.')
+  const index = context.jobs.findIndex((job) => job.id === id)
+  if (index < 0) return false
+  context.jobs.splice(index, 1)
+  context.dirtyJobIds.delete(id)
+  if (context.local) writeJson(JOBS_FILE, context.jobs)
+  else await db.delete(fugaJobs).where(eq(fugaJobs.id, id))
+  return true
+}
+
 export function resetData() {
   const context = contextStorage.getStore()
   if (!context) throw new Error('resetData requer um contexto de persistência.')
