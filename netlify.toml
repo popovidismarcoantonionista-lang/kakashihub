@@ -19,25 +19,25 @@
   status = 200
   force = true
 
-# Proxy API/media/covers para o backend no SnapDeploy.
-# Defina PROXY_SECRET no Netlify e no SnapDeploy com o mesmo valor.
+# Proxy API/media/covers para o backend no Codespaces (ponte enquanto o
+# container definitivo não volta). PROXY_SECRET precisa ser o mesmo nos dois.
 [[redirects]]
   from = "/api/*"
-  to = "https://kakashihub-b283a.containers.snapdeploy.app/api/:splat"
+  to = "https://stunning-spoon-697rxj7w7pv927pr-10000.app.github.dev/api/:splat"
   status = 200
   force = true
   signed = "PROXY_SECRET"
 
 [[redirects]]
   from = "/media/*"
-  to = "https://kakashihub-b283a.containers.snapdeploy.app/media/:splat"
+  to = "https://stunning-spoon-697rxj7w7pv927pr-10000.app.github.dev/media/:splat"
   status = 200
   force = true
   signed = "PROXY_SECRET"
 
 [[redirects]]
   from = "/covers/*"
-  to = "https://kakashihub-b283a.containers.snapdeploy.app/covers/:splat"
+  to = "https://stunning-spoon-697rxj7w7pv927pr-10000.app.github.dev/covers/:splat"
   status = 200
   force = true
   signed = "PROXY_SECRET"

@@ -55,7 +55,7 @@ const MIN_FETCH_GAP = 2000
 
 // Leituras e downloads vão direto ao container (IP do visitante), evitando o IP
 // compartilhado do proxy Netlify. Outras escritas continuam passando pelo proxy.
-export const DIRECT_API = 'https://kakashihub-b283a.containers.snapdeploy.app'
+export const DIRECT_API = 'https://stunning-spoon-697rxj7w7pv927pr-10000.app.github.dev'
 
 export async function publicGet(path: string): Promise<Response> {
   try {
